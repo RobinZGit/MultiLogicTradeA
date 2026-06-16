@@ -1192,11 +1192,104 @@
     state.live.tradeHistory = hist.filter((h) => !h.fake && h.mode !== "sandbox");
   }
 
+  let journalRenderScheduled = false;
+  let positionsRenderScheduled = false;
+  let lastJournalSyncAt = 0;
+  let lastJournalDomRenderAt = 0;
+  const JOURNAL_SYNC_MIN_MS = 400;
+  const JOURNAL_DOM_RENDER_MIN_MS = 500;
+
+  function isTradeHistoryPanelOpen() {
+    return !!$("live-trade-history-panel")?.open;
+  }
+
+  function isPositionsPanelOpen() {
+    return !!$("live-positions-panel")?.open;
+  }
+
+  /** Кнопка «Начать» блокируется на время расчёта; «Остановить» — всегда в live. */
+  function liveCriticalToggleDisabled(isLive) {
+    if (!isLive) return true;
+    if (state.live.active) return false;
+    return !!state.uiBusy;
+  }
+
+  /** «Закрыть все позиции» не блокируется на время опроса/свечей. */
+  function liveCriticalSellAllDisabled(isLive) {
+    return !isLive;
+  }
+
+  /** Сброс зависших флагов busy (стоп торговли / аварийное восстановление UI). */
+  function resetLiveTradingBusyFlags() {
+    state.live.tradingActionBusy = false;
+    state.live.sellAllInFlight = false;
+    state.live.reconcileBusy = false;
+  }
+
+  function liveRefreshMayProceed(needsBootstrap) {
+    if (!isLiveMode() || !state.live.chartSession) return false;
+    const priority = !!needsBootstrap || !!state.live.active;
+    if (state.live.tradingActionBusy && !priority) return false;
+    if (state.uiBusy && !priority) return false;
+    return true;
+  }
+
+  function scheduleRenderLiveOrdersPanel(force) {
+    if (!isTradeHistoryPanelOpen()) return;
+    const now = Date.now();
+    if (!force && journalRenderScheduled) return;
+    if (!force && now - lastJournalDomRenderAt < JOURNAL_DOM_RENDER_MIN_MS) return;
+    if (journalRenderScheduled) return;
+    journalRenderScheduled = true;
+    requestAnimationFrame(() => {
+      journalRenderScheduled = false;
+      void renderLiveOrdersPanelAsync();
+    });
+  }
+
+  function scheduleRenderLivePositionsPanel() {
+    if (!isPositionsPanelOpen()) return;
+    if (positionsRenderScheduled) return;
+    positionsRenderScheduled = true;
+    requestAnimationFrame(() => {
+      positionsRenderScheduled = false;
+      renderLivePositionsPanel();
+    });
+  }
+
+  function bindLivePanelHeavyRenderOnOpen() {
+    if (bindLivePanelHeavyRenderOnOpen._bound) return;
+    bindLivePanelHeavyRenderOnOpen._bound = true;
+    const hist = $("live-trade-history-panel");
+    if (hist) {
+      hist.addEventListener("toggle", () => {
+        if (hist.open) {
+          lastJournalSyncAt = 0;
+          scheduleRenderLiveOrdersPanel(true);
+        }
+      });
+    }
+    const pos = $("live-positions-panel");
+    if (pos) {
+      pos.addEventListener("toggle", () => {
+        if (pos.open) renderLivePositionsPanel();
+      });
+    }
+  }
+
   /** Синхронизация UI/state: `syncTradeHistoryFromSources`. */
-  function syncTradeHistoryFromSources() {
+  function syncTradeHistoryFromSources(opts) {
+    const options = opts || {};
+    const panelOpen = isTradeHistoryPanelOpen();
+    const trading = !!state.live.active;
+    if (!panelOpen && !trading && !options.force) return;
     if (isLiveSandbox()) {
       const sb = ensureSandboxState();
-      rebuildSandboxFromLedger(sb);
+      const now = Date.now();
+      if (options.force || trading || now - lastJournalSyncAt >= JOURNAL_SYNC_MIN_MS) {
+        rebuildSandboxFromLedger(sb);
+        lastJournalSyncAt = now;
+      }
       for (const fill of sb.ledger || []) upsertTradeHistoryFromSandboxFill(fill);
       return;
     }
@@ -1293,10 +1386,19 @@
   }
 
   /** Отрисовка элемента live-панели: `renderLiveOrdersPanel`. */
+  async function renderLiveOrdersPanelAsync() {
+    if (!isTradeHistoryPanelOpen()) return;
+    await yieldToUi();
+    renderLiveOrdersPanel();
+  }
+
   function renderLiveOrdersPanel() {
+    const panelOpen = isTradeHistoryPanelOpen();
+    syncTradeHistoryFromSources({ force: panelOpen });
     const el = $("live-trading-orders");
     const metaEl = $("live-trade-history-meta");
-    syncTradeHistoryFromSources();
+    if (!panelOpen) return;
+    lastJournalDomRenderAt = Date.now();
     const hist = ensureLiveTradeHistory().slice().sort((a, b) => {
       if (!!a.active !== !!b.active) return a.active ? -1 : 1;
       const ta = Date.parse(a.when || 0) || 0;
@@ -1333,15 +1435,8 @@
       const tableHtml = `<table><thead><tr><th></th><th>Тикер</th><th>Сторона</th><th>Тип / сумма</th><th>Лоты</th><th>Статус</th><th>FINRESPΔ</th><th>Комиссия buy</th><th>Комиссия sell</th><th>Источник</th><th>Режим</th><th>Время</th></tr></thead><tbody>${activeBlock}${doneBlock}</tbody></table>`;
       contentHtml = `<div class="live-trading-orders-scroll">${tableHtml}</div>`;
     }
-    const bridged = bridgeSetLive({
-      journalMetaText: metaText,
-      journalContentHtml: contentHtml,
-      journalTotalsHtml: totalsFooter
-    });
-    if (bridged) return;
-    if (!el) return;
     if (metaEl && isLiveMode()) metaEl.textContent = metaText;
-    el.innerHTML = `${contentHtml}${totalsFooter}`;
+    if (el) el.innerHTML = `${contentHtml}${totalsFooter}`;
   }
 
   /** Карта legId → tradeId открывающей сделки + остатки открытых legs после replay. */
@@ -1537,7 +1632,7 @@
 
   /** Собрать полный JSON-протокол истории сделок. */
   function buildTradeHistoryProtocol() {
-    syncTradeHistoryFromSources();
+    syncTradeHistoryFromSources({ force: true });
     const hist = ensureLiveTradeHistory().slice().sort(
       (a, b) => (Date.parse(a.when || 0) || 0) - (Date.parse(b.when || 0) || 0)
     );
@@ -1667,7 +1762,8 @@
     return st.includes("NEW") || st.includes("PARTIALLY") || st.includes("PENDING") || st.includes("SUBMIT");
   }
   /** Синхронизация всей live-панели: статус, кнопки, опросы, стакан. */
-  function syncLiveTradingUi() {
+  function syncLiveTradingUi(opts) {
+    const options = opts || {};
     const panel = $("live-trading-panel");
     const select = $("account-mode");
     const label = document.querySelector("label.account-mode");
@@ -1702,14 +1798,27 @@
     }
     if (select) select.classList.toggle("account-mode-select--live", isLive);
     if (label) label.classList.toggle("account-mode--live", isLive);
+    const toggleDisabled = liveCriticalToggleDisabled(isLive);
+    const sellAllDisabled = liveCriticalSellAllDisabled(isLive);
     const toggle = $("live-trading-toggle");
     if (toggle) {
       toggle.textContent = state.live.active ? "Остановить торговлю" : "Начать торговлю";
       toggle.classList.toggle("live-trading-toggle--active", state.live.active);
-      toggle.disabled = !isLive || state.uiBusy;
+      if (state.live.active) {
+        toggle.disabled = false;
+        toggle.removeAttribute("disabled");
+        toggle.classList.add("live-critical-control");
+      } else {
+        toggle.classList.remove("live-critical-control");
+        toggle.disabled = toggleDisabled;
+      }
+      toggle.setAttribute("aria-disabled", toggle.disabled ? "true" : "false");
     }
     const sellAll = $("live-trading-sell-all");
-    if (sellAll) sellAll.disabled = !isLive || state.uiBusy || state.live.tradingActionBusy;
+    if (sellAll) {
+      sellAll.disabled = sellAllDisabled;
+      sellAll.setAttribute("aria-disabled", sellAllDisabled ? "true" : "false");
+    }
     syncPageVersionBadge();
     const status = $("live-trading-status");
     if (status) {
@@ -1758,14 +1867,17 @@
     if (sandboxCb) sandboxCb.disabled = !!state.live.sandboxToggleBusy || state.uiBusy;
     renderLivePortfolioStats();
     syncLeverageDisplay();
-    renderLiveOrdersPanel();
-    renderLivePositionsPanel();
+    if (!options.skipPanels) {
+      scheduleRenderLiveOrdersPanel();
+      scheduleRenderLivePositionsPanel();
+    }
     syncLiveManualOrderUi();
     if (isLive) {
       bindLivePanelCollapsibleToggles();
+      bindLivePanelHeavyRenderOnOpen();
       bindTradeHistoryProtocolExport();
     }
-    publishLiveBridgeFromDom();
+    if (!options.skipBridge) publishLiveBridgeFromDom();
   }
 
   /** Синхронизация live-панели с Angular FinrespLiveService. */
@@ -1774,7 +1886,7 @@
     if (!api || typeof api.setLive !== "function") return;
     const status = $("live-trading-status");
     const toggle = $("live-trading-toggle");
-    const sellAll = $("live-trading-sell-all");
+    const isLive = isLiveMode();
   try {
     api.setLive({
       statusText: status?.textContent ?? "",
@@ -1786,10 +1898,11 @@
       finresultText: $("live-finresult-value")?.textContent ?? "—",
       statsHintText: $("live-trading-stats-hint")?.textContent ?? "",
       commissionLabel: $("live-commission-label")?.textContent ?? "",
+      journalMetaText: $("live-trade-history-meta")?.textContent ?? "",
       toggleText: toggle?.textContent ?? "",
       toggleActive: !!toggle?.classList.contains("live-trading-toggle--active"),
-      toggleDisabled: !!toggle?.disabled,
-      sellAllDisabled: !!sellAll?.disabled
+      toggleDisabled: liveCriticalToggleDisabled(isLive),
+      sellAllDisabled: liveCriticalSellAllDisabled(isLive)
     });
   } catch (_) { /* ignore */ }
   }
@@ -1820,6 +1933,7 @@
   /** Остановка периодического опроса: `stopLiveTradingOnModeChange`. */
   function stopLiveTradingOnModeChange() {
     state.live.active = false;
+    resetLiveTradingBusyFlags();
     endLiveChartSession();
     stopLiveStatsPoll();
     stopLiveOrderBookPoll();
@@ -4282,6 +4396,7 @@
     const on = !!cb?.checked;
     state.live.sandboxToggleBusy = true;
     syncLiveTradingUi();
+    await yieldToUi();
     if (state.live.active) recordLiveModeRegionSwitch();
     if (on) {
         await enableLiveSandbox();
@@ -5783,13 +5898,14 @@ ${referenceBlock}
   async function refreshLiveCandleStreamInner(options) {
     const opts = options || {};
     if (!isLiveMode() || !state.live.chartSession) return false;
-    if (state.live.candleRefreshBusy || state.live.tradingActionBusy) return false;
     const needsBootstrap = !liveHasAnyCandles() || !state.lastResult?.perSec?.length;
-    if (state.uiBusy && !needsBootstrap) return false;
+    if (state.live.candleRefreshBusy) return false;
+    if (!liveRefreshMayProceed(needsBootstrap)) return false;
     const instruments = selectedInstruments();
     if (!instruments.length) return false;
     state.live.candleRefreshBusy = true;
-    syncLiveTradingUi();
+    syncLiveTradingUi({ skipPanels: true });
+    await yieldToUi();
     try {
       const { from, till, interval } = liveCandleStreamRange(instruments);
       const byKey = packsByInstrumentKey(state.packs);
@@ -6134,12 +6250,12 @@ ${referenceBlock}
    */
   function queueLiveCandleRefreshIfNeeded() {
     if (!isLiveMode() || !state.live.chartSession) return;
-    if (state.live.candleRefreshBusy || state.live.tradingActionBusy) return;
     const needsBootstrap = !liveHasAnyCandles() || !state.lastResult?.perSec?.length;
-    if (!needsBootstrap) return;
+    if (!liveRefreshMayProceed(needsBootstrap)) return;
     setTimeout(() => {
       if (!isLiveMode() || !state.live.chartSession) return;
-      if (state.uiBusy || state.live.candleRefreshBusy || state.live.tradingActionBusy) return;
+      const boot = !liveHasAnyCandles() || !state.lastResult?.perSec?.length;
+      if (!liveRefreshMayProceed(boot)) return;
       void refreshLiveCandleStream({ silent: true }).catch(() => {});
     }, 50);
   }
@@ -6149,11 +6265,10 @@ ${referenceBlock}
   /** Один цикл: свечи → FINRESP → reconcile (если торговля активна). */
   async function livePollTickAfterRefresh() {
     if (!isLiveMode() || !state.live.chartSession) return false;
-    if (state.live.tradingActionBusy) return false;
     const ok = await refreshLiveCandleStream({ silent: true });
     if (!ok) return false;
     if (state.lastResult?.perSec?.length) refreshLiveChartsUi();
-    if (state.live.active && state.lastResult?.perSec?.length) {
+    if (state.live.active && state.lastResult?.perSec?.length && !state.live.tradingActionBusy) {
       await liveTradingReconcile();
       queueLiveChartsRefresh();
     }
@@ -6211,7 +6326,7 @@ ${referenceBlock}
   /** Вкл/выкл live-торговлю: старт/стоп опросов, reconcile, FINRESP на барах. */
   async function toggleLiveTrading() {
     if (!isLiveMode()) return;
-    if (state.uiBusy) {
+    if (state.uiBusy && !state.live.active) {
       state.live.lastError = "дождитесь окончания расчёта";
       syncLiveTradingUi();
       return;
@@ -6220,6 +6335,7 @@ ${referenceBlock}
       state.live.active = false;
       state.live.tradingStartedAt = null;
       state.live.lastError = "";
+      resetLiveTradingBusyFlags();
       syncLiveTradingUi();
       return;
     }
@@ -6255,19 +6371,38 @@ ${referenceBlock}
     ensureLiveChartSession();
     if (sandbox) {
       state.live.sessionPositionBaseline = sandboxPositionsByTicker();
+      state.live.active = true;
+      state.live.tradingStartedAt = new Date().toISOString();
+      state.live.realLegSeed = null;
+      resetLiveFinrespBaselinesForTrading();
+      state.live.lastError = "";
+      syncLiveTradingUi();
+      if (!state.live.pollTimer) startLiveModePoll();
       const sb = ensureSandboxState();
-      if (!Number.isFinite(sb.startPortfolio)) {
-        try { await enableLiveSandbox(); } catch (err) { noteLiveTech("live-sandbox-start", err.message); }
-      } else {
-        await updateSandboxPortfolioDisplay();
-      }
-    } else {
-      try {
-        state.live.sessionPositionBaseline = await tbankPositionsByTicker();
-      } catch (err) {
-        state.live.sessionPositionBaseline = null;
-        noteLiveTech("live-session-baseline", err.message);
-      }
+      void (async () => {
+        try {
+          if (!Number.isFinite(sb.startPortfolio)) {
+            await enableLiveSandbox();
+          } else {
+            await updateSandboxPortfolioDisplay();
+          }
+          await livePollTickAfterRefresh();
+          await refreshLiveOrders();
+        } catch (err) {
+          state.live.lastError = err.message;
+          noteLiveTech("toggleLiveTrading", err.message);
+        } finally {
+          syncLiveTradingUi();
+        }
+      })();
+      return;
+    }
+
+    try {
+      state.live.sessionPositionBaseline = await tbankPositionsByTicker();
+    } catch (err) {
+      state.live.sessionPositionBaseline = null;
+      noteLiveTech("live-session-baseline", err.message);
     }
     state.live.active = true;
     state.live.tradingStartedAt = new Date().toISOString();
@@ -6276,15 +6411,17 @@ ${referenceBlock}
     state.live.lastError = "";
     syncLiveTradingUi();
     if (!state.live.pollTimer) startLiveModePoll();
-    try {
-      await livePollTickAfterRefresh();
-      await refreshLiveOrders();
-      syncLiveTradingUi();
-    } catch (err) {
-      state.live.lastError = err.message;
-      syncLiveTradingUi();
-      noteLiveTech("toggleLiveTrading", err.message);
-    }
+    void (async () => {
+      try {
+        await livePollTickAfterRefresh();
+        await refreshLiveOrders();
+      } catch (err) {
+        state.live.lastError = err.message;
+        noteLiveTech("toggleLiveTrading", err.message);
+      } finally {
+        syncLiveTradingUi();
+      }
+    })();
   }
 
   /** Закрытие позиции/заявки: `closeAllSandboxPositionsLive`. */
@@ -6320,12 +6457,12 @@ ${referenceBlock}
 
   /** Закрыть все позиции по рынку и отменить активные заявки. */
   async function sellAllMarketLive() {
-    if (!isLiveMode() || state.live.tradingActionBusy) return;
+    if (!isLiveMode()) return;
+    if (state.live.sellAllInFlight) return;
     clearLiveManualFlatten();
+    state.live.sellAllInFlight = true;
     state.live.tradingActionBusy = true;
     cancelQueuedLiveChartsRefresh();
-    const sellBtn = $("live-trading-sell-all");
-    if (sellBtn) sellBtn.disabled = true;
     try {
       if (isLiveSandbox()) {
         const { sent, failed } = await closeAllSandboxPositionsLive();
@@ -6433,7 +6570,7 @@ ${referenceBlock}
       noteLiveTech("live-close-all", err.message);
     } finally {
       state.live.tradingActionBusy = false;
-      if (sellBtn) sellBtn.disabled = !isLiveMode() || state.uiBusy;
+      state.live.sellAllInFlight = false;
       try {
         if (state.live.active) {
           await refreshLiveCandleStream({ silent: true });

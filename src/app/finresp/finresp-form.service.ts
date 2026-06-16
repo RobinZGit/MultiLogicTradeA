@@ -37,7 +37,8 @@ export class FinrespFormService implements OnDestroy {
     private readonly bridge: FinrespBridgeService,
   ) {
     this.bridge.registerFormSync(() => this.syncFromDom());
-    this.bridge.registerBootReady(() => this.syncFromDom());
+    this.bridge.registerBootReady(() => this.onBridgeBootReady());
+    this.bridge.registerApplyFormSnapshot((snapshot) => this.applySnapshot(snapshot));
     this.bridge.registerFormSnapshot(() => this.snapshot());
     this.bridge.registerInstruments(() => this.selectedInstruments());
     this.bridge.registerLogicIds(() => this.selectedLogicIds());
@@ -93,6 +94,44 @@ export class FinrespFormService implements OnDestroy {
 
   setLogicSelectionCleared(cleared: boolean): void {
     this.logicSelectionCleared = cleared;
+    this.refreshLogicChips();
+  }
+
+  /** Восстановление полей Angular-формы из localStorage (вызывается из boot.js после рендера). */
+  applySnapshot(snapshot: Partial<FinrespFormValues>): void {
+    const patch: Partial<{
+      timeframe: string;
+      month: string;
+      from: string;
+      till: string;
+      instrumentIds: string[];
+      logicIds: string[];
+    }> = {};
+    if (snapshot.timeframe != null) patch.timeframe = snapshot.timeframe;
+    if (snapshot.month != null) patch.month = snapshot.month;
+    if (snapshot.from != null) patch.from = snapshot.from;
+    if (snapshot.till != null) patch.till = snapshot.till;
+    if (snapshot.instrumentIds != null) patch.instrumentIds = [...snapshot.instrumentIds];
+    if (snapshot.logicIds != null) {
+      patch.logicIds = [...snapshot.logicIds];
+      if (!snapshot.logicIds.length) {
+        this.logicSelectionCleared = true;
+      }
+    }
+
+    if (snapshot.accountMode != null) {
+      this.accountMode.setValue(snapshot.accountMode, { emitEvent: false });
+    }
+    if (Object.keys(patch).length) {
+      this.form.patchValue(patch, { emitEvent: false });
+    }
+  }
+
+  private onBridgeBootReady(): void {
+    this.pushScalarsToDom();
+    this.pushAccountModeToDom();
+    this.pushInstrumentsToDom();
+    this.pushLogicsToDom();
     this.refreshLogicChips();
   }
 

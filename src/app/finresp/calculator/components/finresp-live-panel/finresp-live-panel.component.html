@@ -24,8 +24,8 @@
 <p class="live-trading-candle-alert" id="live-candle-delay-alert" hidden role="alert"></p>
 <div class="live-trading-toolbar">
 <div class="live-trading-actions">
-<button type="button" class="live-trading-btn live-trading-btn-start" id="live-trading-toggle" [class.live-trading-toggle--active]="live.toggleActive" [disabled]="live.toggleDisabled">{{ live.toggleText }}</button>
-<button type="button" class="live-trading-btn live-trading-btn-sell" id="live-trading-sell-all" [disabled]="live.sellAllDisabled" title="Закрыть все открытые позиции по рынку (лонг — продажа, шорт — покупка)">Закрыть все позиции</button>
+<button type="button" class="live-trading-btn live-trading-btn-start" id="live-trading-toggle" [class.live-trading-toggle--active]="live.toggleActive">{{ live.toggleText }}</button>
+<button type="button" class="live-trading-btn live-trading-btn-sell" id="live-trading-sell-all" title="Закрыть все открытые позиции по рынку (лонг — продажа, шорт — покупка)">Закрыть все позиции</button>
 </div>
 <div class="live-trading-controls">
 <label for="live-order-type" title="Для ручной заявки. Робот всегда выставляет рыночные заявки.">Тип заявки</label>

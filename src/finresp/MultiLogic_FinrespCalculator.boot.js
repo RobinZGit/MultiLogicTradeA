@@ -115,6 +115,25 @@
       return false;
     }
   }
+  function bridgeApplyFormSnapshot(snapshot) {
+    const api = bridgeApi();
+    if (!api || typeof api.applyFormSnapshot !== "function") return false;
+    try {
+      api.applyFormSnapshot(snapshot);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  function readFormScalarsForConfig() {
+    const api = bridgeApi();
+    if (!api?.getFormSnapshot) return null;
+    try {
+      return api.getFormSnapshot();
+    } catch (_) {
+      return null;
+    }
+  }
   function publishInstrumentSelectionFromDom() {
     const sel = $("calc-sec");
     if (!sel) return;
@@ -945,15 +964,16 @@
 
   /** Сериализация state в localStorage config. */
   function collectConfig() {
+    const formSnap = readFormScalarsForConfig();
     return {
       v: 1,
       savedAt: new Date().toISOString(),
-      accountMode: $("account-mode")?.value || "paper",
-      timeframe: $("calc-tf")?.value || "60",
-      from: $("calc-from")?.value || "",
-      till: $("calc-till")?.value || "",
-      logic: primaryLogicId(),
-      logics: selectedLogicIds(),
+      accountMode: formSnap?.accountMode || $("account-mode")?.value || "paper",
+      timeframe: formSnap?.timeframe || $("calc-tf")?.value || "60",
+      from: formSnap?.from || $("calc-from")?.value || "",
+      till: formSnap?.till || $("calc-till")?.value || "",
+      logic: (formSnap?.logicIds?.[0]) || primaryLogicId(),
+      logics: formSnap?.logicIds?.length ? formSnap.logicIds.slice() : selectedLogicIds(),
       selectedInstruments: selectedInstruments(),
       volume: {
         type: $("vol-type")?.value || "Deposit percent",
@@ -3832,14 +3852,13 @@
       state.restoredLogicIds = null;
     } else if (state.logicSelectionCleared) {
       for (const o of sel.options) o.selected = false;
-      syncLogicSelectedHint();
     } else if (!pick.length) {
       const fallback = allowed.has("RND") ? "RND" : (allowed.has("UT") ? "UT" : (allowed.has("UCT") ? "UCT" : (allowed.has("L5") ? "L5" : sel.options[0]?.value)));
       for (const o of sel.options) o.selected = o.value === fallback;
-      syncLogicSelectedHint();
-    } else {
-      syncLogicSelectedHint();
     }
+    const domLogicIds = Array.from(sel.selectedOptions).map((o) => o.value);
+    bridgeApplyLogicSelection(domLogicIds, state.logicSelectionCleared);
+    syncLogicSelectedHint();
   }
 
   /** Подпрограмма `initIndicatorToggles`. */
@@ -6555,13 +6574,31 @@ ${referenceBlock}
   $("calc-run")?.addEventListener("click", run);
   $("calc-progress-stop")?.addEventListener("click", () => { requestStopRun(); });
   $("calc-select-positive")?.addEventListener("click", selectNonNegativeFinrespInstruments);
-  $("live-trading-toggle")?.addEventListener("click", () => {
-    toggleLiveTrading().catch((err) => {
-      state.live.lastError = err.message;
-      syncLiveTradingUi();
-      noteLiveTech("toggleLiveTrading", err.message);
+  const livePanel = $("live-trading-panel");
+  if (livePanel && !livePanel.dataset.liveCriticalBound) {
+    livePanel.dataset.liveCriticalBound = "1";
+    livePanel.addEventListener("click", (e) => {
+      const toggleBtn = e.target?.closest?.("#live-trading-toggle");
+      if (toggleBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (state.live.active || !toggleBtn.disabled) {
+          toggleLiveTrading().catch((err) => {
+            state.live.lastError = err.message;
+            syncLiveTradingUi();
+            noteLiveTech("toggleLiveTrading", err.message);
+          });
+        }
+        return;
+      }
+      const sellBtn = e.target?.closest?.("#live-trading-sell-all");
+      if (sellBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (isLiveMode()) sellAllMarketLive();
+      }
     });
-  });
+  }
   $("live-sandbox-mode")?.addEventListener("change", () => {
     onLiveSandboxToggle().catch((err) => {
       state.live.lastError = err.message;
@@ -6572,7 +6609,6 @@ ${referenceBlock}
   $("live-sandbox-match-mode")?.addEventListener("change", () => {
     saveConfig();
   });
-  $("live-trading-sell-all").addEventListener("click", () => { sellAllMarketLive(); });
   $("live-positions-table")?.addEventListener("click", (ev) => {
     const btn = ev.target?.closest?.("[data-pos-close]");
     if (!btn || btn.disabled) return;
@@ -6873,6 +6909,37 @@ ${referenceBlock}
   bindLivePanelCollapsibleToggles();
   }
 
+  /** Восстановить Angular-форму из localStorage после рендера компонентов. */
+  function finalizeAngularFormFromConfig() {
+    const cfg = readSavedConfig();
+    const api = bridgeApi();
+    if (cfg && api?.applyFormSnapshot) {
+      api.applyFormSnapshot({
+        timeframe: cfg.timeframe || "60",
+        from: cfg.from || "",
+        till: cfg.till || "",
+        accountMode: cfg.accountMode || "paper"
+      });
+      syncMonthInputFromDates();
+      api.applyFormSnapshot({ month: $("calc-month")?.value || "" });
+      if (Array.isArray(cfg.logics)) {
+        api.applyFormSnapshot({ logicIds: cfg.logics.filter(Boolean) });
+        state.logicSelectionCleared = cfg.logics.length === 0;
+      }
+      const savedInst = state.restoredSelectedInstruments || [];
+      if (savedInst.length) {
+        api.applyFormSnapshot({
+          instrumentIds: savedInst.map((i) => String(i.sec || "").trim()).filter(Boolean)
+        });
+      }
+    } else {
+      api?.syncFormFromDom?.();
+    }
+    syncAccountModeUi();
+    bootstrapLiveTradingPanelVisibility();
+    api?.onBootReady?.();
+  }
+
   try {
     fillLogicSelect();
     fillLogicEditor();
@@ -6953,7 +7020,7 @@ ${referenceBlock}
   window.__mlOnAccountModeUserChange = handleAccountModeUserChange;
   window.__mlFinrespVersion = CALC_PAGE_VERSION;
   window.__mlFinresp.bootPhase = "ok";
-  window.__mlFinrespBridge?.onBootReady?.();
+  finalizeAngularFormFromConfig();
   installBridgeWindowHandler();
   bootstrapLiveTradingPanelVisibility();
 })();
