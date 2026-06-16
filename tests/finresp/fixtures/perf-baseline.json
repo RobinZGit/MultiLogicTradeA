@@ -15,6 +15,10 @@
       "ms": 147,
       "label": "live-tail · 2 инстр. · 400 свечей · полный стек логик"
     },
+    "smoke_livePoll_finresp_2x400": {
+      "ms": 150,
+      "label": "live poll tick · FINRESP-хвост · 2 инстр. · 400 свечей"
+    },
     "smoke_equity_2x400_allLogics": {
       "ms": 780,
       "label": "equity-каталог · 2 инстр. · 400 свечей · все логики (как drawEquityChartsAsync)"

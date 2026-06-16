@@ -1919,9 +1919,17 @@
         }
       } else {
         const src = liveCandleSourceEffectiveLabel();
+        const busyParts = [];
+        if (state.live.candleRefreshBusy) busyParts.push("обновление свечей");
+        if (state.live.tradingActionBusy) busyParts.push("операция");
+        if (state.live.finrespBootstrapProgress) {
+          const prog = state.live.finrespBootstrapProgress;
+          busyParts.push(`FINRESP ${prog.done}/${prog.total}`);
+        }
+        const busyHint = busyParts.length ? ` · ${busyParts.join(" · ")}…` : "";
         status.textContent = sandbox
-          ? `остановлена · песочница (фейк) · источник ${src}`
-          : `остановлена · источник ${src}`;
+          ? `остановлена · песочница (фейк) · источник ${src}${busyHint}`
+          : `остановлена · источник ${src}${busyHint}`;
       }
     }
     syncLiveCandleSourceUi(isLive);
@@ -4470,6 +4478,7 @@
       liveSandboxToggleInFlight = null;
       state.live.sandboxToggleBusy = false;
       syncLiveTradingUi();
+      updateTechInfo("sandbox-toggle-done");
     });
     return liveSandboxToggleInFlight;
   }
@@ -5753,7 +5762,7 @@ ${referenceBlock}
     try {
     for (let pi = 0; pi < total; pi++) {
       if (ro.shouldCancel?.()) break;
-      if (pi > 0 && pi % 4 === 0) await yieldToUi();
+      if (pi > 0 && pi % 2 === 0) await yieldToUi();
       const candles = state.packs[pi];
       const sec = candles?.[0]?.sec || "?";
       if (!candles?.length || candles.length < 3) {
@@ -5994,6 +6003,8 @@ ${referenceBlock}
     if (!instruments.length) return false;
     state.live.candleRefreshBusy = true;
     syncLiveTradingUi({ skipPanels: true });
+    updateTechInfo("live-candles-start");
+    const refreshT0 = performance.now();
     await yieldToUi();
     try {
       const { from, till, interval } = liveCandleStreamRange(instruments);
@@ -6076,8 +6087,10 @@ ${referenceBlock}
       state.live.lastError = skipN
         ? liveFinrespPartialMessage(result.perSec.length, skipN)
         : "";
+      await yieldToUi();
       applyResult(state.lastResult, {
         redrawCharts: opts.redrawCharts !== false,
+        redrawChartsAsync: true,
         liveSession: true,
         silent: !!opts.silent
       });
@@ -6089,8 +6102,10 @@ ${referenceBlock}
       noteLiveTech("live-candles", err.message, `instruments=${selectedInstruments().length} tf=${$("calc-tf")?.value || "—"}`);
       return false;
     } finally {
+      state.live.lastCandleRefreshMs = Math.round(performance.now() - refreshT0);
       state.live.candleRefreshBusy = false;
       syncLiveTradingUi();
+      updateTechInfo("live-candles-done");
     }
   }
 
@@ -6426,6 +6441,7 @@ ${referenceBlock}
       state.live.lastError = "";
       resetLiveTradingBusyFlags();
       syncLiveTradingUi();
+      updateTechInfo("live-trading-stopped");
       return;
     }
     clearLiveManualFlatten();
