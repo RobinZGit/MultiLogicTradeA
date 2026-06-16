@@ -12,7 +12,8 @@
     "test:finresp:perf": "node --test tests/finresp/engine.perf.test.mjs",
     "test:finresp:perf:smoke": "node --test tests/finresp/engine.perf-smoke.test.mjs",
     "check:finresp:local": "node scripts/check-finresp-browser.mjs",
-    "check:finresp:pages": "node scripts/check-finresp-url.mjs https://robinzgit.github.io/MultiLogicTradeA/finresp"
+    "check:finresp:pages": "node scripts/check-finresp-url.mjs https://robinzgit.github.io/MultiLogicTradeA/finresp",
+    "ensure:deps": "node scripts/ensure-npm-deps.mjs"
   },
   "private": true,
   "dependencies": {

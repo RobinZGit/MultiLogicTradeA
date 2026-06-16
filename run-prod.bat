@@ -18,6 +18,12 @@ if not exist "node_modules\.bin\ng.cmd" (
   )
 )
 
+node scripts\ensure-npm-deps.mjs
+if errorlevel 1 (
+  pause
+  exit /b 1
+)
+
 if not exist "node_modules\.bin\ng.cmd" (
   echo ERROR: Angular CLI still missing after npm install.
   echo Run "npm install" in this folder and check for errors.
@@ -32,12 +38,12 @@ powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 5173 -State List
 set "DIST_DIR="
 
 echo Building production bundle...
-call npx ng build
+call npm run build
 if errorlevel 1 (
   echo.
   echo Build failed ^(often EPERM if dist is locked by serve, Explorer, or antivirus^).
   echo Retrying to dist-build-check...
-  call npx ng build --output-path=dist-build-check
+  call npm run build -- --output-path=dist-build-check
   if errorlevel 1 (
     echo ERROR: production build failed.
     pause
