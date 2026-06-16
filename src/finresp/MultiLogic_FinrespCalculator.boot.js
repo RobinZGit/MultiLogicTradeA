@@ -48,11 +48,19 @@
       return false;
     }
   }
+  let lastCalcStatusText = "";
   function setCalcStatus(text) {
-    if (!bridgeSetStatus(text)) {
+    lastCalcStatusText = String(text ?? "");
+    if (!bridgeSetStatus(lastCalcStatusText)) {
       const st = $("calc-status");
-      if (st) st.textContent = text;
+      if (st) st.textContent = lastCalcStatusText;
     }
+  }
+  function getCalcStatus() {
+    return lastCalcStatusText || ($("calc-status")?.textContent ?? "");
+  }
+  function appendCalcStatus(suffix) {
+    setCalcStatus(getCalcStatus() + suffix);
   }
   function commissionDisplayText(commission) {
     if (!Number.isFinite(commission) || commission <= 0) return "0";
@@ -251,7 +259,6 @@
   /** Построение структуры данных: `buildTechInfoText`. */
   function buildTechInfoText() {
     const E = window.MultiLogicFinrespEngine;
-    const st = $("calc-status");
     const sec = $("calc-sec");
     const lines = [
       `pageVersion=${CALC_PAGE_VERSION}`,
@@ -427,7 +434,7 @@
       }
     }
     lines.push(`liveTradingStatus=${$("live-trading-status")?.textContent || "—"}`);
-    lines.push(`statusLine=${st?.textContent || "—"}`);
+    lines.push(`statusLine=${getCalcStatus() || "—"}`);
     const cd = calcState?.lastChartDiag;
     if (cd?.instruments?.length) {
       lines.push(
@@ -495,11 +502,11 @@
       techLog.lastEvent = "tech-copied";
       updateTechInfo();
       const msg = "Тех. информация скопирована в буфер обмена.";
-      const prev = $("calc-status")?.textContent;
-      if ($("calc-status")) $("calc-status").textContent = msg;
+      const prev = getCalcStatus();
+      setCalcStatus(msg);
       if (techEl) techEl.textContent = `${msg}\n\n${text}`;
       setTimeout(() => {
-        if ($("calc-status") && prev) $("calc-status").textContent = prev;
+        if (prev) setCalcStatus(prev);
         if (techEl && prevTech != null) techEl.textContent = prevTech;
         updateTechInfo("tech-copy-done");
       }, 2200);
@@ -516,11 +523,9 @@
     const warn = $("file-protocol-warn");
     if (warn) warn.hidden = false;
     noteTechError("file:// — MOEX fetch blocked by browser CORS");
-    const st = $("calc-status");
-    if (st) {
-      st.textContent =
-        "file://: MOEX недоступен; реальная торговля и песочница работают (T-Bank / база свечей). Для MOEX — run-dev.bat (http://127.0.0.1:4200/finresp).";
-    }
+    setCalcStatus(
+      "file://: MOEX недоступен; реальная торговля и песочница работают (T-Bank / база свечей). Для MOEX — run-dev.bat (http://127.0.0.1:4200/finresp)."
+    );
   }
 
   /** Показать/скрыть блок live до загрузки engine и полной инициализации (важно для file://). */
@@ -558,11 +563,9 @@
   const E = window.MultiLogicFinrespEngine;
   if (!E) {
     noteTechError("engine.js not loaded (MultiLogicFinrespEngine missing)");
-    const st = $("calc-status");
-    if (st) {
-      st.textContent =
-        "Ошибка: не загружен MultiLogic_FinrespCalculator.engine.js — положите файл рядом с HTML и обновите страницу (Ctrl+F5).";
-    }
+    setCalcStatus(
+      "Ошибка: не загружен MultiLogic_FinrespCalculator.engine.js — положите файл рядом с HTML и обновите страницу (Ctrl+F5)."
+    );
     window.__mlSyncAccountMode = () => bootstrapLiveTradingPanelVisibility();
     window.__mlFinrespVersion = `${CALC_PAGE_VERSION} (no-engine)`;
     window.__mlFinresp.bootPhase = "partial";
@@ -573,11 +576,9 @@
   }
   if (!window.MultiLogicFinrespLive) {
     noteTechError("live.js not loaded (MultiLogicFinrespLive missing)");
-    const stLive = $("calc-status");
-    if (stLive) {
-      stLive.textContent =
-        "Ошибка: не загружен MultiLogic_FinrespCalculator.live.js — положите файл рядом с HTML и обновите страницу (Ctrl+F5).";
-    }
+    setCalcStatus(
+      "Ошибка: не загружен MultiLogic_FinrespCalculator.live.js — положите файл рядом с HTML и обновите страницу (Ctrl+F5)."
+    );
     window.__mlSyncAccountMode = () => bootstrapLiveTradingPanelVisibility();
     window.__mlFinrespVersion = `${CALC_PAGE_VERSION} (no-live)`;
     window.__mlFinresp.bootPhase = "partial";
@@ -1468,9 +1469,8 @@
     clearWindowAnchor();
     syncMonthInputFromDates();
     updateDateHint(selectedInstrumentCount());
-    $("calc-status").textContent = narrowed
-      ? "Месяц выбран, но период сужен лимитом таймфрейма/числа инструментов."
-      : "Выбран полный месяц расчёта.";
+    setCalcStatus(narrowed      ? "Месяц выбран, но период сужен лимитом таймфрейма/числа инструментов."
+      : "Выбран полный месяц расчёта.");
   }
 
   /** Выбранные элементы UI: `selectedInstrumentCount`. */
@@ -1835,19 +1835,19 @@
     if (state.uiBusy || isOptimizing()) return;
     const result = state.lastResult;
     if (!result?.perSec?.length) {
-      $("calc-status").textContent = "Сначала нажмите «Рассчитать», чтобы получить FINRESP по инструментам.";
+      setCalcStatus("Сначала нажмите «Рассчитать», чтобы получить FINRESP по инструментам.");
       return;
     }
     const negative = result.perSec.filter((p) => Number(p.finresp) < 0);
     if (!negative.length) {
-      $("calc-status").textContent = "Инструментов с отрицательным FINRESP нет — выбор не изменён.";
+      setCalcStatus("Инструментов с отрицательным FINRESP нет — выбор не изменён.");
       return;
     }
     const negativeSecs = new Set(negative.map((p) => String(p.sec || "").trim().toUpperCase()));
     const selectedOptions = Array.from($("calc-sec").selectedOptions);
     const remainingOptions = selectedOptions.filter((o) => !negativeSecs.has(String(o.value || "").trim().toUpperCase()));
     if (!remainingOptions.length) {
-      $("calc-status").textContent = "Все рассчитанные инструменты имеют отрицательный FINRESP — выбор не изменён.";
+      setCalcStatus("Все рассчитанные инструменты имеют отрицательный FINRESP — выбор не изменён.");
       return;
     }
 
@@ -1865,11 +1865,9 @@
     const removedLabel = negative.map((p) => `${p.sec}:${fmt(p.finresp)}`).join(" · ");
     const refreshed = tryRefreshFromLoadedPacks();
     if (refreshed) {
-      $("calc-status").textContent =
-        `Отбор выполнен: удалено ${negative.length} инстр. с FINRESP < 0 (${removedLabel}). Нажмите «Рассчитать».`;
+      setCalcStatus(`Отбор выполнен: удалено ${negative.length} инстр. с FINRESP < 0 (${removedLabel}). Нажмите «Рассчитать».`);
     } else {
-      $("calc-status").textContent =
-        `Отбор выполнен: удалено ${negative.length} инстр. с FINRESP < 0 (${removedLabel}). Нажмите «Рассчитать» для обновления.`;
+      setCalcStatus(`Отбор выполнен: удалено ${negative.length} инстр. с FINRESP < 0 (${removedLabel}). Нажмите «Рассчитать» для обновления.`);
     }
     saveConfig();
   }
@@ -1951,11 +1949,9 @@
       if (!state.userDateRangeTouched && n < prev && relaxDateRangeForInstrumentCount(n)) {
         clearWindowAnchor();
         state.lastLoadMeta = null;
-        $("calc-status").textContent =
-          `Выбор уменьшен — период расширен до ~${maxCalcDays($("calc-tf").value, n)} дн. Нажмите «Рассчитать».`;
+        setCalcStatus(`Выбор уменьшен — период расширен до ~${maxCalcDays($("calc-tf").value, n)} дн. Нажмите «Рассчитать».`);
       } else if (narrowed) {
-        $("calc-status").textContent =
-          `Период сужен до ~${maxCalcDays($("calc-tf").value, n)} дн. для выбранных инструментов.`;
+        setCalcStatus(`Период сужен до ~${maxCalcDays($("calc-tf").value, n)} дн. для выбранных инструментов.`);
       }
     } else {
       enforceDateRange("till", 0);
@@ -1969,8 +1965,7 @@
       const byKey = packsByInstrumentKey(state.packs);
       const missing = instruments.filter((i) => !byKey.has(instrumentKey(i)));
       if (missing.length) {
-        $("calc-status").textContent =
-          `Выбор изменён (+${missing.length} новых) — нажмите «Рассчитать» для загрузки и пересчёта.`;
+        setCalcStatus(`Выбор изменён (+${missing.length} новых) — нажмите «Рассчитать» для загрузки и пересчёта.`);
       } else {
         invalidateFinrespResult();
       }
@@ -2124,8 +2119,7 @@
     const banner = $("calc-progress-banner");
     if (banner) banner.hidden = false;
     if (!options.final) {
-      const st = $("calc-status");
-      if (st) st.textContent = hasPct ? `${text} — ${pctLabel}` : text;
+      setCalcStatus(hasPct ? `${text} — ${pctLabel}` : text);
     }
   }
 
@@ -2238,7 +2232,7 @@
     resetFinrespDisplay();
     /* Графики equity не пересчитываем — только «Рассчитать» (applyResult → drawEquityCharts). */
     if (message !== false) {
-      $("calc-status").textContent = message || FINRESP_STALE_MSG;
+      setCalcStatus(message || FINRESP_STALE_MSG);
     }
   }
 
@@ -2263,7 +2257,7 @@
     terminateCalcWorker();
     state.runCheckpoint = null;
     resetFinrespDisplay();
-    $("calc-status").textContent = "Расчёт остановлен.";
+    setCalcStatus("Расчёт остановлен.");
     releaseRunBusy(owner);
     updateTechInfo("run-cancelled");
   }
@@ -2283,7 +2277,7 @@
     state.runCheckpoint = null;
     if (!state.uiBusy) return;
     resetFinrespDisplay();
-    $("calc-status").textContent = "Расчёт остановлен.";
+    setCalcStatus("Расчёт остановлен.");
     releaseRunBusy(runGen);
     updateTechInfo("run-cancelled");
     await yieldToUi();
@@ -2441,8 +2435,7 @@
         updateAtParamsSummary();
         saveConfig();
         if (!ro.silent) {
-          $("calc-status").textContent =
-            `AutoReverses: выбран вариант ${best.key} (FINRESP ${fmt(best.finresp)} ₽ на последних ${lookback} свечах).`;
+          setCalcStatus(`AutoReverses: выбран вариант ${best.key} (FINRESP ${fmt(best.finresp)} ₽ на последних ${lookback} свечах).`);
         }
         // re-run with updated params from UI
         return await calcResultAsync(null, { ...ro, _autoReversesDone: true });
@@ -2553,9 +2546,11 @@
     const result = calcResult(optimRunContext(kind, bestValue));
     if (result) applyResult(result, { redrawCharts: true, redrawChartsAsync: true });
     const scoreNote = isPositionOptimKind(kind) ? " (FINRESP до портф. Stopper)" : "";
-    $("calc-status").textContent = autoDone
+    setCalcStatus(
+      autoDone
       ? `Оптимизация ${optimDisplayLabel(kind)} завершена: лучшее ${bestLabel}, FINRESP ${fmt(bestFinresp)} ₽${scoreNote}`
-      : `Оптимизация ${optimDisplayLabel(kind)} остановлена: лучшее ${bestLabel}, FINRESP ${fmt(bestFinresp)} ₽${scoreNote}`;
+      : `Оптимизация ${optimDisplayLabel(kind)} остановлена: лучшее ${bestLabel}, FINRESP ${fmt(bestFinresp)} ₽${scoreNote}`
+    );
   }
 
   /** Остановка периодического опроса: `stopOptim`. */
@@ -2729,11 +2724,11 @@
       return;
     }
     if (!state.packs.length) {
-      $("calc-status").textContent = "Подготовка свечей для оптимизации…";
+      setCalcStatus("Подготовка свечей для оптимизации…");
       await yieldToUi();
       const ready = await ensurePacksForOptim();
       if (!ready) {
-        $("calc-status").textContent = "Сначала загрузите свечи — нажмите «Рассчитать» (кэш пуст или период не совпадает).";
+        setCalcStatus("Сначала загрузите свечи — нажмите «Рассчитать» (кэш пуст или период не совпадает).");
         return;
       }
     }
@@ -2750,7 +2745,7 @@
       if (input) input.checked = !!startValue;
     } else {
       if (!input) {
-        $("calc-status").textContent = `Нет поля ввода для ${label}.`;
+        setCalcStatus(`Нет поля ввода для ${label}.`);
         return;
       }
       const min = +input.min || 0;
@@ -3096,7 +3091,7 @@
     if (!key) return;
     ensureLogicLineKeys();
     if (state.logicLineKeys.length <= 1) {
-      $("calc-status").textContent = "Нельзя удалить последнюю логику в каталоге.";
+      setCalcStatus("Нельзя удалить последнюю логику в каталоге.");
       return;
     }
     const name = logicDisplayName(key);
@@ -3113,7 +3108,7 @@
     saveConfig();
     invalidateFormChange();
     updatePositionSlHint();
-    $("calc-status").textContent = `Логика «${name}» удалена из каталога.`;
+    setCalcStatus(`Логика «${name}» удалена из каталога.`);
   }
 
   const LOGIC_CATALOG_FORMAT = "multilogic-finresp-logic-catalog-v1";
@@ -3214,24 +3209,28 @@
   }
 
   function syncProtocolUi() {
-    const btn = $("calc-protocol-download");
-    const hint = $("calc-protocol-hint");
     const proto = state.lastProtocol || null;
-    if (btn) {
-      btn.setAttribute("aria-disabled", proto ? "false" : "true");
-      btn.style.opacity = proto ? "" : ".6";
-    }
-    if (hint) {
-      hint.textContent = proto
-        ? `Событий: ${proto.eventsTotal} · формат: ${proto.format}`
-        : "Протокол появится после «Рассчитать».";
+    const hintText = proto
+      ? `Событий: ${proto.eventsTotal} · формат: ${proto.format}`
+      : "Протокол появится после «Рассчитать».";
+    if (!bridgeSetResults({
+      protocolHintText: hintText,
+      protocolDownloadEnabled: !!proto
+    })) {
+      const btn = $("calc-protocol-download");
+      const hint = $("calc-protocol-hint");
+      if (btn) {
+        btn.setAttribute("aria-disabled", proto ? "false" : "true");
+        btn.style.opacity = proto ? "" : ".6";
+      }
+      if (hint) hint.textContent = hintText;
     }
   }
 
   function downloadLastProtocol() {
     const proto = state.lastProtocol;
     if (!proto) {
-      $("calc-status").textContent = "Сначала нажмите «Рассчитать», чтобы появился протокол.";
+      setCalcStatus("Сначала нажмите «Рассчитать», чтобы появился протокол.");
       return;
     }
     const day = formatDay(todayDate());
@@ -3247,10 +3246,9 @@
         const data = JSON.parse(text);
         if (!data || typeof data !== "object") throw new Error("not an object");
         state.loadedProtocol = data;
-        $("calc-status").textContent =
-          `Загружен протокол: ${data.format || "?"} · событий: ${data.eventsTotal ?? "?"}.`;
+        setCalcStatus(`Загружен протокол: ${data.format || "?"} · событий: ${data.eventsTotal ?? "?"}.`);
       } catch (err) {
-        $("calc-status").textContent = `Ошибка протокола JSON: ${err.message}`;
+        setCalcStatus(`Ошибка протокола JSON: ${err.message}`);
       }
     };
     reader.readAsText(file);
@@ -3309,14 +3307,14 @@
     if (!key) return;
     const payload = buildLogicCatalogPayload([key]);
     downloadJsonFile(`multilogic_logic_${key}.json`, payload);
-    $("calc-status").textContent = `Логика «${logicDisplayName(key)}» экспортирована в файл.`;
+    setCalcStatus(`Логика «${logicDisplayName(key)}» экспортирована в файл.`);
   }
 
   /** Экспорт всего каталога логик. */
   function exportLogicCatalog() {
     const payload = buildLogicCatalogPayload();
     downloadJsonFile(`multilogic_logic_catalog_${formatDay(todayDate())}.json`, payload);
-    $("calc-status").textContent = `Экспортировано ${payload.logicLineKeys.length} логик в файл.`;
+    setCalcStatus(`Экспортировано ${payload.logicLineKeys.length} логик в файл.`);
   }
 
   /** Сброс каталога к встроенным логикам (без диалога). */
@@ -3386,9 +3384,11 @@
     invalidateFormChange();
     updatePositionSlHint();
     syncLogicSelectedHint();
-    $("calc-status").textContent = resetLogics
+    setCalcStatus(
+      resetLogics
       ? "Параметры и каталог логик восстановлены по умолчанию. Выберите логику и нажмите «Рассчитать»."
-      : "Параметры установлены по умолчанию. Нажмите «Рассчитать».";
+      : "Параметры установлены по умолчанию. Нажмите «Рассчитать»."
+    );
   }
 
   /** Сброс каталога к встроенным логикам; выбор в списке «Логика» — пустой. */
@@ -3404,7 +3404,7 @@
     saveConfig();
     invalidateFormChange();
     updatePositionSlHint();
-    $("calc-status").textContent = "Каталог логик восстановлен по умолчанию. Выберите логику для расчёта.";
+    setCalcStatus("Каталог логик восстановлен по умолчанию. Выберите логику для расчёта.");
   }
 
   /** Импорт каталога логик из JSON (замена текущего списка). */
@@ -3433,7 +3433,7 @@
     saveConfig();
     invalidateFormChange();
     updatePositionSlHint();
-    $("calc-status").textContent = `Загружено ${keys.length} логик из файла. Нажмите «Применить» или «Рассчитать».`;
+    setCalcStatus(`Загружено ${keys.length} логик из файла. Нажмите «Применить» или «Рассчитать».`);
   }
 
   /** Импорт одной строки логики в выбранный ключ каталога. */
@@ -3446,7 +3446,7 @@
     fillLogicEditor();
     saveConfig();
     invalidateFormChange();
-    $("calc-status").textContent = `Логика «${logicDisplayName(targetKey)}» загружена из файла.`;
+    setCalcStatus(`Логика «${logicDisplayName(targetKey)}» загружена из файла.`);
   }
 
   /** Чтение файла логики и импорт (одна или весь каталог). */
@@ -3839,12 +3839,13 @@
     if (panelWrap) panelWrap.classList.toggle("live-reverse-panel-toggle--on", on);
     // Предупреждение: оба реверса одновременно — очень легко «перевернуть» смысл стратегии.
     const both = on && !!$("param-reverse")?.checked;
-    const st = $("calc-status");
-    if (st && on) {
+    if (on) {
       const base = "Реверс сигналов включён: Ab↔Bl, AbUp↔BlLo, AbLinK↔BlLinK, AbRegK↔BlRegK, K/CCI/MOM: >=↔<= и >↔<=.";
-      st.textContent = both
-        ? `${base} ВНИМАНИЕ: одновременно включён реверс сторон (Long↔Short) — проверьте смысл стратегии Op/Cl.`
-        : base;
+      setCalcStatus(
+        both
+          ? `${base} ВНИМАНИЕ: одновременно включён реверс сторон (Long↔Short) — проверьте смысл стратегии Op/Cl.`
+          : base
+      );
     }
   }
 
@@ -4127,10 +4128,10 @@
     if (!state.candleCache) return;
     const s = state.candleCache.stats();
     if (!s.entries) {
-      $("calc-status").textContent = "База цен пуста — нечего сохранять.";
+      setCalcStatus("База цен пуста — нечего сохранять.");
       return;
     }
-    $("calc-status").textContent = "Подготовка файла базы цен…";
+    setCalcStatus("Подготовка файла базы цен…");
     const json = await state.candleCache.exportJson();
     const blob = new Blob([json], { type: "application/json" });
     const a = document.createElement("a");
@@ -4138,7 +4139,7 @@
     a.download = `multilogic_candles_${formatDay(todayDate())}.json`;
     a.click();
     URL.revokeObjectURL(a.href);
-    $("calc-status").textContent = `База цен сохранена в файл (${s.entries} инстр./ТФ, ${s.bars} свечей).`;
+    setCalcStatus(`База цен сохранена в файл (${s.entries} инстр./ТФ, ${s.bars} свечей).`);
   }
 
   /** Подпрограмма `initCandleCache`. */
@@ -4151,8 +4152,7 @@
     try {
       state.candleCache = E.createCandleCache({
         onStorageError: () => {
-          $("calc-status").textContent =
-            "База цен: не удалось записать в IndexedDB (квота браузера?). Сохраните в файл или удалите часть цен.";
+          setCalcStatus("База цен: не удалось записать в IndexedDB (квота браузера?). Сохраните в файл или удалите часть цен.");
         }
       });
       updateCacheHint("открывается");
@@ -6074,7 +6074,7 @@ ${referenceBlock}
       const bestLabel = optimValueLabel(state.optim.active, state.optim.bestValue);
       status += ` | Опт. ${opts.optimNote}: FINRESP ${fmt(agg.finresp)} ₽ | лучшее ${bestLabel} → ${fmt(state.optim.bestFinresp)} ₽`;
     }
-    $("calc-status").textContent = status;
+    setCalcStatus(status);
     updateTechInfo("result-applied");
     if (liveSession) {
       state.live.modelFinresp = agg.finresp;
@@ -6119,7 +6119,7 @@ ${referenceBlock}
       $("calc-count").textContent = "—";
       state.lastResult = null;
       applyUiLocks();
-      $("calc-status").textContent = msg;
+      setCalcStatus(msg);
       noteTechError(`render: ${msg}`);
       return false;
     }
@@ -6295,7 +6295,7 @@ ${referenceBlock}
         state.lastResult = null;
         setCalcProgress(msg);
         if (instruments.length > 1 && loadedData.failures.length) {
-          $("calc-status").textContent += ` Загружено ${state.packs.length}/${instruments.length}; ошибок MOEX: ${loadedData.failures.length}.`;
+          appendCalcStatus(` Загружено ${state.packs.length}/${instruments.length}; ошибок MOEX: ${loadedData.failures.length}.`);
         }
       } else {
         applyResult(result, { redrawCharts: false });
@@ -6316,8 +6316,9 @@ ${referenceBlock}
           );
         });
         if (instruments.length > 1 && loadedData.failures.length) {
-          $("calc-status").textContent +=
-            ` Загружено ${state.packs.length}/${instruments.length}; ошибок MOEX: ${loadedData.failures.length}.`;
+          appendCalcStatus(
+            ` Загружено ${state.packs.length}/${instruments.length}; ошибок MOEX: ${loadedData.failures.length}.`
+          );
         }
         if (runGen === state.runGeneration) {
           await finishCalcProgress("Расчёт завершён");
@@ -6331,7 +6332,7 @@ ${referenceBlock}
         return;
       }
       if (runGen !== state.runGeneration) return;
-      $("calc-status").textContent = `Ошибка: ${err.message}`;
+      setCalcStatus(`Ошибка: ${err.message}`);
       noteTechError(`runWithInstruments: ${err.message}`);
       syncChartBox($("calc-chart"), "");
       syncChartBox($("calc-chart-equity"), "");
@@ -6356,7 +6357,7 @@ ${referenceBlock}
     applyEditorParams();
     let instruments = selectedInstruments();
     if (!instruments.length) {
-      $("calc-status").textContent = "Выберите хотя бы один инструмент в списке.";
+      setCalcStatus("Выберите хотя бы один инструмент в списке.");
       return;
     }
     if (!requireTbankDepositForRun()) return;
@@ -6486,13 +6487,13 @@ ${referenceBlock}
     if (!file || !state.candleCache) return;
     try {
       const text = await file.text();
-      $("calc-status").textContent = "Загрузка файла в базу цен…";
+      setCalcStatus("Загрузка файла в базу цен…");
       await state.candleCache.importJson(text, true);
       updateCacheHint("загружено из файла");
       const s = state.candleCache.stats();
-      $("calc-status").textContent = `База цен загружена из файла: ${s.entries} инстр./ТФ, ${s.bars} свечей.`;
+      setCalcStatus(`База цен загружена из файла: ${s.entries} инстр./ТФ, ${s.bars} свечей.`);
     } catch (err) {
-      $("calc-status").textContent = `Ошибка загрузки базы цен: ${err.message}`;
+      setCalcStatus(`Ошибка загрузки базы цен: ${err.message}`);
     } finally {
       ev.target.value = "";
     }
@@ -6502,7 +6503,7 @@ ${referenceBlock}
     if (!window.confirm("Удалить все сохранённые свечи из браузерной базы цен? Это действие нельзя отменить.")) return;
     await state.candleCache.clear();
     updateCacheHint("цены удалены");
-    $("calc-status").textContent = "База цен удалена.";
+    setCalcStatus("База цен удалена.");
   });
   OPT_BUTTONS.forEach(({ btnId, kind }) => {
     const btn = $(btnId);
@@ -6515,27 +6516,31 @@ ${referenceBlock}
   $("prefix-pick-stocks").addEventListener("click", () => {
     reloadShareList();
     saveConfig();
-    $("calc-status").textContent = state.packs.length
+    setCalcStatus(
+      state.packs.length
       ? `Список акций обновлён (${state.shareList.length}). Нажмите «Рассчитать».`
-      : `Список акций обновлён (${state.shareList.length}). Выберите инструменты и нажмите «Рассчитать».`;
+      : `Список акций обновлён (${state.shareList.length}). Выберите инструменты и нажмите «Рассчитать».`
+    );
     if (state.packs.length) invalidateFinrespResult(false);
   });
   $("prefix-pick-futures").addEventListener("click", async () => {
     setBusy(true);
-    $("calc-status").textContent = "Подбор фьючерсов MOEX за период расчёта…";
+    setCalcStatus("Подбор фьючерсов MOEX за период расчёта…");
     try {
       const n = await reloadFuturesListFromMoex();
       if (!n) {
-        $("calc-status").textContent = "MOEX не вернул активных фьючерсов по указанным префиксам.";
+        setCalcStatus("MOEX не вернул активных фьючерсов по указанным префиксам.");
         return;
       }
-      $("calc-status").textContent = state.packs.length
+      setCalcStatus(
+        state.packs.length
         ? `Подобрано ${n} контрактов MOEX, выбор обновлён. Нажмите «Рассчитать».`
-        : `Подобрано ${n} контрактов MOEX, выбор обновлён. Нажмите «Рассчитать».`;
+        : `Подобрано ${n} контрактов MOEX, выбор обновлён. Нажмите «Рассчитать».`
+      );
       saveConfig();
       if (state.packs.length) invalidateFinrespResult(false);
     } catch (err) {
-      $("calc-status").textContent = `Ошибка подбора фьючерсов: ${err.message}`;
+      setCalcStatus(`Ошибка подбора фьючерсов: ${err.message}`);
     } finally {
       setBusy(false);
     }
@@ -6547,8 +6552,7 @@ ${referenceBlock}
       else reloadFuturesList();
       saveConfig();
       if (repaired) {
-        $("calc-status").textContent =
-          "Список тикеров был пуст — восстановлены значения по умолчанию. Выберите бумаги и нажмите «Рассчитать».";
+        setCalcStatus("Список тикеров был пуст — восстановлены значения по умолчанию. Выберите бумаги и нажмите «Рассчитать».");
       }
     };
     $(id).addEventListener("change", onPrefixFieldChange);
@@ -6576,7 +6580,7 @@ ${referenceBlock}
     try {
       await importLogicFromFile(file, null);
     } catch (err) {
-      $("calc-status").textContent = `Ошибка импорта каталога: ${err.message}`;
+      setCalcStatus(`Ошибка импорта каталога: ${err.message}`);
       noteTechError(`logic-catalog-import: ${err.message}`);
     }
   });
@@ -6589,7 +6593,7 @@ ${referenceBlock}
     try {
       await importLogicFromFile(file, key);
     } catch (err) {
-      $("calc-status").textContent = `Ошибка импорта логики: ${err.message}`;
+      setCalcStatus(`Ошибка импорта логики: ${err.message}`);
       noteTechError(`logic-line-import: ${err.message}`);
     }
   });
@@ -6654,8 +6658,7 @@ ${referenceBlock}
     const n = selectedInstrumentCount();
     if (n > 0 && enforceDateRange("till", n)) {
       clearWindowAnchor();
-      $("calc-status").textContent =
-        `Таймфрейм изменён — период сужен до ${maxCalcDays($("calc-tf").value, n)} дн.`;
+      setCalcStatus(`Таймфрейм изменён — период сужен до ${maxCalcDays($("calc-tf").value, n)} дн.`);
     } else {
       enforceDateRange("till", 0);
       updateDateHint(n);
@@ -6730,12 +6733,10 @@ ${referenceBlock}
     updateDateHint(selectedInstrumentCount());
     if (prefixesRepaired) saveConfig();
     if (!state.shareList.length && !state.futuresList.length) {
-      $("calc-status").textContent =
-        "Список инструментов пуст — откройте «Дополнительные параметры» → MOEX, проверьте тикеры и нажмите «Подобрать», либо Ctrl+F5.";
+      setCalcStatus("Список инструментов пуст — откройте «Дополнительные параметры» → MOEX, проверьте тикеры и нажмите «Подобрать», либо Ctrl+F5.");
       noteTechError("instrument lists empty after init");
     } else if (prefixesRepaired) {
-      $("calc-status").textContent =
-        `Восстановлены тикеры по умолчанию (${state.shareList.length} акций). Выберите бумаги и нажмите «Рассчитать».`;
+      setCalcStatus(`Восстановлены тикеры по умолчанию (${state.shareList.length} акций). Выберите бумаги и нажмите «Рассчитать».`);
     }
     bindUiEvents();
     initCandleCache();
@@ -6773,11 +6774,9 @@ ${referenceBlock}
     });
   } catch (err) {
     noteTechError(`init: ${err?.message || err}`);
-    const st = $("calc-status");
-    if (st) {
-      st.textContent =
-        `Ошибка инициализации: ${err.message}. Переключение «Реальная торговля» работает; обновите Ctrl+F5 или запустите run-dev.bat.`;
-    }
+    setCalcStatus(
+      `Ошибка инициализации: ${err.message}. Переключение «Реальная торговля» работает; обновите Ctrl+F5 или запустите run-dev.bat.`
+    );
     try { bindUiEvents(); } catch (bindErr) {
       noteTechError(`bindUiEvents: ${bindErr?.message || bindErr}`);
     }

@@ -9,7 +9,7 @@
 <p class="calc-sec-hint" style="margin:.35rem 0 .15rem">Строка статуса — серый текст ниже FINRESP и % годовых (сообщения о загрузке MOEX, ошибках, окне расчёта):</p>
 <p class="calc-status" id="calc-status">{{ results.statusText }}</p>
 <div class="calc-reverse-bar" style="margin:.35rem 0 .5rem;gap:.5rem;flex-wrap:wrap">
-<button type="button" class="calc-btn calc-btn-secondary" id="calc-protocol-download" title="Скачать протокол сделок последнего расчёта (JSON)">Скачать протокол (JSON)</button>
+<button type="button" class="calc-btn calc-btn-secondary" id="calc-protocol-download" title="Скачать протокол сделок последнего расчёта (JSON)" [disabled]="!results.protocolDownloadEnabled" [style.opacity]="results.protocolDownloadEnabled ? '' : '.6'" [attr.aria-disabled]="results.protocolDownloadEnabled ? 'false' : 'true'">Скачать протокол (JSON)</button>
 <button type="button" class="calc-btn calc-btn-secondary" id="calc-protocol-load" title="Загрузить ранее сохранённый протокол (JSON)">Загрузить протокол (JSON)</button>
 <span class="calc-sec-hint" id="calc-protocol-hint" style="margin:0">{{ results.protocolHintText }}</span>
 </div>

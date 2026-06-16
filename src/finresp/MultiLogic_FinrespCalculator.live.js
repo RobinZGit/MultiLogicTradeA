@@ -17,6 +17,36 @@
     const state = d.state;
     const E = d.E;
     const $ = d.$;
+
+    function bridgeSetStatus(text) {
+      const api = root.__mlFinrespBridge;
+      if (!api || typeof api.setStatus !== "function") return false;
+      try {
+        api.setStatus(text);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function setCalcStatus(text) {
+      if (!bridgeSetStatus(text)) {
+        const st = $("calc-status");
+        if (st) st.textContent = text;
+      }
+    }
+
+    function bridgeSetLive(view) {
+      const api = root.__mlFinrespBridge;
+      if (!api || typeof api.setLive !== "function") return false;
+      try {
+        api.setLive(view);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
     const fmt = d.fmt;
     const fmtSignedRub = d.fmtSignedRub;
     const RUB_SIGN = d.RUB_SIGN;
@@ -1266,7 +1296,6 @@
   function renderLiveOrdersPanel() {
     const el = $("live-trading-orders");
     const metaEl = $("live-trade-history-meta");
-    if (!el) return;
     syncTradeHistoryFromSources();
     const hist = ensureLiveTradeHistory().slice().sort((a, b) => {
       if (!!a.active !== !!b.active) return a.active ? -1 : 1;
@@ -1274,32 +1303,45 @@
       const tb = Date.parse(b.when || 0) || 0;
       return tb - ta;
     });
-    if (metaEl && isLiveMode()) {
+    const defaultMeta =
+      "Журнал сессии: фейк — симуляция; реал — операции брокера. ★/☆ · FINRESPΔ · колонка «Источник» — логика робота, ручная заявка, закрытие позиции и т.п.";
+    let metaText = defaultMeta;
+    if (isLiveMode()) {
       const nAct = hist.filter((h) => h.active).length;
       const nFake = hist.filter((h) => h.fake).length;
       const nReal = hist.filter((h) => !h.fake).length;
-      metaEl.textContent = isLiveSandbox()
+      metaText = isLiveSandbox()
         ? `Сделок в журнале: ${hist.length} (фейк ${nFake}, реал ${nReal}${nAct ? `, активных заявок ${nAct}` : ""}). ★ покупка · ☆ продажа · FINRESPΔ = продажи − покупки (FIFO) − комиссии · Источник — робот / ручная / закрытие.`
         : `Сделок в журнале: ${hist.length} (фейк ${nFake}, реал ${nReal}${nAct ? `, активных заявок ${nAct}` : ""}). ★/☆ · FINRESPΔ = продажи − покупки (FIFO) − комиссии (брокер) · позиции до старта сессии — без комиссии покупки в журнале.`;
     }
     const active = hist.filter((h) => h.active);
     const done = hist.filter((h) => !h.active);
     const totalsFooter = renderTradeHistoryTotalsFooter(computeTradeHistoryCloseTotals(done));
+    let contentHtml;
     if (!hist.length) {
       const emptyMsg = isLiveSandbox()
         ? "Сделок пока нет. Робот и ручные заявки попадут сюда после исполнения."
         : "Сделок пока нет. После «Начать торговлю» здесь — заявки и исполнения.";
-      el.innerHTML = `<div class="live-trading-orders-scroll"><p class="live-trading-orders-empty">${emptyMsg}</p></div>${totalsFooter}`;
-      return;
+      contentHtml = `<div class="live-trading-orders-scroll"><p class="live-trading-orders-empty">${emptyMsg}</p></div>`;
+    } else {
+      const activeBlock = active.length
+        ? `<tr class="live-trade-history-subhead"><td colspan="12">Текущие заявки (не исполнены полностью)</td></tr>${active.map(renderTradeHistoryRow).join("")}`
+        : "";
+      const doneBlock = done.length
+        ? `${active.length ? '<tr class="live-trade-history-subhead"><td colspan="12">Исполненные и завершённые</td></tr>' : ""}${done.map(renderTradeHistoryRow).join("")}`
+        : "";
+      const tableHtml = `<table><thead><tr><th></th><th>Тикер</th><th>Сторона</th><th>Тип / сумма</th><th>Лоты</th><th>Статус</th><th>FINRESPΔ</th><th>Комиссия buy</th><th>Комиссия sell</th><th>Источник</th><th>Режим</th><th>Время</th></tr></thead><tbody>${activeBlock}${doneBlock}</tbody></table>`;
+      contentHtml = `<div class="live-trading-orders-scroll">${tableHtml}</div>`;
     }
-    const activeBlock = active.length
-      ? `<tr class="live-trade-history-subhead"><td colspan="12">Текущие заявки (не исполнены полностью)</td></tr>${active.map(renderTradeHistoryRow).join("")}`
-      : "";
-    const doneBlock = done.length
-      ? `${active.length ? '<tr class="live-trade-history-subhead"><td colspan="12">Исполненные и завершённые</td></tr>' : ""}${done.map(renderTradeHistoryRow).join("")}`
-      : "";
-    const tableHtml = `<table><thead><tr><th></th><th>Тикер</th><th>Сторона</th><th>Тип / сумма</th><th>Лоты</th><th>Статус</th><th>FINRESPΔ</th><th>Комиссия buy</th><th>Комиссия sell</th><th>Источник</th><th>Режим</th><th>Время</th></tr></thead><tbody>${activeBlock}${doneBlock}</tbody></table>`;
-    el.innerHTML = `<div class="live-trading-orders-scroll">${tableHtml}</div>${totalsFooter}`;
+    const bridged = bridgeSetLive({
+      journalMetaText: metaText,
+      journalContentHtml: contentHtml,
+      journalTotalsHtml: totalsFooter
+    });
+    if (bridged) return;
+    if (!el) return;
+    if (metaEl && isLiveMode()) metaEl.textContent = metaText;
+    el.innerHTML = `${contentHtml}${totalsFooter}`;
   }
 
   /** Карта legId → tradeId открывающей сделки + остатки открытых legs после replay. */
@@ -6144,7 +6186,7 @@ ${referenceBlock}
     const startCheck = validateLiveTradingStart();
     if (!startCheck.ok) {
       state.live.lastError = startCheck.error;
-      $("calc-status").textContent = `Нельзя начать торговлю: ${startCheck.error}.`;
+      setCalcStatus(`Нельзя начать торговлю: ${startCheck.error}.`);
       syncLiveTradingUi();
       return;
     }
@@ -6677,13 +6719,13 @@ ${referenceBlock}
       const sb = state.live?.sandbox;
       if (sb && Number.isFinite(sb.startPortfolio) && sb.startPortfolio > 0) return true;
       const msg = "Для песочницы укажите депозит > 0 (поле «Депозит» в Volume).";
-      $("calc-status").textContent = msg;
+      setCalcStatus(msg);
       setTbankStatus(msg, true);
       return false;
     }
     if (state.tbank.depositLoaded && deposit > 0) return true;
     const msg = "В режиме T-Bank сначала загрузите депозит из выбранного счёта.";
-    $("calc-status").textContent = msg;
+    setCalcStatus(msg);
     setTbankStatus(msg, true);
     $("tbank-settings").open = true;
     syncCollapsibleToggleLabel("tbank-settings", "tbank-settings-toggle");

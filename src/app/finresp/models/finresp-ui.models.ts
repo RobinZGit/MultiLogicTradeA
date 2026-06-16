@@ -12,6 +12,7 @@ export interface FinrespResultsViewModel {
   statusText: string;
   annHintText: string;
   protocolHintText: string;
+  protocolDownloadEnabled: boolean;
   candleCount: string;
   position: string;
   cash: string;
@@ -32,6 +33,7 @@ export const EMPTY_FINRESP_RESULTS: FinrespResultsViewModel = {
   statusText: 'Выберите бумаги и логику, нажмите «Рассчитать».',
   annHintText: '',
   protocolHintText: 'Протокол появится после «Рассчитать».',
+  protocolDownloadEnabled: false,
   candleCount: '—',
   position: '—',
   cash: '—',
@@ -52,6 +54,9 @@ export interface FinrespLiveViewModel {
   toggleDisabled: boolean;
   sellAllDisabled: boolean;
   commissionLabel: string;
+  journalMetaText: string;
+  journalContentHtml: string;
+  journalTotalsHtml: string;
 }
 
 export const EMPTY_FINRESP_LIVE: FinrespLiveViewModel = {
@@ -68,6 +73,11 @@ export const EMPTY_FINRESP_LIVE: FinrespLiveViewModel = {
   toggleDisabled: true,
   sellAllDisabled: true,
   commissionLabel: 'Комиссии уплачено (реально), ₽',
+  journalMetaText:
+    'Журнал сессии: фейк — симуляция; реал — операции брокера. ★/☆ · FINRESPΔ · колонка «Источник» — логика робота, ручная заявка, закрытие позиции и т.п.',
+  journalContentHtml:
+    '<p class="live-trading-orders-empty">Разверните блок в режиме live.</p>',
+  journalTotalsHtml: '',
 };
 
 export interface FinrespFormValues {
