@@ -29,8 +29,30 @@ test('tech info includes live busy flags for диагностики зависа
     'liveSandboxToggleBusy',
     'liveTradingActionBusy',
     'liveLastCandleRefreshMs',
-    'liveFinrespBootstrap'
+    'liveFinrespBootstrap',
+    'liveOrderBookBusy',
+    'liveLastOrderBookRefreshMs'
   ]) {
     assert.match(src, new RegExp(key), `buildTechInfoText must include ${key}`);
   }
+});
+
+test('order book refresh shows loading and uses non-interactive token unlock', () => {
+  const src = fs.readFileSync(livePath, 'utf8');
+  assert.match(src, /showLiveOrderBookLoading/);
+  assert.match(src, /загрузка стакана/);
+  const refreshBlock = src.match(/async function refreshLiveOrderBook\(\)[\s\S]*?^  \}/m);
+  assert.ok(refreshBlock, 'refreshLiveOrderBook');
+  assert.match(refreshBlock[0], /ensureTbankTokenUnlocked\(\{ interactive: false, openUi: false \}\)/);
+  assert.match(refreshBlock[0], /await yieldToUi\(\)/);
+  assert.match(refreshBlock[0], /lastOrderBookRefreshMs/);
+});
+
+test('order book panel toggle does not double-schedule refresh on open', () => {
+  const src = fs.readFileSync(livePath, 'utf8');
+  const toggleBlock = src.match(/live-order-book-panel[\s\S]*?stopLiveOrderBookPoll/);
+  assert.ok(toggleBlock, 'order book toggle handler');
+  assert.doesNotMatch(toggleBlock[0], /scheduleRefreshLiveOrderBook\(true\)[\s\S]*startLiveOrderBookPoll/);
+  assert.match(toggleBlock[0], /showLiveOrderBookLoading/);
+  assert.match(toggleBlock[0], /startLiveOrderBookPoll/);
 });

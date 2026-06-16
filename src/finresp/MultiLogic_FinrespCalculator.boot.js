@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-16-live-async-v1";
+  const CALC_PAGE_VERSION = "2026-06-16-orderbook-async-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -458,6 +458,8 @@
           `liveTradingActionBusy=${!!lv.tradingActionBusy}`,
           `liveSellAllInFlight=${!!lv.sellAllInFlight}`,
           `liveFinrespBootstrap=${lv.finrespBootstrapProgress ? `${lv.finrespBootstrapProgress.done}/${lv.finrespBootstrapProgress.total}` : "—"}`,
+          `liveOrderBookBusy=${!!lv.orderBookBusy}`,
+          `liveLastOrderBookRefreshMs=${lv.lastOrderBookRefreshMs ?? "—"}`,
           `liveReconcileBusy=${!!lv.reconcileBusy}`,
           `liveOrderType=${$("live-order-type")?.value || "—"}`,
           `liveObTrendConfirm=${!!state.live?.obTrendConfirm}`,

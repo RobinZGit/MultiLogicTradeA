@@ -21,8 +21,12 @@ export function liveCriticalToggleDisabled(state) {
 }
 
 /**
- * Один тик live-опроса после свечей: FINRESP-хвост + (опционально) equity-каталог как при sync applyResult.
+ * Не запускать второй fetch стакана, пока первый в полёте.
  */
+export function shouldScheduleOrderBookRefresh(panelOpen, orderBookBusy) {
+  return !!panelOpen && !orderBookBusy;
+}
+
 export function simulateLivePollApplyWork(E, packs, specStack, logicIds, params, vol, indicators, tailBars, options) {
   const opts = options || {};
   const tail = tailBars ?? 220;

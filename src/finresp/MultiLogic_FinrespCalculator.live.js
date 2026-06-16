@@ -1312,14 +1312,20 @@
     const manual = $("live-manual-order-panel");
     if (manual) {
       manual.addEventListener("toggle", () => {
-        if (manual.open) scheduleSyncLiveManualOrderPanel(true);
+        if (manual.open) {
+          scheduleSyncLiveManualOrderPanel(true);
+          void (async () => {
+            await yieldToUi();
+            await refreshLiveManualLimitPrice({ force: true, showStatus: true });
+          })().catch(() => {});
+        }
       });
     }
     const ob = $("live-order-book-panel");
     if (ob) {
       ob.addEventListener("toggle", () => {
         if (ob.open) {
-          scheduleRefreshLiveOrderBook(true);
+          showLiveOrderBookLoading();
           startLiveOrderBookPoll();
         } else {
           stopLiveOrderBookPoll();
@@ -2038,6 +2044,14 @@
     if (statsEl) statsEl.textContent = text || "—";
   }
 
+  /** Плейсхолдер стакана до ответа T-Bank (чтобы форма не «замирала» без обратной связи). */
+  function showLiveOrderBookLoading(hint) {
+    if (!isOrderBookPanelOpen()) return;
+    setLiveOrderBookStats(hint || "загрузка стакана…");
+    const tableEl = $("live-order-book-table");
+    if (tableEl) tableEl.innerHTML = '<p class="live-order-book-empty">загрузка стакана…</p>';
+  }
+
   /** Отрисовка элемента live-панели: `renderLiveOrderBookView`. */
   function renderLiveOrderBookView(ob) {
     const tableEl = $("live-order-book-table");
@@ -2094,6 +2108,7 @@
     if (!isOrderBookPanelOpen()) return;
     await yieldToUi();
     fillLiveTradingInstrumentSelects();
+    await yieldToUi();
     await refreshLiveOrderBook();
     lastOrderBookDomRenderAt = Date.now();
   }
@@ -2109,15 +2124,20 @@
       return;
     }
     state.live.orderBookBusy = true;
+    showLiveOrderBookLoading(`загрузка стакана ${picked.sec}…`);
+    await yieldToUi();
+    updateTechInfo("live-orderbook-start");
+    const refreshT0 = performance.now();
     try {
-      if (!(await ensureTbankTokenUnlocked())) {
-        setLiveOrderBookStats("расшифруйте токен T-Bank");
+      const meta = await resolveLiveInstrumentMeta(picked.sec, picked.market);
+      if (!meta?.instrumentId) throw new Error(`${picked.sec}: не найден`);
+      if (!isLiveSandbox() && !(await ensureTbankTokenUnlocked({ interactive: false, openUi: false }))) {
+        setLiveOrderBookStats("расшифруйте токен T-Bank (блок «Реальный счёт T-Bank»)");
+        renderLiveOrderBookView(null);
         return;
       }
-      const ti = await tbankFindInstrument(picked.sec, picked.market);
-      if (!ti) throw new Error(`${picked.sec}: не найден в T-Bank`);
-      const instrumentId = ti.uid || ti.figi;
-      const ob = await getBroker().getOrderBook(instrumentId, LIVE_ORDER_BOOK_DEPTH);
+      const ob = await getBroker().getOrderBook(meta.instrumentId, LIVE_ORDER_BOOK_DEPTH);
+      await yieldToUi();
       renderLiveOrderBookView(ob);
     } catch (err) {
       renderLiveOrderBookView(null);
@@ -2125,7 +2145,9 @@
       setLiveOrderBookStats(`ошибка: ${msg}`);
       noteLiveTech("live-orderbook", msg, `sec=${picked.sec}`);
     } finally {
+      state.live.lastOrderBookRefreshMs = Math.round(performance.now() - refreshT0);
       state.live.orderBookBusy = false;
+      updateTechInfo("live-orderbook-done");
     }
   }
 
@@ -3080,6 +3102,7 @@
     if ($("live-manual-order-type")?.value !== "limit") return;
     const picked = parseLiveManualInstrumentKey($("live-manual-sec")?.value);
     const priceEl = $("live-manual-price");
+    const statusEl = $("live-manual-order-status");
     if (!priceEl) return;
     if (!picked?.sec) {
       if (options.force) {
@@ -3090,6 +3113,10 @@
     }
     const secKey = `${picked.market}:${picked.sec}`;
     if (!options.force && state.live.manualPriceSec === secKey && priceEl.value) return;
+    if (options.showStatus && statusEl) {
+      statusEl.textContent = `загрузка цены ${picked.sec}…`;
+    }
+    await yieldToUi();
     let price = packLastClose(picked.sec, picked.market);
     let source = price ? "свечи" : "";
     if (!price && state.tbank.token) {
@@ -4566,7 +4593,7 @@
     if (!sel) return;
     const prev = sel.value || restoredKey || "";
     const items = selectedInstruments();
-    sel.innerHTML = "";
+    sel.replaceChildren();
     if (!items.length) {
       const o = document.createElement("option");
       o.value = "";
@@ -4575,12 +4602,14 @@
       sel.disabled = true;
       return;
     }
+    const frag = document.createDocumentFragment();
     for (const i of items) {
       const o = document.createElement("option");
       o.value = `${i.market}:${i.sec}`;
       o.textContent = i.market === "futures" ? `${i.sec} (фьюч)` : i.sec;
-      sel.appendChild(o);
+      frag.appendChild(o);
     }
+    sel.appendChild(frag);
     sel.disabled = !isLiveMode() || state.uiBusy;
     if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
   }
@@ -4639,6 +4668,7 @@
     if (!isManualOrderPanelOpen() && !isOrderBookPanelOpen()) return;
     await yieldToUi();
     syncLiveManualOrderUi();
+    await yieldToUi();
   }
 
   function syncLiveManualOrderUi() {
