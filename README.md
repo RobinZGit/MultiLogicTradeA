@@ -1,8 +1,9 @@
 # MultiLogicTradeA
 
-Независимое Angular-приложение с калькулятором **FINRESP**. Исходный движок и UI перенесены в этот репозиторий; ссылок на репозиторий `MultiLogicTrade` в коде нет.
+Независимое Angular-приложение с калькулятором **FINRESP**. Исходный движок и UI перенесены в этот репозиторий.
 
-Старый проект (`MultiLogicTrade`) остаётся опубликованным отдельно — этот репозиторий развивается параллельно.
+**Онлайн:** https://robinzgit.github.io/MultiLogicTradeA/finresp  
+Точка входа с [документации OsEngine](https://robinzgit.github.io/OsEngine/).
 
 ## Быстрый старт
 
@@ -28,7 +29,7 @@ run-prod.bat
 
 ## GitHub Pages
 
-Push в `main` → CI собирает с `--base-href /MultiLogicTradeA/` и публикует на Pages.
+Push в `main` → CI собирает с `--base-href /MultiLogicTradeA/` и публикует на Pages: https://robinzgit.github.io/MultiLogicTradeA/finresp
 
 | `scripts/check-finresp-*.mjs` | Smoke-проверка калькулятора в headless Chromium |
 | `tests/finresp/` | Node-тесты движка (перенесены из MultiLogicTrade) |
