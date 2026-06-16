@@ -25,7 +25,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-set "MLTA_URL=http://127.0.0.1:5173/"
+set "MLTA_URL=http://127.0.0.1:5173/finresp"
 echo.
 echo Starting static server on %MLTA_URL%
 echo Waiting for port 5173, then opening browser...

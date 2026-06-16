@@ -1,0 +1,46 @@
+import { Inject, Injectable } from '@angular/core';
+import { APP_BASE_HREF } from '@angular/common';
+
+declare global {
+  interface Window {
+    __mlFinrespAssetBase?: string;
+    __mlFinresp?: {
+      preboot?: {
+        setTechPre?: (text: string) => void;
+        syncLivePanelFromMode?: () => void;
+      };
+    };
+  }
+}
+
+@Injectable()
+export class FinrespScriptLoaderService {
+  readonly assetBase: string;
+
+  constructor(@Inject(APP_BASE_HREF) baseHref: string) {
+    const base = baseHref.endsWith('/') ? baseHref : `${baseHref}/`;
+    this.assetBase = `${base}assets/finresp/`;
+  }
+
+  resolve(relativePath: string): string {
+    return `${this.assetBase}${relativePath}`;
+  }
+
+  loadScript(relativePath: string): Promise<void> {
+    const src = this.resolve(relativePath);
+    const marker = `data-ml-finresp="${relativePath}"`;
+    if (document.querySelector(`script[${marker}]`)) {
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = src;
+      el.setAttribute('data-ml-finresp', relativePath);
+      el.async = false;
+      el.onload = () => resolve();
+      el.onerror = () => reject(new Error(`FINRESP: failed to load ${relativePath}`));
+      document.body.appendChild(el);
+    });
+  }
+}

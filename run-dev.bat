@@ -28,7 +28,7 @@ echo Checking port 4200...
 powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 4200 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }" >nul 2>nul
 
 echo.
-echo Starting Angular dev server on http://127.0.0.1:4200/
+echo Starting Angular dev server on http://127.0.0.1:4200/finresp
 echo Browser opens automatically after the first compile (~10-20 sec).
 echo Keep this window open. Close it to stop the server.
 echo.

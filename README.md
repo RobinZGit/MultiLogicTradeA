@@ -1,27 +1,39 @@
-# MultilogicTradeA
+# MultiLogicTradeA
 
-This project was generated with [Angular CLI](https://github.com/angular/angular-cli) version 15.2.4.
+Независимое Angular-приложение с калькулятором **FINRESP**. Исходный движок и UI перенесены в этот репозиторий; ссылок на репозиторий `MultiLogicTrade` в коде нет.
 
-## Development server
+Старый проект (`MultiLogicTrade`) остаётся опубликованным отдельно — этот репозиторий развивается параллельно.
 
-Run `ng serve` for a dev server. Navigate to `http://localhost:4200/`. The application will automatically reload if you change any of the source files.
+## Быстрый старт
 
-## Code scaffolding
+```bat
+run-dev.bat
+```
 
-Run `ng generate component component-name` to generate a new component. You can also use `ng generate directive|pipe|service|class|guard|interface|enum|module`.
+Откроется http://127.0.0.1:4200/finresp — калькулятор встроен в Angular (не отдельная HTML-страница из assets).
 
-## Build
+Продакшен-сборка и локальный просмотр:
 
-Run `ng build` to build the project. The build artifacts will be stored in the `dist/` directory.
+```bat
+run-prod.bat
+```
 
-## Running unit tests
+## Структура
 
-Run `ng test` to execute the unit tests via [Karma](https://karma-runner.github.io).
+| Путь | Назначение |
+|------|------------|
+| `src/app/finresp/` | Angular-модуль, компонент калькулятора, загрузчик скриптов |
+| `src/finresp/` | Движок FINRESP (indicators, logics, engine, live, worker) — копируется в `assets/finresp` при сборке |
+| `scripts/split-finresp-html.mjs` | Разбор монолитного HTML на шаблон + boot/preboot/fallback (при обновлении движка) |
 
-## Running end-to-end tests
+## GitHub Pages
 
-Run `ng e2e` to execute the end-to-end tests via a platform of your choice. To use this command, you need to first add a package that implements end-to-end testing capabilities.
+Push в `main` → CI собирает с `--base-href /MultiLogicTradeA/` и публикует на Pages.
 
-## Further help
+## Обновление движка
 
-To get more help on the Angular CLI use `ng help` or go check out the [Angular CLI Overview and Command Reference](https://angular.io/cli) page.
+Код в `src/finresp/` — **собственная копия** в этом репозитории. При переносе правок из другого источника:
+
+1. Скопировать изменённые файлы в `src/finresp/`
+2. Если менялся `MultiLogic_FinrespCalculator.html` — положить его в `src/finresp/` и выполнить `node scripts/split-finresp-html.mjs`
+3. При добавлении новых `.js` — дописать путь в `src/app/finresp/finresp-engine-scripts.ts` и в `MultiLogic_FinrespCalculator.worker.js`

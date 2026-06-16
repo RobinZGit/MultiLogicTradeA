@@ -2,7 +2,8 @@
   "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
   "version": 1,
   "cli": {
-    "packageManager": "npm"
+    "packageManager": "npm",
+    "analytics": "0ddc44a4-cc6f-4059-a2b4-8a9dfd5fa368"
   },
   "newProjectRoot": "projects",
   "projects": {
@@ -25,10 +26,16 @@
             "tsConfig": "tsconfig.app.json",
             "assets": [
               "src/favicon.ico",
-              "src/assets"
+              "src/assets",
+              {
+                "glob": "**/*",
+                "input": "src/finresp",
+                "output": "assets/finresp"
+              }
             ],
             "styles": [
-              "src/styles.css"
+              "src/styles.css",
+              "src/app/finresp/calculator/finresp-calculator.component.css"
             ],
             "scripts": []
           },
@@ -42,8 +49,8 @@
                 },
                 {
                   "type": "anyComponentStyle",
-                  "maximumWarning": "2kb",
-                  "maximumError": "4kb"
+                  "maximumWarning": "80kb",
+                  "maximumError": "120kb"
                 }
               ],
               "outputHashing": "all"
@@ -87,10 +94,16 @@
             "tsConfig": "tsconfig.spec.json",
             "assets": [
               "src/favicon.ico",
-              "src/assets"
+              "src/assets",
+              {
+                "glob": "**/*",
+                "input": "src/finresp",
+                "output": "assets/finresp"
+              }
             ],
             "styles": [
-              "src/styles.css"
+              "src/styles.css",
+              "src/app/finresp/calculator/finresp-calculator.component.css"
             ],
             "scripts": []
           }

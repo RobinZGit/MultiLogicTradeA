@@ -5650,7 +5650,7 @@ ${referenceBlock}
 
   /** Подпрограмма `fileProtocolLiveHint`. */
   function fileProtocolLiveHint() {
-    return "file://: MOEX недоступен — песочница/T-Bank/база свечей; для MOEX запустите serve-calculator.ps1";
+    return "file://: MOEX недоступен — песочница/T-Bank/база свечей; для MOEX запустите run-dev.bat";
   }
 
   /** Подгрузка свечей MOEX/T-Bank для live-графиков и расчёта. */

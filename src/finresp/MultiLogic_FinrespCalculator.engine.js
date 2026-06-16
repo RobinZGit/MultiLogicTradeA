@@ -3423,7 +3423,7 @@
   function moexFileProtocolHint() {
     if (typeof location !== "undefined" && location.protocol === "file:") {
       return " Страница открыта как file:// — браузер блокирует MOEX (CORS). "
-        + "Запустите serve-calculator.ps1 в этой папке или откройте через GitHub Pages / http://localhost.";
+        + "Запустите run-dev.bat (http://127.0.0.1:4200/finresp) или откройте через GitHub Pages.";
     }
     return "";
   }
