@@ -18,6 +18,15 @@ if not exist "node_modules" (
   )
 )
 
+rem No interactive Angular CLI prompts (analytics, port, etc.)
+set "CI=true"
+set "NG_CLI_ANALYTICS=ci"
+call npx ng analytics enable >nul 2>nul
+
+rem Free port 4200 if a previous dev server is still running
+echo Checking port 4200...
+powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 4200 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }" >nul 2>nul
+
 echo.
 echo Starting Angular dev server on http://127.0.0.1:4200/
 echo Browser opens automatically after the first compile (~10-20 sec).
