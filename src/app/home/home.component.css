@@ -1,0 +1,9 @@
+.page{min-height:100vh;background:#f4f6fa;color:#1a1d26;font-family:Segoe UI,system-ui,sans-serif;}
+.hdr{max-width:1040px;margin:0 auto;padding:1.6rem 1rem 1rem;}
+.hdr-title{font-size:1.6rem;font-weight:800;}
+.hdr-sub{margin-top:.25rem;color:#5c6370;}
+.card{max-width:1040px;margin:0 auto;background:#fff;border:1px solid #dde2eb;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.05);padding:1rem 1.25rem;}
+.card-row{display:flex;flex-wrap:wrap;gap:.75rem;align-items:center;}
+.btn{display:inline-flex;align-items:center;justify-content:center;padding:.55rem .9rem;border-radius:9px;background:#2563eb;color:#fff;text-decoration:none;font-weight:700;}
+.btn:hover{filter:brightness(.95);}
+.hint{color:#5c6370;font-size:.9rem}
