@@ -33,10 +33,13 @@ jobs:
       - name: Build (base-href for repo pages)
         run: npm run build -- --base-href "/MultiLogicTradeA/"
 
+      - name: SPA fallback for GitHub Pages
+        run: cp dist/multilogic-trade-a/index.html dist/multilogic-trade-a/404.html
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: dist/multilogic-trade-a
 
   deploy:
     environment:

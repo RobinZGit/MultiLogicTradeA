@@ -1,5 +1,4 @@
-import { Inject, Injectable } from '@angular/core';
-import { APP_BASE_HREF } from '@angular/common';
+import { Injectable } from '@angular/core';
 
 declare global {
   interface Window {
@@ -17,7 +16,8 @@ declare global {
 export class FinrespScriptLoaderService {
   readonly assetBase: string;
 
-  constructor(@Inject(APP_BASE_HREF) baseHref: string) {
+  constructor() {
+    const baseHref = document.querySelector('base')?.getAttribute('href') || '/';
     const base = baseHref.endsWith('/') ? baseHref : `${baseHref}/`;
     this.assetBase = `${base}assets/finresp/`;
   }
