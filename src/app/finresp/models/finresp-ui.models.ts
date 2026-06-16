@@ -89,3 +89,75 @@ export interface FinrespFormValues {
   instrumentIds: string[];
   logicIds: string[];
 }
+
+export interface FinrespInstrumentOption {
+  id: string;
+  market: 'shares' | 'futures';
+}
+
+export interface FinrespLogicOption {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export interface FinrespLogicChipView {
+  id: string;
+  name: string;
+  color: string;
+  order: number;
+}
+
+export interface FinrespFormCatalogViewModel {
+  instrumentOptions: FinrespInstrumentOption[];
+  logicOptions: FinrespLogicOption[];
+  secHintText: string;
+  logicHintText: string;
+  logicChips: FinrespLogicChipView[];
+  logicSelectionCleared: boolean;
+  instrumentsDisabled: boolean;
+}
+
+export const EMPTY_FINRESP_FORM_CATALOG: FinrespFormCatalogViewModel = {
+  instrumentOptions: [],
+  logicOptions: [],
+  secHintText: '',
+  logicHintText: 'Каталог редактируется в блоке «Логики» ниже (под доп. параметрами).',
+  logicChips: [],
+  logicSelectionCleared: false,
+  instrumentsDisabled: true,
+};
+
+export interface FinrespWindowViewModel {
+  start: number;
+  end: number;
+  min: number;
+  max: number;
+  disabled: boolean;
+  startLabel: string;
+  endLabel: string;
+}
+
+export const EMPTY_FINRESP_WINDOW: FinrespWindowViewModel = {
+  start: 0,
+  end: 0,
+  min: 0,
+  max: 0,
+  disabled: true,
+  startLabel: '—',
+  endLabel: '—',
+};
+
+export interface FinrespChartsViewModel {
+  instrumentHtml: string;
+  equityHtml: string;
+  instrumentVisible: boolean;
+  equityVisible: boolean;
+}
+
+export const EMPTY_FINRESP_CHARTS: FinrespChartsViewModel = {
+  instrumentHtml: '',
+  equityHtml: '',
+  instrumentVisible: false,
+  equityVisible: false,
+};

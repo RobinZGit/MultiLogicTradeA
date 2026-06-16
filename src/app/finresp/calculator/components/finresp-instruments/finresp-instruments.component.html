@@ -1,0 +1,20 @@
+<div class="calc-field calc-field-wide">
+<div class="calc-sec-head">
+<label for="calc-sec-visible">Акции (фьючерсы) — выбор (Ctrl+клик)</label>
+<div class="calc-sec-select-all-row">
+<label class="calc-sec-select-all"><input id="calc-sec-all-shares" type="checkbox" (change)="toggleAll('shares', $event)"> Выбрать все акции</label>
+<label class="calc-sec-select-all"><input id="calc-sec-all-futures" type="checkbox" (change)="toggleAll('futures', $event)"> Выбрать все фьючерсы</label>
+</div>
+</div>
+<select
+  id="calc-sec-visible"
+  multiple
+  size="8"
+  [disabled]="catalog.instrumentsDisabled"
+  (change)="onVisibleChange($event)"
+>
+<option *ngFor="let opt of catalog.instrumentOptions" [value]="opt.id" [selected]="isSelected(opt.id)">{{ opt.id }}</option>
+</select>
+<select id="calc-sec" multiple size="8" hidden aria-hidden="true" tabindex="-1"></select>
+<p class="calc-sec-hint" id="calc-sec-hint">{{ catalog.secHintText }}</p>
+</div>

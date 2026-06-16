@@ -3,17 +3,7 @@
 <div class="calc-card-primary" id="calc-main-panel">
 <h2 class="calc-primary-title">Основной расчёт</h2>
 
-<div class="calc-field calc-field-wide">
-<div class="calc-sec-head">
-<label for="calc-sec">Акции (фьючерсы) — выбор (Ctrl+клик)</label>
-<div class="calc-sec-select-all-row">
-<label class="calc-sec-select-all"><input id="calc-sec-all-shares" type="checkbox"> Выбрать все акции</label>
-<label class="calc-sec-select-all"><input id="calc-sec-all-futures" type="checkbox"> Выбрать все фьючерсы</label>
-</div>
-</div>
-<select id="calc-sec" multiple size="8"></select>
-<p class="calc-sec-hint" id="calc-sec-hint"></p>
-</div>
+<app-finresp-instruments></app-finresp-instruments>
 
 <div class="calc-grid">
 <div class="calc-field"><label for="calc-tf">Таймфрейм</label>
@@ -33,23 +23,7 @@
 </div>
 <p class="calc-sec-hint" id="calc-date-hint"></p>
 
-<div class="calc-field calc-field-wide calc-logic-row">
-<div class="calc-logic-picker" id="calc-logic-picker">
-<div class="calc-logic-picker-collapsed" id="calc-logic-picker-collapsed" role="button" tabindex="0" aria-expanded="false" aria-controls="calc-logic-picker-panel">
-<span class="calc-logic-picker-label">Логика</span>
-<div class="calc-logic-chips" id="calc-logic-chips" aria-live="polite"></div>
-<span class="calc-logic-picker-edit">Изменить</span>
-</div>
-<div class="calc-logic-picker-panel" id="calc-logic-picker-panel" hidden>
-<p class="calc-logic-picker-panel-hint">Несколько логик: Ctrl+клик. Порядок в списке сверху вниз — приоритет при расчёте и live-торговле.</p>
-<select id="calc-logic" class="calc-logic-multi" multiple size="9" aria-label="Выбор логик"></select>
-<div class="calc-logic-picker-actions">
-<button type="button" class="calc-btn" id="calc-logic-ok">OK</button>
-</div>
-</div>
-</div>
-<p class="calc-sec-hint" id="calc-logic-hint">Каталог редактируется в блоке «Логики» ниже (под доп. параметрами).</p>
-</div>
+<app-finresp-logics></app-finresp-logics>
 
 <div class="calc-at-params" id="calc-at-params">
 <p class="extra-params-title calc-at-main-title">Параметры управления</p>

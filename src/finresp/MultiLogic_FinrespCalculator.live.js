@@ -1713,7 +1713,9 @@
     syncPageVersionBadge();
     const status = $("live-trading-status");
     if (status) {
-      if (state.live.lastError && isLive) {
+      if (state.live.sandboxToggleBusy && isLive) {
+        status.textContent = "переключение песочница ↔ реальная торговля…";
+      } else if (state.live.lastError && isLive) {
         const warnOnly = (state.live.lastError.startsWith("пропущено")
           || state.live.lastError.startsWith("FINRESP пустой")
           || state.live.lastError.startsWith("Нет сигнала")
@@ -1752,6 +1754,8 @@
     }
     syncLiveCandleSourceUi(isLive);
     syncLiveCandleDelayUi(isLive);
+    const sandboxCb = $("live-sandbox-mode");
+    if (sandboxCb) sandboxCb.disabled = !!state.live.sandboxToggleBusy || state.uiBusy;
     renderLivePortfolioStats();
     syncLeverageDisplay();
     renderLiveOrdersPanel();
@@ -4264,26 +4268,47 @@
 
   /** Процедура (async): обработчик галочки «Песочница (фейк)». */
   async function onLiveSandboxToggle() {
-    const on = !!$("live-sandbox-mode")?.checked;
+    if (liveSandboxToggleInFlight) return liveSandboxToggleInFlight;
+    liveSandboxToggleInFlight = onLiveSandboxToggleInner().finally(() => {
+      liveSandboxToggleInFlight = null;
+      state.live.sandboxToggleBusy = false;
+      syncLiveTradingUi();
+    });
+    return liveSandboxToggleInFlight;
+  }
+
+  async function onLiveSandboxToggleInner() {
+    const cb = $("live-sandbox-mode");
+    const on = !!cb?.checked;
+    state.live.sandboxToggleBusy = true;
+    syncLiveTradingUi();
     if (state.live.active) recordLiveModeRegionSwitch();
     if (on) {
-      await enableLiveSandbox();
-      resetSandboxStopperWatch();
-      state.live.lastError = "";
-      if (state.live.active) {
-        await resetLiveSessionPositionBaseline();
-        await updateSandboxPortfolioDisplay();
-        try {
-          await liveTradingReconcile();
-        } catch (err) {
-          state.live.lastError = err.message;
+        await enableLiveSandbox();
+        resetSandboxStopperWatch();
+        state.live.lastError = "";
+        if (state.live.active) {
+          await resetLiveSessionPositionBaseline();
+          await updateSandboxPortfolioDisplay();
+          try {
+            await liveTradingReconcile();
+          } catch (err) {
+            state.live.lastError = err.message;
+          }
         }
-      }
-    } else {
-      await disableLiveSandbox();
-      if (state.live.active) {
-        const unlocked = await ensureTbankTokenUnlocked({ interactive: true, openUi: true });
-        if (unlocked) {
+      } else {
+        if (state.live.active) {
+          const unlocked = await ensureTbankTokenUnlocked({ interactive: true, openUi: true });
+          if (!unlocked) {
+            if (cb) cb.checked = true;
+            state.live.lastError = "Реальная торговля: расшифруйте токен T-Bank (пароль в настройках счёта).";
+            saveConfig();
+            syncLiveTradingUi();
+            return;
+          }
+        }
+        await disableLiveSandbox();
+        if (state.live.active) {
           if (!state.tbank.selectedAccountId) await loadTbankAccounts();
           await resetLiveSessionPositionBaseline();
           await refreshLivePortfolioStats();
@@ -4295,14 +4320,11 @@
           } catch (err) {
             state.live.lastError = err.message;
           }
-        } else {
-          state.live.lastError = "Реальная торговля: расшифруйте токен T-Bank (пароль в настройках счёта).";
         }
       }
-    }
     saveConfig();
     syncLiveTradingUi();
-    void bootstrapLiveChartsSession({ reason: "sandbox-toggle" });
+    setTimeout(() => { void bootstrapLiveChartsSession({ reason: "sandbox-toggle" }); }, 0);
   }
 
   /** Запись причины, по которой reconcile не запустился или не отправил заявки. */
@@ -5116,17 +5138,39 @@ ${referenceBlock}
     snapshotLiveSessionPortfolioBaseline();
     state.live.modelFinresp = 0;
     state.live.modelCommission = 0;
-    $("calc-finresp").textContent = `${fmt(0)} ₽`;
-    $("calc-finresp").style.color = "#047857";
-    setCommissionMetric("calc-commission", 0);
-    $("calc-ann-simple").textContent = "—";
-    $("calc-ann-compound").textContent = "—";
-    $("calc-count").textContent = "0";
-    $("calc-pos").textContent = "0";
-    $("calc-cash").textContent = `${fmt(0)} ₽`;
-    $("calc-bysec").textContent = "—";
-    const annHint = $("calc-ann-hint");
-    if (annHint) annHint.textContent = "Live-сессия: FINRESP и графики с нуля с момента выбора «Реальная торговля».";
+    const liveSessionHint = "Live-сессия: нажмите «Рассчитать» для FINRESP за период; при опросе live — прирост с момента старта сессии.";
+    const bridge = window.__mlFinrespBridge;
+    if (bridge?.setResults) {
+      bridge.setResults({
+        finrespText: `${fmt(0)} ₽`,
+        finrespColor: "#047857",
+        grossText: "—",
+        grossColor: "",
+        commissionText: "0",
+        commissionColor: "#b91c1c",
+        annSimpleText: "—",
+        annSimpleColor: "",
+        annCompoundText: "—",
+        annCompoundColor: "",
+        candleCount: "0",
+        position: "0",
+        cash: `${fmt(0)} ₽`,
+        bySecText: "—",
+        annHintText: liveSessionHint,
+      });
+    } else {
+      $("calc-finresp").textContent = `${fmt(0)} ₽`;
+      $("calc-finresp").style.color = "#047857";
+      setCommissionMetric("calc-commission", 0);
+      $("calc-ann-simple").textContent = "—";
+      $("calc-ann-compound").textContent = "—";
+      $("calc-count").textContent = "0";
+      $("calc-pos").textContent = "0";
+      $("calc-cash").textContent = `${fmt(0)} ₽`;
+      $("calc-bysec").textContent = "—";
+      const annHint = $("calc-ann-hint");
+      if (annHint) annHint.textContent = liveSessionHint;
+    }
     if (state.lastResult?.perSec?.length) {
       state.live.preCalcSnapshot = { result: state.lastResult };
     }
@@ -6526,6 +6570,7 @@ ${referenceBlock}
   let tbankPassphraseModalResolve = null;
   let tbankPassphraseModalPromise = null;
   let tbankUnlockInFlight = null;
+  let liveSandboxToggleInFlight = null;
 
   /** Закрытие позиции/заявки: `closeTbankPassphraseModal`. */
   function closeTbankPassphraseModal(value) {

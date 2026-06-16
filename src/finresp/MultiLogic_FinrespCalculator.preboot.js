@@ -19,8 +19,8 @@
     var lbl = document.querySelector("label.account-mode");
     if (lbl) lbl.classList.toggle("account-mode--live", isLive);
   }
-  /** Обработчик события UI: `onModeChange`. */
-  function onModeChange() {
+  /** Обработчик смены кошелька (paper / T-Bank / live). */
+  function onAccountModeChange() {
     syncLivePanelFromMode();
     if (typeof window.__mlOnAccountModeUserChange === "function") {
       window.__mlOnAccountModeUserChange().catch(function (e) {
@@ -32,6 +32,10 @@
       }
     }
   }
+  /** Галочка песочницы: только стили панели; логику переключает live.js (`onLiveSandboxToggle`). */
+  function onSandboxModeChange() {
+    syncLivePanelFromMode();
+  }
   window.__mlFinresp.preboot = { setTechPre, syncLivePanelFromMode };
   setTechPre(
     "preboot ok · protocol=" + location.protocol + "\n"
@@ -40,7 +44,7 @@
   );
   syncLivePanelFromMode();
   var modeEl = document.getElementById("account-mode");
-  if (modeEl) modeEl.addEventListener("change", onModeChange);
+  if (modeEl) modeEl.addEventListener("change", onAccountModeChange);
   var sbEl = document.getElementById("live-sandbox-mode");
-  if (sbEl) sbEl.addEventListener("change", onModeChange);
+  if (sbEl) sbEl.addEventListener("change", onSandboxModeChange);
 })();

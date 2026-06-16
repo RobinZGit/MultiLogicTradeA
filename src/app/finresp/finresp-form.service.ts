@@ -1,10 +1,16 @@
-import { Injectable } from '@angular/core';
+import { Injectable, OnDestroy } from '@angular/core';
 import { FormBuilder, FormControl } from '@angular/forms';
-import { FinrespBridgeService } from './finresp-bridge.service';
-import { FinrespFormValues } from './models/finresp-ui.models';
+import { Subscription } from 'rxjs';
+import { FinrespBridgeInstrument, FinrespBridgeService } from './finresp-bridge.service';
+import {
+  FinrespFormValues,
+  FinrespInstrumentOption,
+  FinrespLogicChipView,
+  FinrespWindowViewModel,
+} from './models/finresp-ui.models';
 
 @Injectable()
-export class FinrespFormService {
+export class FinrespFormService implements OnDestroy {
   readonly accountMode = new FormControl('paper', { nonNullable: true });
 
   readonly form = this.fb.group({
@@ -16,15 +22,49 @@ export class FinrespFormService {
     logicIds: this.fb.control<string[]>([], { nonNullable: true }),
   });
 
+  readonly windowForm = this.fb.group({
+    start: this.fb.control(0, { nonNullable: true }),
+    end: this.fb.control(0, { nonNullable: true }),
+  });
+
+  private instrumentMarket = new Map<string, 'shares' | 'futures'>();
+  private logicSelectionCleared = false;
+  private syncingWindow = false;
+  private subs: Subscription[] = [];
+
   constructor(
     private readonly fb: FormBuilder,
     private readonly bridge: FinrespBridgeService,
   ) {
     this.bridge.registerFormSync(() => this.syncFromDom());
     this.bridge.registerBootReady(() => this.syncFromDom());
+    this.bridge.registerFormSnapshot(() => this.snapshot());
+    this.bridge.registerInstruments(() => this.selectedInstruments());
+    this.bridge.registerLogicIds(() => this.selectedLogicIds());
+    this.bridge.registerApplyInstruments((ids) => this.applyInstrumentIds(ids));
+    this.bridge.registerApplyLogics((ids, cleared) => this.applyLogicIds(ids, cleared));
+    this.bridge.registerWindowSync((view) => this.syncWindowFromBridge(view));
 
-    this.form.valueChanges.subscribe(() => this.pushToDom());
-    this.accountMode.valueChanges.subscribe(() => this.pushAccountModeToDom());
+    this.subs.push(
+      this.form.valueChanges.subscribe(() => this.pushScalarsToDom()),
+      this.accountMode.valueChanges.subscribe(() => this.pushAccountModeToDom()),
+      this.form.controls.instrumentIds.valueChanges.subscribe(() => {
+        this.pushInstrumentsToDom();
+        this.refreshLogicChips();
+      }),
+      this.form.controls.logicIds.valueChanges.subscribe(() => {
+        this.pushLogicsToDom();
+        this.refreshLogicChips();
+      }),
+      this.windowForm.controls.start.valueChanges.subscribe(() => this.onWindowControlChange('start')),
+      this.windowForm.controls.end.valueChanges.subscribe(() => this.onWindowControlChange('end')),
+    );
+  }
+
+  ngOnDestroy(): void {
+    for (const sub of this.subs) {
+      sub.unsubscribe();
+    }
   }
 
   bindLegacyDomListeners(): void {
@@ -32,6 +72,28 @@ export class FinrespFormService {
     const logic = document.getElementById('calc-logic');
     sec?.addEventListener('change', () => this.syncInstrumentsFromDom());
     logic?.addEventListener('change', () => this.syncLogicsFromDom());
+  }
+
+  setInstrumentOptions(options: FinrespInstrumentOption[]): void {
+    this.instrumentMarket.clear();
+    for (const opt of options) {
+      this.instrumentMarket.set(opt.id, opt.market);
+    }
+  }
+
+  applyInstrumentIds(ids: string[]): void {
+    this.form.controls.instrumentIds.setValue([...ids], { emitEvent: true });
+  }
+
+  applyLogicIds(ids: string[], cleared = false): void {
+    this.logicSelectionCleared = cleared;
+    this.form.controls.logicIds.setValue([...ids], { emitEvent: true });
+    this.refreshLogicChips();
+  }
+
+  setLogicSelectionCleared(cleared: boolean): void {
+    this.logicSelectionCleared = cleared;
+    this.refreshLogicChips();
   }
 
   syncFromDom(): void {
@@ -56,6 +118,9 @@ export class FinrespFormService {
     if (mode) {
       this.accountMode.setValue(mode.value || 'paper', { emitEvent: false });
     }
+
+    this.syncWindowFromDom();
+    this.refreshLogicChips();
   }
 
   snapshot(): FinrespFormValues {
@@ -70,14 +135,90 @@ export class FinrespFormService {
     };
   }
 
-  private pushToDom(): void {
+  selectedInstruments(): FinrespBridgeInstrument[] {
+    return this.form.controls.instrumentIds.value
+      .filter(Boolean)
+      .map((sec) => ({
+        sec,
+        market: this.instrumentMarket.get(sec) ?? 'shares',
+      }));
+  }
+
+  selectedLogicIds(): string[] {
+    const ids = this.form.controls.logicIds.value.filter(Boolean);
+    if (ids.length) {
+      return ids;
+    }
+    if (this.logicSelectionCleared) {
+      return [];
+    }
+    return ['RND'];
+  }
+
+  private syncWindowFromBridge(view: FinrespWindowViewModel): void {
+    this.syncingWindow = true;
+    this.windowForm.patchValue(
+      { start: view.start, end: view.end },
+      { emitEvent: false },
+    );
+    this.syncingWindow = false;
+  }
+
+  private syncWindowFromDom(): void {
+    const startEl = document.getElementById('calc-start') as HTMLInputElement | null;
+    const endEl = document.getElementById('calc-end') as HTMLInputElement | null;
+    if (!startEl || !endEl) {
+      return;
+    }
+    this.syncingWindow = true;
+    this.windowForm.patchValue(
+      {
+        start: Number(startEl.value) || 0,
+        end: Number(endEl.value) || 0,
+      },
+      { emitEvent: false },
+    );
+    this.syncingWindow = false;
+  }
+
+  private onWindowControlChange(which: 'start' | 'end'): void {
+    if (this.syncingWindow) {
+      return;
+    }
+    const start = this.windowForm.controls.start.value;
+    const end = this.windowForm.controls.end.value;
+    this.setHiddenRange('calc-start', start);
+    this.setHiddenRange('calc-end', end);
+    this.bridge.notifyWindowInput(which, start, end);
+  }
+
+  private refreshLogicChips(): void {
+    const catalog = this.bridge.formCatalog$.value;
+    const ids = this.form.controls.logicIds.value;
+    const chips: FinrespLogicChipView[] = ids.map((id, index) => {
+      const opt = catalog.logicOptions.find((o) => o.id === id);
+      return {
+        id,
+        name: opt?.name ?? id,
+        color: opt?.color ?? '#64748b',
+        order: index + 1,
+      };
+    });
+    this.bridge.formCatalog$.next({
+      ...catalog,
+      logicChips: chips,
+      logicSelectionCleared: this.logicSelectionCleared,
+    });
+  }
+
+  private pushScalarsToDom(): void {
     const v = this.form.getRawValue();
     this.setValue('calc-tf', v.timeframe);
     this.setValue('calc-month', v.month);
     this.setValue('calc-from', v.from);
     this.setValue('calc-till', v.till);
-    this.setMultiSelect('calc-sec', v.instrumentIds);
-    this.setMultiSelect('calc-logic', v.logicIds);
+    this.pushInstrumentsToDom();
+    this.pushLogicsToDom();
   }
 
   private pushAccountModeToDom(): void {
@@ -86,12 +227,20 @@ export class FinrespFormService {
     modeEl?.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
+  private pushInstrumentsToDom(): void {
+    this.setMultiSelect('calc-sec', this.form.controls.instrumentIds.value);
+  }
+
+  private pushLogicsToDom(): void {
+    this.setMultiSelect('calc-logic', this.form.controls.logicIds.value);
+  }
+
   private syncInstrumentsFromDom(): void {
-    this.form.controls.instrumentIds.setValue(this.readMultiSelect('calc-sec'), { emitEvent: false });
+    this.form.controls.instrumentIds.setValue(this.readMultiSelect('calc-sec'), { emitEvent: true });
   }
 
   private syncLogicsFromDom(): void {
-    this.form.controls.logicIds.setValue(this.readMultiSelect('calc-logic'), { emitEvent: false });
+    this.form.controls.logicIds.setValue(this.readMultiSelect('calc-logic'), { emitEvent: true });
   }
 
   private readMultiSelect(id: string): string[] {
@@ -108,10 +257,29 @@ export class FinrespFormService {
       return;
     }
     const set = new Set(values);
+    let changed = false;
     for (const opt of Array.from(el.options)) {
-      opt.selected = set.has(opt.value);
+      const next = set.has(opt.value);
+      if (opt.selected !== next) {
+        opt.selected = next;
+        changed = true;
+      }
     }
-    el.dispatchEvent(new Event('change', { bubbles: true }));
+    if (changed) {
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+
+  private setHiddenRange(id: string, value: number): void {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    if (!el) {
+      return;
+    }
+    const next = String(value);
+    if (el.value !== next) {
+      el.value = next;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
   }
 
   private setValue(id: string, value: string): void {

@@ -62,6 +62,110 @@
   function appendCalcStatus(suffix) {
     setCalcStatus(getCalcStatus() + suffix);
   }
+  function bridgeApi() {
+    return window.__mlFinrespBridge;
+  }
+  function bridgeSetFormCatalog(view) {
+    const api = bridgeApi();
+    if (!api || typeof api.setFormCatalog !== "function") return false;
+    try {
+      api.setFormCatalog(view);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  function bridgeSetWindow(view) {
+    const api = bridgeApi();
+    if (!api || typeof api.setWindow !== "function") return false;
+    try {
+      api.setWindow(view);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  function bridgeSetCharts(view) {
+    const api = bridgeApi();
+    if (!api || typeof api.setCharts !== "function") return false;
+    try {
+      api.setCharts(view);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  function bridgeApplyInstrumentSelection(ids) {
+    const api = bridgeApi();
+    if (!api || typeof api.applyInstrumentSelection !== "function") return false;
+    try {
+      api.applyInstrumentSelection(ids);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  function bridgeApplyLogicSelection(ids, cleared) {
+    const api = bridgeApi();
+    if (!api || typeof api.applyLogicSelection !== "function") return false;
+    try {
+      api.applyLogicSelection(ids, !!cleared);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  function publishInstrumentSelectionFromDom() {
+    const sel = $("calc-sec");
+    if (!sel) return;
+    const ids = Array.from(sel.selectedOptions).map((o) => o.value).filter(Boolean);
+    bridgeApplyInstrumentSelection(ids);
+  }
+  function bridgeReadInstrumentsFromDom() {
+    return Array.from($("calc-sec").selectedOptions).map((o) => ({
+      sec: o.value,
+      market: o.dataset.market === "futures" ? "futures" : "shares"
+    })).filter((i) => i.sec);
+  }
+  function bridgeReadLogicIdsFromDom() {
+    const sel = $("calc-logic");
+    if (!sel) return state.logicSelectionCleared ? [] : ["RND"];
+    const ids = [...sel.selectedOptions].map((o) => o.value).filter(Boolean);
+    if (ids.length) return ids;
+    if (state.logicSelectionCleared) return [];
+    return sel.value ? [sel.value] : ["RND"];
+  }
+  function publishWindowBridge() {
+    const startEl = $("calc-start");
+    const endEl = $("calc-end");
+    bridgeSetWindow({
+      start: +(startEl?.value ?? 0),
+      end: +(endEl?.value ?? 0),
+      min: +(startEl?.min ?? 0),
+      max: +(endEl?.max ?? 0),
+      disabled: !!startEl?.disabled,
+      startLabel: $("calc-start-label")?.textContent ?? "—",
+      endLabel: $("calc-end-label")?.textContent ?? "—"
+    });
+  }
+  function installBridgeWindowHandler() {
+    const api = bridgeApi();
+    if (!api?.registerWindowHandler) return;
+    api.registerWindowHandler((which, start, end) => {
+      const startEl = $("calc-start");
+      const endEl = $("calc-end");
+      if (startEl) startEl.value = String(start);
+      if (endEl) endEl.value = String(end);
+      state.movedSlider = which;
+      saveWindowAnchor();
+      invalidateFormChange();
+    });
+    api.registerLogicAppliedHandler?.(() => {
+      updatePositionSlHint();
+      syncLogicSelectedHint();
+      invalidateFormChange();
+    });
+  }
   function commissionDisplayText(commission) {
     if (!Number.isFinite(commission) || commission <= 0) return "0";
     return `−${fmt(commission)} ₽`;
@@ -644,6 +748,7 @@
       instrumentCache: new Map(),
       tradingStatusCache: new Map(),
       reconcileBusy: false,
+      sandboxToggleBusy: false,
       tradingActionBusy: false,
       manualFlatten: false,
       candleRefreshBusy: false,
@@ -1102,6 +1207,7 @@
     }
     syncSelectAllCheckboxes();
     state.prevSelectCount = selectedInstrumentCount();
+    publishInstrumentSelectionFromDom();
   }
 
   /** Подпрограмма `bytesToBase64`. */
@@ -1755,10 +1861,13 @@
 
   /** Выбранные элементы UI: `selectedInstruments`. */
   function selectedInstruments() {
-    return Array.from($("calc-sec").selectedOptions).map((o) => ({
-      sec: o.value,
-      market: o.dataset.market === "futures" ? "futures" : "shares"
-    })).filter((i) => i.sec);
+    const api = bridgeApi();
+    if (api?.getSelectedInstruments) {
+      try {
+        return api.getSelectedInstruments();
+      } catch (_) { /* fallback */ }
+    }
+    return bridgeReadInstrumentsFromDom();
   }
 
   /** Выбранные элементы UI: `selectedSecs`. */
@@ -1857,6 +1966,7 @@
       }
     }
     syncSelectAllCheckboxes();
+    publishInstrumentSelectionFromDom();
     const instruments = selectedInstruments();
     state.bulkMode = resolveBulkMode(instruments);
     state.prevSelectCount = instruments.length;
@@ -1901,6 +2011,7 @@
       if (o.dataset.market === market) o.selected = checked;
     }
     syncSelectAllCheckboxes();
+    publishInstrumentSelectionFromDom();
   }
 
   /** Обработчик события UI: `onMarketCheckboxChange`. */
@@ -2784,8 +2895,11 @@
     const futLabel = state.futuresFromMoex
       ? `${state.futuresList.length} фьючерсов MOEX (за период расчёта)`
       : `${state.futuresList.length} префиксов фьючерсов из поля`;
-    $("calc-sec-hint").textContent =
+    const hint =
       `${state.shareList.length} тикеров акций · ${futLabel}`;
+    if (!bridgeSetFormCatalog({ secHintText: hint })) {
+      $("calc-sec-hint").textContent = hint;
+    }
   }
 
   /** Заполнение select/списка: `fillSecSelect`. */
@@ -2814,6 +2928,15 @@
     addOptions(state.futuresList, "futures");
     sel.disabled = !state.shareList.length && !state.futuresList.length;
     syncSelectAllCheckboxes();
+    const instrumentOptions = [
+      ...state.shareList.map((id) => ({ id, market: "shares" })),
+      ...state.futuresList.map((id) => ({ id, market: "futures" }))
+    ];
+    bridgeSetFormCatalog({
+      instrumentOptions,
+      instrumentsDisabled: !!sel.disabled
+    });
+    publishInstrumentSelectionFromDom();
   }
 
   /** Подпрограмма `initPrefixFields`. */
@@ -3460,12 +3583,13 @@
 
   /** Функция: id выбранных логик в порядке приоритета (верх списка = первая). */
   function selectedLogicIds() {
-    const sel = $("calc-logic");
-    if (!sel) return state.logicSelectionCleared ? [] : ["RND"];
-    const ids = [...sel.selectedOptions].map((o) => o.value).filter(Boolean);
-    if (ids.length) return ids;
-    if (state.logicSelectionCleared) return [];
-    return sel.value ? [sel.value] : ["RND"];
+    const api = bridgeApi();
+    if (api?.getSelectedLogicIds) {
+      try {
+        return api.getSelectedLogicIds();
+      } catch (_) { /* fallback */ }
+    }
+    return bridgeReadLogicIdsFromDom();
   }
 
   /** Функция: первая логика в списке (для @OBT, подсказок, live). */
@@ -3513,6 +3637,7 @@
   function bindLogicPickerUi() {
     if (bindLogicPickerUi._done) return;
     bindLogicPickerUi._done = true;
+    if (bridgeApi()?.setFormCatalog) return;
     const collapsed = $("calc-logic-picker-collapsed");
     const okBtn = $("calc-logic-ok");
     collapsed?.addEventListener("click", () => openLogicPicker());
@@ -3569,6 +3694,10 @@
 
   /** Процедура: цветные чипы выбранных логик (свёрнутый вид). */
   function renderLogicSelectedChips() {
+    if (bridgeApi()?.setFormCatalog) {
+      bridgeApplyLogicSelection(selectedLogicIds(), state.logicSelectionCleared);
+      return;
+    }
     const chipsEl = $("calc-logic-chips");
     const collapsed = $("calc-logic-picker-collapsed");
     if (!chipsEl) return;
@@ -3686,6 +3815,13 @@
       o.textContent = logicDisplayName(key);
       sel.appendChild(o);
     }
+    bridgeSetFormCatalog({
+      logicOptions: state.logicLineKeys.map((key) => ({
+        id: key,
+        name: logicDisplayName(key),
+        color: equityLogicColor(key)
+      }))
+    });
     const allowed = new Set([...sel.options].map((o) => o.value));
     const pick = prev.filter((id) => allowed.has(id));
     for (const o of sel.options) {
@@ -4010,8 +4146,23 @@
   /** Синхронизация UI/state: `syncChartBox`. */
   function syncChartBox(box, html) {
     if (!box) return;
-    box.innerHTML = html ?? "";
-    box.hidden = !String(box.innerHTML).trim();
+    const content = html ?? "";
+    const trimmed = String(content).trim();
+    const visible = !!trimmed;
+    if (box.id === "calc-chart") {
+      bridgeSetCharts({ instrumentVisible: visible });
+    } else if (box.id === "calc-chart-equity") {
+      bridgeSetCharts({ equityVisible: visible });
+    }
+    box.innerHTML = content;
+    box.hidden = !visible;
+  }
+
+  /** Показать контейнер графиков по инструментам (после пошаговой отрисовки в DOM). */
+  function showInstrumentChartBox(box) {
+    if (!box) return;
+    bridgeSetCharts({ instrumentVisible: true });
+    box.hidden = false;
   }
 
   /** Отрисовка элемента live-панели: `renderFromParams`. */
@@ -4379,7 +4530,10 @@
       $(id).max = max;
       $(id).disabled = max < 2;
     }
-    if (max < 2) return;
+    if (max < 2) {
+      publishWindowBridge();
+      return;
+    }
 
     let a;
     let b;
@@ -4424,6 +4578,7 @@
     state.anchorStartTime = pack[a]?.time ?? state.anchorStartTime;
     state.anchorEndTime = pack[b]?.time ?? state.anchorEndTime;
     state.hasWindow = true;
+    publishWindowBridge();
   }
 
   /** Нормализация входных данных: `normalizeSliders`. */
@@ -5743,6 +5898,7 @@ ${referenceBlock}
 
     box.innerHTML = "";
     box.appendChild(section);
+    bridgeSetCharts({ equityVisible: true });
     box.hidden = false;
   }
 
@@ -5846,7 +6002,7 @@ ${referenceBlock}
     }
 
     const useInteractive = typeof MLInstrumentChart !== "undefined" && MLInstrumentChart.mount;
-    syncChartBox(chartBox, note || "");
+    chartBox.innerHTML = note || "";
     const stack = document.createElement("div");
     stack.className = "chart-stack";
     const chartDiags = [];
@@ -5934,7 +6090,7 @@ ${referenceBlock}
 
     if (stack.childNodes.length) {
       chartBox.appendChild(stack);
-      chartBox.hidden = false;
+      showInstrumentChartBox(chartBox);
       if (calcState) {
         calcState.lastChartDiag = {
           builtAt: new Date().toISOString(),
@@ -5963,7 +6119,8 @@ ${referenceBlock}
     const opts = options || {};
     const { perSec, stopper, a, b } = result;
     let agg = optimDisplayAgg(result, opts);
-    const liveSession = opts.liveSession || isLiveTradingSession();
+    /** Только явные live-обновления (опрос свечей), не кнопка «Рассчитать». */
+    const liveSession = opts.liveSession === true;
     if (liveSession && state.live.chartSession) {
       const cs = state.live.chartSession;
       if (cs.finrespBaseline == null) cs.finrespBaseline = agg.finresp;
@@ -6056,6 +6213,7 @@ ${referenceBlock}
     state.hasWindow = c0 !== "—" && c1 !== "—";
     $("calc-start-label").textContent = c0;
     $("calc-end-label").textContent = c1;
+    publishWindowBridge();
     const mode = state.bulkMode === "futures" ? "фьючерсы" : state.bulkMode === "shares" ? "все акции" : "выбор";
     let status = liveSession
       ? `Live-сессия · FINRESP ${fmt(agg.finresp)} ₽ · ${winLen} св. с ${c0} · ${perSec.length} инстр.`
@@ -6079,6 +6237,11 @@ ${referenceBlock}
     if (liveSession) {
       state.live.modelFinresp = agg.finresp;
       state.live.modelCommission = agg.commission || 0;
+      if (typeof renderLiveFinResultStat === "function") renderLiveFinResultStat();
+    } else if (!opts.optimTrial && typeof isLiveMode === "function" && isLiveMode()) {
+      const fullAgg = optimDisplayAgg(result, opts);
+      state.live.modelFinresp = fullAgg.finresp;
+      state.live.modelCommission = fullAgg.commission || 0;
       if (typeof renderLiveFinResultStat === "function") renderLiveFinResultStat();
     }
     if (!opts.optimTrial && !liveSession) {
@@ -6298,7 +6461,7 @@ ${referenceBlock}
           appendCalcStatus(` Загружено ${state.packs.length}/${instruments.length}; ошибок MOEX: ${loadedData.failures.length}.`);
         }
       } else {
-        applyResult(result, { redrawCharts: false });
+        applyResult(result, { redrawCharts: false, liveSession: false });
         const { a: ra, b: rb, perSec, stopper } = result;
         setCalcProgress("Графики по инструментам…", CALC_PROGRESS.CHARTS_START);
         await yieldToUi();
@@ -6510,8 +6673,10 @@ ${referenceBlock}
     if (!btn) return;
     btn.addEventListener("click", () => { void toggleOptim(kind); });
   });
-  $("calc-sec-all-shares").addEventListener("change", () => onMarketCheckboxChange("shares", "calc-sec-all-shares"));
-  $("calc-sec-all-futures").addEventListener("change", () => onMarketCheckboxChange("futures", "calc-sec-all-futures"));
+  if (!bridgeApi()?.setFormCatalog) {
+    $("calc-sec-all-shares").addEventListener("change", () => onMarketCheckboxChange("shares", "calc-sec-all-shares"));
+    $("calc-sec-all-futures").addEventListener("change", () => onMarketCheckboxChange("futures", "calc-sec-all-futures"));
+  }
   $("calc-sec").addEventListener("change", onSecSelectionChanged);
   $("prefix-pick-stocks").addEventListener("click", () => {
     reloadShareList();
@@ -6789,5 +6954,6 @@ ${referenceBlock}
   window.__mlFinrespVersion = CALC_PAGE_VERSION;
   window.__mlFinresp.bootPhase = "ok";
   window.__mlFinrespBridge?.onBootReady?.();
+  installBridgeWindowHandler();
   bootstrapLiveTradingPanelVisibility();
 })();

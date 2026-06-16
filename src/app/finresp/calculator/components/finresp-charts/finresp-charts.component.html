@@ -1,0 +1,34 @@
+<div class="range-grid" [formGroup]="windowForm">
+<div>
+<label for="calc-start-visible">Левая граница</label>
+<input
+  id="calc-start-visible"
+  type="range"
+  formControlName="start"
+  [min]="window.min"
+  [max]="window.max"
+  [disabled]="window.disabled"
+  (input)="onStartInput()"
+>
+<small id="calc-start-label">{{ window.startLabel }}</small>
+<input id="calc-start" type="range" min="0" max="0" value="0" hidden tabindex="-1">
+</div>
+<div>
+<label for="calc-end-visible">Правая граница</label>
+<input
+  id="calc-end-visible"
+  type="range"
+  formControlName="end"
+  [min]="window.min"
+  [max]="window.max"
+  [disabled]="window.disabled"
+  (input)="onEndInput()"
+>
+<small id="calc-end-label">{{ window.endLabel }}</small>
+<input id="calc-end" type="range" min="0" max="0" value="0" hidden tabindex="-1">
+</div>
+</div>
+
+<!-- DOM внутри контейнеров заполняет boot.js (drawCharts); Angular только показывает/скрывает -->
+<div class="chart-card" id="calc-chart-equity" [hidden]="!charts.equityVisible"></div>
+<div class="chart-card" id="calc-chart" [hidden]="!charts.instrumentVisible"></div>

@@ -3,6 +3,9 @@ import { FinrespHeaderComponent } from './components/finresp-header/finresp-head
 import { FinrespTitleBarComponent } from './components/finresp-title-bar/finresp-title-bar.component';
 import { FinrespLivePanelComponent } from './components/finresp-live-panel/finresp-live-panel.component';
 import { FinrespLiveJournalComponent } from './components/finresp-live-journal/finresp-live-journal.component';
+import { FinrespInstrumentsComponent } from './components/finresp-instruments/finresp-instruments.component';
+import { FinrespLogicsComponent } from './components/finresp-logics/finresp-logics.component';
+import { FinrespChartsComponent } from './components/finresp-charts/finresp-charts.component';
 import { FinrespCalcFormComponent } from './components/finresp-calc-form/finresp-calc-form.component';
 import { FinrespResultsComponent } from './components/finresp-results/finresp-results.component';
 import { FinrespSettingsComponent } from './components/finresp-settings/finresp-settings.component';
@@ -15,6 +18,9 @@ export const FINRESP_UI_COMPONENTS = [
   FinrespTitleBarComponent,
   FinrespLivePanelComponent,
   FinrespLiveJournalComponent,
+  FinrespInstrumentsComponent,
+  FinrespLogicsComponent,
+  FinrespChartsComponent,
   FinrespCalcFormComponent,
   FinrespResultsComponent,
   FinrespSettingsComponent,

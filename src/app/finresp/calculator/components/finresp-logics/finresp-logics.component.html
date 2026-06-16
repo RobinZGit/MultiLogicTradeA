@@ -1,0 +1,50 @@
+<div class="calc-field calc-field-wide calc-logic-row">
+<div class="calc-logic-picker" id="calc-logic-picker" [class.calc-logic-picker--open]="pickerOpen">
+<div
+  class="calc-logic-picker-collapsed"
+  id="calc-logic-picker-collapsed"
+  role="button"
+  tabindex="0"
+  [attr.aria-expanded]="pickerOpen"
+  aria-controls="calc-logic-picker-panel"
+  (click)="openPicker()"
+  (keydown)="onCollapsedKeydown($event)"
+>
+<span class="calc-logic-picker-label">Логика</span>
+<div class="calc-logic-chips" id="calc-logic-chips" aria-live="polite">
+<ng-container *ngIf="!catalog.logicChips.length; else logicChipList">
+  <span class="calc-logic-chip calc-logic-chip--empty">{{ catalog.logicSelectionCleared ? '— не выбрано' : '— не выбрано (по умолчанию UT)' }}</span>
+</ng-container>
+<ng-template #logicChipList>
+  <ng-container *ngFor="let chip of catalog.logicChips; let i = index">
+    <span *ngIf="i > 0" class="calc-logic-chip-arrow" aria-hidden="true">→</span>
+    <span class="calc-logic-chip" [style.--logic-color]="chip.color" [title]="chip.name !== chip.id ? chip.id + ' — ' + chip.name : chip.id">
+      <span class="calc-logic-chip-ord">{{ chip.order }}</span>
+      <span class="calc-logic-chip-key">{{ chip.id }}</span>
+      <span *ngIf="chip.name !== chip.id" class="calc-logic-chip-name">{{ chip.name }}</span>
+    </span>
+  </ng-container>
+</ng-template>
+</div>
+<span class="calc-logic-picker-edit">Изменить</span>
+</div>
+<div class="calc-logic-picker-panel" id="calc-logic-picker-panel" [hidden]="!pickerOpen">
+<p class="calc-logic-picker-panel-hint">Несколько логик: Ctrl+клик. Порядок в списке сверху вниз — приоритет при расчёте и live-торговле.</p>
+<select
+  id="calc-logic-visible"
+  class="calc-logic-multi"
+  multiple
+  size="9"
+  aria-label="Выбор логик"
+  (change)="onDraftChange($event)"
+>
+<option *ngFor="let opt of catalog.logicOptions" [value]="opt.id" [selected]="(pickerOpen ? draftIds : logicIds.value).includes(opt.id)">{{ opt.name }}</option>
+</select>
+<select id="calc-logic" class="calc-logic-multi" multiple size="9" aria-label="Выбор логик" hidden tabindex="-1"></select>
+<div class="calc-logic-picker-actions">
+<button type="button" class="calc-btn" id="calc-logic-ok" (click)="closePicker(true)">OK</button>
+</div>
+</div>
+</div>
+<p class="calc-sec-hint" id="calc-logic-hint">{{ catalog.logicHintText }}</p>
+</div>

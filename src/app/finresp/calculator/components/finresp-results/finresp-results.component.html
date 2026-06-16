@@ -19,10 +19,4 @@
 <div class="calc-metric-secondary"><b>Кэш C</b><span id="calc-cash">{{ results.cash }}</span></div>
 <div class="calc-metric-secondary" style="grid-column:1/-1"><b>По инструментам</b><div id="calc-bysec" class="bysec-scroll" style="font-size:.75rem">{{ results.bySecText }}</div></div>
 </div>
-<div class="range-grid">
-<div><label for="calc-start">Левая граница</label><input id="calc-start" type="range" min="0" max="0" value="0" disabled><small id="calc-start-label">—</small></div>
-<div><label for="calc-end">Правая граница</label><input id="calc-end" type="range" min="0" max="0" value="0" disabled><small id="calc-end-label">—</small></div>
-</div>
-
-<div class="chart-card" id="calc-chart-equity" hidden></div>
-<div class="chart-card" id="calc-chart" hidden></div>
+<app-finresp-charts></app-finresp-charts>
