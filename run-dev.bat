@@ -9,13 +9,20 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist "node_modules" (
-  echo Installing npm dependencies...
+if not exist "node_modules\.bin\ng.cmd" (
+  echo Installing npm dependencies ^(Angular CLI not found in node_modules^)...
   call npm install
   if errorlevel 1 (
     pause
     exit /b 1
   )
+)
+
+if not exist "node_modules\.bin\ng.cmd" (
+  echo ERROR: Angular CLI still missing after npm install.
+  echo Run "npm install" in this folder and check for errors.
+  pause
+  exit /b 1
 )
 
 rem Analytics only — do NOT set CI=true (Angular CLI skips --open when CI is set)

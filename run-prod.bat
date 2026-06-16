@@ -9,13 +9,20 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist "node_modules" (
-  echo Installing npm dependencies...
+if not exist "node_modules\.bin\ng.cmd" (
+  echo Installing npm dependencies ^(Angular CLI not found in node_modules^)...
   call npm install
   if errorlevel 1 (
     pause
     exit /b 1
   )
+)
+
+if not exist "node_modules\.bin\ng.cmd" (
+  echo ERROR: Angular CLI still missing after npm install.
+  echo Run "npm install" in this folder and check for errors.
+  pause
+  exit /b 1
 )
 
 rem Stop static server that may lock files under dist\
@@ -25,7 +32,7 @@ powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 5173 -State List
 set "DIST_DIR="
 
 echo Building production bundle...
-call npm run build
+call npx ng build
 if errorlevel 1 (
   echo.
   echo Build failed ^(often EPERM if dist is locked by serve, Explorer, or antivirus^).
