@@ -18,5 +18,8 @@ echo Building production bundle...
 call npm run build
 if errorlevel 1 exit /b 1
 
-echo Serving dist on http://localhost:5173 ...
-call npx --yes serve -s dist
+set "MLTA_URL=http://127.0.0.1:5173/"
+echo Serving dist on %MLTA_URL% ...
+echo Opening %MLTA_URL%
+start "" "%MLTA_URL%"
+call npx --yes serve -s dist -l 5173

@@ -15,4 +15,7 @@ if not exist "node_modules" (
 )
 
 echo Starting Angular dev server...
-call npm start
+set "MLTA_URL=http://127.0.0.1:4200/"
+echo Opening %MLTA_URL%
+start "" "%MLTA_URL%"
+call npm start -- --host 127.0.0.1 --port 4200
