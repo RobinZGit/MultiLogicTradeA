@@ -5,6 +5,11 @@
 (function (root) {
   "use strict";
 
+  function assetUrl(rel) {
+    const base = root.__mlFinrespAssetBase || "";
+    return base + rel;
+  }
+
   /** Точка входа live-модуля: замыкание с deps из HTML, возвращает публичный API. */
   function install(d) {
 
@@ -1549,12 +1554,12 @@
     const dataJson = JSON.stringify(payload).replace(/</g, "\\u003c");
     let renderJs = "";
     try {
-      const res = await fetch("MultiLogic_TradeHistoryProtocol.render.js", { cache: "no-store" });
+      const res = await fetch(assetUrl("MultiLogic_TradeHistoryProtocol.render.js"), { cache: "no-store" });
       if (res.ok) renderJs = await res.text();
     } catch (_) { /* file:// или офлайн */ }
     let htmlTpl = "";
     try {
-      const res = await fetch("MultiLogic_TradeHistoryProtocol.html", { cache: "no-store" });
+      const res = await fetch(assetUrl("MultiLogic_TradeHistoryProtocol.html"), { cache: "no-store" });
       if (res.ok) htmlTpl = await res.text();
     } catch (_) { /* ignore */ }
     if (htmlTpl && renderJs) {
@@ -1576,7 +1581,7 @@
     try {
       const payload = buildTradeHistoryProtocol();
       try { sessionStorage.setItem(PROTOCOL_STORAGE_KEY, JSON.stringify(payload)); } catch (_) { /* quota */ }
-      window.open("MultiLogic_TradeHistoryProtocol.html", "_blank");
+      window.open(assetUrl("MultiLogic_TradeHistoryProtocol.html"), "_blank");
       const day = new Date().toISOString().slice(0, 10);
       const mode = payload.mode || "live";
       const filename = `multilogic_trade_protocol_${mode}_${day}.html`;

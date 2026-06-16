@@ -30,6 +30,9 @@ jobs:
       - name: Install deps
         run: npm ci
 
+      - name: FINRESP engine tests
+        run: npm run test:finresp
+
       - name: Build (base-href for repo pages)
         run: npm run build -- --base-href "/MultiLogicTradeA/"
 

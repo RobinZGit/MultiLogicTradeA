@@ -165,7 +165,7 @@
       mount.innerHTML = `<div class="proto-empty-state">
 <p><strong>Нет данных протокола.</strong></p>
 <p>Откройте калькулятор в режиме live и нажмите <strong>«Сохранить протокол»</strong> в блоке «История сделок».</p>
-<p><a href="MultiLogic_FinrespCalculator.html">← Калькулятор</a></p>
+<p><a href="../../finresp">← Калькулятор</a></p>
 </div>`;
       return;
     }
@@ -185,7 +185,7 @@ ${renderCloseEvents(payload.closeEvents)}
 ${renderOpenLots(payload.openLots)}
 ${renderTrades(payload.trades)}
 </main>
-<footer class="proto-ftr"><a href="MultiLogic_FinrespCalculator.html">← Калькулятор</a></footer>`;
+<footer class="proto-ftr"><a href="../../finresp">← Калькулятор</a></footer>`;
   }
 
   root.MLTradeProtocol = { boot, STORAGE_KEY, loadPayload };

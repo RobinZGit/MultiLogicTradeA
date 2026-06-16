@@ -1,0 +1,32 @@
+<details class="real-account-card" id="tbank-settings">
+<summary class="real-account-head">
+<span class="real-account-title">Реальный счёт T-Bank — депозит и торговля</span>
+<span class="real-account-head-right">
+<span class="real-account-state" id="tbank-settings-state">не подключено</span>
+<a href="#" class="extra-params-toggle" id="tbank-settings-toggle" role="button">Развернуть</a>
+</span>
+</summary>
+<p class="note">Токен нужен для чтения счёта и депозита; для режима «Реальная торговля» — с правом выставления заявок. Шифруется в браузере (AES-GCM + PBKDF2) и хранится только локально. Пароль шифрования не сохраняется.</p>
+<div class="calc-grid">
+<div class="calc-field calc-field-wide"><label for="tbank-token">Токен T-Bank Invest</label><textarea id="tbank-token" autocomplete="off" spellcheck="false" placeholder="Вставьте токен, затем задайте пароль и нажмите «Зашифровать и сохранить»"></textarea></div>
+<div class="calc-field"><label for="tbank-passphrase">Пароль для шифрования/расшифровки</label><input id="tbank-passphrase" type="password" autocomplete="new-password" placeholder="Не сохраняется"></div>
+</div>
+<div class="real-account-actions">
+<button class="calc-btn calc-btn-secondary" type="button" id="tbank-save-token">Зашифровать и сохранить</button>
+<button class="calc-btn calc-btn-secondary" type="button" id="tbank-unlock-token">Расшифровать и подключить</button>
+</div>
+<p class="calc-status" id="tbank-status">Фиктивный кошелёк работает как раньше. Для T-Bank сохраните токен, затем выберите режим сверху: калькулятор спросит пароль, расшифрует токен, загрузит счёт и возьмёт депозит.</p>
+</details>
+
+<details class="tech-info-card" id="tech-info-panel">
+<summary class="tech-info-head">
+<span class="tech-info-title">Тех. информация — скопируйте и пришлите при сбое</span>
+<a href="#" class="extra-params-toggle" id="tech-info-toggle" role="button">Развернуть</a>
+</summary>
+<div class="tech-info-actions">
+<button class="calc-btn calc-btn-secondary" type="button" id="tech-info-copy">Копировать</button>
+<button class="calc-btn calc-btn-secondary" type="button" id="tech-info-refresh">Обновить</button>
+</div>
+<pre class="tech-info-pre" id="tech-info-text">загрузка…</pre>
+<p class="note">Обновляется при старте, выборе бумаг и «Рассчитать». Кнопка «Копировать» — весь блок одним текстом.</p>
+</details>

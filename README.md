@@ -30,6 +30,17 @@ run-prod.bat
 
 Push в `main` → CI собирает с `--base-href /MultiLogicTradeA/` и публикует на Pages.
 
+| `scripts/check-finresp-*.mjs` | Smoke-проверка калькулятора в headless Chromium |
+| `tests/finresp/` | Node-тесты движка (перенесены из MultiLogicTrade) |
+
+## Тесты и проверки
+
+```bash
+npm run test:finresp          # движок + синтаксис boot.js
+npm run check:finresp:local   # http://127.0.0.1:4200/finresp (нужен ng serve)
+npm run check:finresp:pages   # GitHub Pages
+```
+
 ## Обновление движка
 
 Код в `src/finresp/` — **собственная копия** в этом репозитории. При переносе правок из другого источника:
