@@ -1,9 +1,9 @@
 <div id="live-trading-panel" class="live-trading-panel" hidden>
 <div class="live-trading-banner">
-<div class="live-trading-leverage"><b>Плечо</b><span id="live-leverage-value">—</span></div>
+<div class="live-trading-leverage"><b>Плечо</b><span id="live-leverage-value">{{ live.leverageText }}</span></div>
 <div class="live-trading-banner-main">
 <strong class="live-trading-title">Реальная торговля</strong>
-<span class="live-trading-badge" id="live-trading-status">остановлена</span>
+<span class="live-trading-badge" id="live-trading-status">{{ live.statusText }}</span>
 <div class="live-sandbox-row">
 <label class="live-sandbox-label" for="live-sandbox-mode" title="Заявки на биржу не отправляются — симуляция портфеля; продажа без позиции открывает шорт (маржа)">
 <input type="checkbox" id="live-sandbox-mode"> Песочница (фейк)
@@ -24,8 +24,8 @@
 <p class="live-trading-candle-alert" id="live-candle-delay-alert" hidden role="alert"></p>
 <div class="live-trading-toolbar">
 <div class="live-trading-actions">
-<button type="button" class="live-trading-btn live-trading-btn-start" id="live-trading-toggle">Начать торговлю</button>
-<button type="button" class="live-trading-btn live-trading-btn-sell" id="live-trading-sell-all" title="Закрыть все открытые позиции по рынку (лонг — продажа, шорт — покупка)">Закрыть все позиции</button>
+<button type="button" class="live-trading-btn live-trading-btn-start" id="live-trading-toggle" [class.live-trading-toggle--active]="live.toggleActive" [disabled]="live.toggleDisabled">{{ live.toggleText }}</button>
+<button type="button" class="live-trading-btn live-trading-btn-sell" id="live-trading-sell-all" [disabled]="live.sellAllDisabled" title="Закрыть все открытые позиции по рынку (лонг — продажа, шорт — покупка)">Закрыть все позиции</button>
 </div>
 <div class="live-trading-controls">
 <label for="live-order-type" title="Для ручной заявки. Робот всегда выставляет рыночные заявки.">Тип заявки</label>
@@ -67,13 +67,13 @@
 <input id="live-auto-reverses-step" type="number" value="30" min="1" max="20000" step="1" title="Как часто (в свечах) пересматривать лучший вариант и переключать реверсы"></label>
 </div>
 <div class="live-trading-stats">
-<div class="live-trading-stat"><b id="live-portfolio-label" title="Свободные деньги + открытые позиции по текущим ценам свечей">Портфель всего, ₽</b><span id="live-portfolio-value">—</span></div>
+<div class="live-trading-stat"><b id="live-portfolio-label" title="Свободные деньги + открытые позиции по текущим ценам свечей">Портфель всего, ₽</b><span id="live-portfolio-value">{{ live.portfolioText }}</span></div>
 <div class="live-trading-stat live-trading-stat-free-cash" id="live-free-cash-stat" title="RUB на счёте, не вложенные в бумаги: старт − комиссии − покупки + выручка от продаж">
-<b id="live-free-cash-label">Деньги, свободно (₽)</b><span id="live-free-cash-value">—</span></div>
-<div class="live-trading-stat live-trading-stat-commission"><b id="live-commission-label">Комиссии уплачено (реально), ₽</b><span id="live-commission-paid">—</span></div>
+<b id="live-free-cash-label">Деньги, свободно (₽)</b><span id="live-free-cash-value">{{ live.freeCashText }}</span></div>
+<div class="live-trading-stat live-trading-stat-commission"><b id="live-commission-label">{{ live.commissionLabel }}</b><span id="live-commission-paid" [style.color]="live.commissionColor">{{ live.commissionText }}</span></div>
 <div class="live-trading-stat live-trading-stat-finresult" id="live-finresult-stat" title="FINRESP Σ по модели сигналов — то же значение, что в блоке результатов расчёта ниже (не дельта портфеля T-Bank)">
-<b id="live-finresult-label">FINRESP Σ (модель), ₽</b><span id="live-finresult-value">—</span></div>
-<p class="live-trading-stats-hint" id="live-trading-stats-hint">Портфель = деньги (свободные RUB) + стоимость открытых позиций по текущим ценам.</p>
+<b id="live-finresult-label">FINRESP Σ (модель), ₽</b><span id="live-finresult-value">{{ live.finresultText }}</span></div>
+<p class="live-trading-stats-hint" id="live-trading-stats-hint">{{ live.statsHintText }}</p>
 </div>
 <details class="live-manual-order" id="live-manual-order-panel">
 <summary class="live-manual-order-summary live-panel-summary">

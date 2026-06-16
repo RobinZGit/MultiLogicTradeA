@@ -22,7 +22,7 @@ run-prod.bat
 
 | Путь | Назначение |
 |------|------------|
-| `src/app/finresp/` | Angular-модуль, компонент калькулятора, загрузчик скриптов |
+| `src/app/finresp/` | Angular-модуль: компоненты UI, `FinrespBridgeService` (мост с boot.js/live.js), ReactiveForms |
 | `src/finresp/` | Движок FINRESP (indicators, logics, engine, live, worker) — копируется в `assets/finresp` при сборке |
 | `scripts/split-finresp-html.mjs` | Разбор монолитного HTML на шаблон + boot/preboot/fallback (при обновлении движка) |
 

@@ -1,23 +1,23 @@
 <div class="calc-result-hero" id="calc-result-hero" aria-label="Итог FINRESP">
-<div class="calc-metric-primary calc-metric-finresp"><b>FINRESP Σ (с комиссией)</b><span id="calc-finresp">—</span></div>
-<div class="calc-metric-primary calc-metric-gross"><b title="Сумма FINRESP и комиссий — справочно, не складывать с FINRESP">До комиссий (справочно)</b><span id="calc-finresp-gross">—</span></div>
-<div class="calc-metric-primary calc-metric-commission"><b title="Уже вычтены из FINRESP выше">Комиссии (в FINRESP)</b><span id="calc-commission">—</span></div>
-<div class="calc-metric-primary"><b>% годовых, простой (с комиссией)</b><span id="calc-ann-simple">—</span></div>
-<div class="calc-metric-primary"><b>% годовых, сложный (с комиссией)</b><span id="calc-ann-compound">—</span></div>
+<div class="calc-metric-primary calc-metric-finresp"><b>FINRESP Σ (с комиссией)</b><span id="calc-finresp" [style.color]="results.finrespColor">{{ results.finrespText }}</span></div>
+<div class="calc-metric-primary calc-metric-gross"><b title="Сумма FINRESP и комиссий — справочно, не складывать с FINRESP">До комиссий (справочно)</b><span id="calc-finresp-gross" [style.color]="results.grossColor">{{ results.grossText }}</span></div>
+<div class="calc-metric-primary calc-metric-commission"><b title="Уже вычтены из FINRESP выше">Комиссии (в FINRESP)</b><span id="calc-commission" [style.color]="results.commissionColor">{{ results.commissionText }}</span></div>
+<div class="calc-metric-primary"><b>% годовых, простой (с комиссией)</b><span id="calc-ann-simple" [style.color]="results.annSimpleColor">{{ results.annSimpleText }}</span></div>
+<div class="calc-metric-primary"><b>% годовых, сложный (с комиссией)</b><span id="calc-ann-compound" [style.color]="results.annCompoundColor">{{ results.annCompoundText }}</span></div>
 </div>
-<p class="calc-sec-hint" id="calc-ann-hint"></p>
+<p class="calc-sec-hint" id="calc-ann-hint">{{ results.annHintText }}</p>
 <p class="calc-sec-hint" style="margin:.35rem 0 .15rem">Строка статуса — серый текст ниже FINRESP и % годовых (сообщения о загрузке MOEX, ошибках, окне расчёта):</p>
-<p class="calc-status" id="calc-status">Выберите бумаги и логику, нажмите «Рассчитать».</p>
+<p class="calc-status" id="calc-status">{{ results.statusText }}</p>
 <div class="calc-reverse-bar" style="margin:.35rem 0 .5rem;gap:.5rem;flex-wrap:wrap">
 <button type="button" class="calc-btn calc-btn-secondary" id="calc-protocol-download" title="Скачать протокол сделок последнего расчёта (JSON)">Скачать протокол (JSON)</button>
 <button type="button" class="calc-btn calc-btn-secondary" id="calc-protocol-load" title="Загрузить ранее сохранённый протокол (JSON)">Загрузить протокол (JSON)</button>
-<span class="calc-sec-hint" id="calc-protocol-hint" style="margin:0">Протокол появится после «Рассчитать».</span>
+<span class="calc-sec-hint" id="calc-protocol-hint" style="margin:0">{{ results.protocolHintText }}</span>
 </div>
 <div class="calc-result-secondary">
-<div class="calc-metric-secondary"><b>Свечей в окне</b><span id="calc-count">—</span></div>
-<div class="calc-metric-secondary"><b>Позиция z</b><span id="calc-pos">—</span></div>
-<div class="calc-metric-secondary"><b>Кэш C</b><span id="calc-cash">—</span></div>
-<div class="calc-metric-secondary" style="grid-column:1/-1"><b>По инструментам</b><div id="calc-bysec" class="bysec-scroll" style="font-size:.75rem">—</div></div>
+<div class="calc-metric-secondary"><b>Свечей в окне</b><span id="calc-count">{{ results.candleCount }}</span></div>
+<div class="calc-metric-secondary"><b>Позиция z</b><span id="calc-pos">{{ results.position }}</span></div>
+<div class="calc-metric-secondary"><b>Кэш C</b><span id="calc-cash">{{ results.cash }}</span></div>
+<div class="calc-metric-secondary" style="grid-column:1/-1"><b>По инструментам</b><div id="calc-bysec" class="bysec-scroll" style="font-size:.75rem">{{ results.bySecText }}</div></div>
 </div>
 <div class="range-grid">
 <div><label for="calc-start">Левая граница</label><input id="calc-start" type="range" min="0" max="0" value="0" disabled><small id="calc-start-label">—</small></div>

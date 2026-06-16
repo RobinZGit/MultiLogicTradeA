@@ -1,4 +1,5 @@
-import { Component, ViewEncapsulation, Input } from '@angular/core';
+import { Component, Input, ViewEncapsulation } from '@angular/core';
+import { FinrespFormService } from '../../../finresp-form.service';
 
 @Component({
   selector: 'app-finresp-title-bar',
@@ -7,4 +8,8 @@ import { Component, ViewEncapsulation, Input } from '@angular/core';
 })
 export class FinrespTitleBarComponent {
   @Input() helpUrl = '';
+
+  readonly accountMode = this.formService.accountMode;
+
+  constructor(private readonly formService: FinrespFormService) {}
 }

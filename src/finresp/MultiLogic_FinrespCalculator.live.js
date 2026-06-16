@@ -1719,6 +1719,33 @@
       bindLivePanelCollapsibleToggles();
       bindTradeHistoryProtocolExport();
     }
+    publishLiveBridgeFromDom();
+  }
+
+  /** Синхронизация live-панели с Angular FinrespLiveService. */
+  function publishLiveBridgeFromDom() {
+    const api = root.__mlFinrespBridge;
+    if (!api || typeof api.setLive !== "function") return;
+    const status = $("live-trading-status");
+    const toggle = $("live-trading-toggle");
+    const sellAll = $("live-trading-sell-all");
+  try {
+    api.setLive({
+      statusText: status?.textContent ?? "",
+      leverageText: $("live-leverage-value")?.textContent ?? "—",
+      portfolioText: $("live-portfolio-value")?.textContent ?? "—",
+      freeCashText: $("live-free-cash-value")?.textContent ?? "—",
+      commissionText: $("live-commission-paid")?.textContent ?? "0",
+      commissionColor: $("live-commission-paid")?.style.color ?? "#b91c1c",
+      finresultText: $("live-finresult-value")?.textContent ?? "—",
+      statsHintText: $("live-trading-stats-hint")?.textContent ?? "",
+      commissionLabel: $("live-commission-label")?.textContent ?? "",
+      toggleText: toggle?.textContent ?? "",
+      toggleActive: !!toggle?.classList.contains("live-trading-toggle--active"),
+      toggleDisabled: !!toggle?.disabled,
+      sellAllDisabled: !!sellAll?.disabled
+    });
+  } catch (_) { /* ignore */ }
   }
 
   /** Остановка периодического опроса: `stopLiveTradingPoll`. */

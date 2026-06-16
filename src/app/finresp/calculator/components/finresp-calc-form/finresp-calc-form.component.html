@@ -1,4 +1,4 @@
-<div class="calc-card" id="finresp-calc">
+<div class="calc-card" id="finresp-calc" [formGroup]="form">
 
 <div class="calc-card-primary" id="calc-main-panel">
 <h2 class="calc-primary-title">Основной расчёт</h2>
@@ -17,7 +17,7 @@
 
 <div class="calc-grid">
 <div class="calc-field"><label for="calc-tf">Таймфрейм</label>
-<select id="calc-tf">
+<select id="calc-tf" formControlName="timeframe">
 <option value="1">1 мин</option>
 <option value="5">5 мин</option>
 <option value="10">10 мин</option>
@@ -25,9 +25,9 @@
 <option value="60" selected>1 час</option>
 <option value="24">1 день</option>
 </select></div>
-<div class="calc-field"><label for="calc-month">Месяц целиком</label><input id="calc-month" type="month"></div>
-<div class="calc-field"><label for="calc-from">Начало</label><input id="calc-from" type="date" min="2020-01-01"></div>
-<div class="calc-field"><label for="calc-till">Конец</label><input id="calc-till" type="date" min="2020-01-01"></div>
+<div class="calc-field"><label for="calc-month">Месяц целиком</label><input id="calc-month" type="month" formControlName="month"></div>
+<div class="calc-field"><label for="calc-from">Начало</label><input id="calc-from" type="date" min="2020-01-01" formControlName="from"></div>
+<div class="calc-field"><label for="calc-till">Конец</label><input id="calc-till" type="date" min="2020-01-01" formControlName="till"></div>
 <button class="calc-btn" id="calc-run" type="button">Рассчитать</button>
 <button class="calc-btn calc-btn-secondary" id="calc-select-positive" type="button" disabled title="После расчёта оставить только инструменты с FINRESP ≥ 0">Отобрать FINRESP ≥ 0</button>
 </div>

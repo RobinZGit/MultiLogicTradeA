@@ -28,6 +28,43 @@
   const IS_FILE_PROTOCOL = location.protocol === "file:";
   const TECH_LOG_MAX_ERRORS = 128;
 
+  function bridgeSetResults(view) {
+    const api = window.__mlFinrespBridge;
+    if (!api || typeof api.setResults !== "function") return false;
+    try {
+      api.setResults(view);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  function bridgeSetStatus(text) {
+    const api = window.__mlFinrespBridge;
+    if (!api || typeof api.setStatus !== "function") return false;
+    try {
+      api.setStatus(text);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  function setCalcStatus(text) {
+    if (!bridgeSetStatus(text)) {
+      const st = $("calc-status");
+      if (st) st.textContent = text;
+    }
+  }
+  function commissionDisplayText(commission) {
+    if (!Number.isFinite(commission) || commission <= 0) return "0";
+    return `−${fmt(commission)} ₽`;
+  }
+  function annDisplay(value) {
+    return {
+      text: fmtPct(value),
+      color: !Number.isFinite(value) ? "" : value < 0 ? "#b91c1c" : "#047857"
+    };
+  }
+
   const techLog = {
     startedAt: new Date().toISOString(),
     errors: [],
@@ -2154,22 +2191,40 @@
     /* Процедура: очистить FINRESP, графики инструментов и lastResult без пересчёта. */
     syncChartBox($("calc-chart"), "");
     syncChartBox($("calc-chart-equity"), "");
-    $("calc-finresp").textContent = "—";
-    $("calc-finresp").style.color = "";
-    const grossReset = $("calc-finresp-gross");
-    if (grossReset) {
-      grossReset.textContent = "—";
-      grossReset.style.color = "";
+    if (!bridgeSetResults({
+      finrespText: "—",
+      finrespColor: "",
+      grossText: "—",
+      grossColor: "",
+      commissionText: "0",
+      commissionColor: "#b91c1c",
+      annSimpleText: "—",
+      annSimpleColor: "",
+      annCompoundText: "—",
+      annCompoundColor: "",
+      candleCount: "—",
+      position: "—",
+      cash: "—",
+      bySecText: "—",
+      annHintText: ""
+    })) {
+      $("calc-finresp").textContent = "—";
+      $("calc-finresp").style.color = "";
+      const grossReset = $("calc-finresp-gross");
+      if (grossReset) {
+        grossReset.textContent = "—";
+        grossReset.style.color = "";
+      }
+      setCommissionMetric("calc-commission", 0);
+      $("calc-ann-simple").textContent = "—";
+      $("calc-ann-compound").textContent = "—";
+      $("calc-count").textContent = "—";
+      $("calc-pos").textContent = "—";
+      $("calc-cash").textContent = "—";
+      $("calc-bysec").textContent = "—";
+      const annHint = $("calc-ann-hint");
+      if (annHint) annHint.textContent = "";
     }
-    setCommissionMetric("calc-commission", 0);
-    $("calc-ann-simple").textContent = "—";
-    $("calc-ann-compound").textContent = "—";
-    $("calc-count").textContent = "—";
-    $("calc-pos").textContent = "—";
-    $("calc-cash").textContent = "—";
-    $("calc-bysec").textContent = "—";
-    const annHint = $("calc-ann-hint");
-    if (annHint) annHint.textContent = "";
     state.lastResult = null;
     state.windowSkipped = [];
     applyUiLocks();
@@ -5928,51 +5983,73 @@ ${referenceBlock}
     const winLen = liveSession
       ? Math.max(0, (b - a) + 1)
       : perSec.reduce((m, p) => Math.max(m, p.rows?.length ?? 0), 0);
-    $("calc-finresp").textContent = `${fmt(agg.finresp)} ₽`;
-    $("calc-finresp").style.color = agg.finresp < 0 ? "#b91c1c" : "#047857";
-    const grossEl = $("calc-finresp-gross");
-    const grossFin = (agg.finresp || 0) + (agg.commission || 0);
-    if (grossEl) {
-      grossEl.textContent = `${fmt(grossFin)} ₽`;
-      grossEl.style.color = grossFin < 0 ? "#b91c1c" : grossFin > 0 ? "#047857" : "";
-    }
-    setCommissionMetric("calc-commission", agg.commission || 0);
-    $("calc-count").textContent = String(winLen);
-    $("calc-pos").textContent = fmt(agg.pos, 4);
-    $("calc-cash").textContent = `${fmt(agg.cash)} ₽`;
-    $("calc-bysec").textContent = formatBySec(agg.bySec) || "—";
     const c0 = liveSession
       ? (liveFinrespPeriodStart() || refPack()[a]?.time || "—")
       : (refPack()[a]?.time || "—");
     const c1 = refPack()[b]?.time || "—";
     const deposit = volConfig().deposit;
     const days = annualPeriodDays(c0, c1, { liveSession });
-    setAnnMetric("calc-ann-simple", annualSimplePct(agg.finresp, deposit, days));
-    setAnnMetric("calc-ann-compound", annualCompoundPct(agg.finresp, deposit, days));
-    const annHint = $("calc-ann-hint");
-    if (annHint) {
-      if (liveSession) {
-        const mode = isLiveSandbox() ? "песочница (фейк)" : "реальная торговля";
-        const scope = state.live.active ? "с начала торговли" : "с начала live-сессии";
-        const periodPct = deposit > 0 && Number.isFinite(agg.finresp) ? (agg.finresp / deposit) * 100 : null;
-        const daysLabel = days == null
-          ? "—"
-          : (days < 1 ? `${Math.max(1, Math.round(days * 24 * 60))} мин` : `${Math.round(days * 10) / 10} календ. дн.`);
-        annHint.textContent = `Live · ${mode} · FINRESP и % годовых ${scope} (${c0} — ${c1}, ${daysLabel})`
-          + (Number.isFinite(periodPct) ? ` · доходность за период: ${fmtPct(periodPct)}` : "")
-          + " · совпадает с FINRESP Σ в блоке «Реальная торговля».";
-      } else if (days && deposit > 0) {
-        const periodPct = (agg.finresp / deposit) * 100;
-        const windowDays = calendarDaysBetweenTimes(c0, c1);
-        const opDays = robotOperatingDays();
-        const scope = windowDays && opDays && windowDays !== opDays
-          ? `окно ${Math.round(windowDays)} дн., приведение к ${Math.round(opDays)} дн. расчёта`
-          : `${Math.round(days)} календ. дн. расчёта`;
-        annHint.textContent =
-          `База ${fmt(deposit, 0)} ₽ · доходность за ${scope}: ${fmtPct(periodPct)} → % годовых: прибыль/база ÷ (дни/365), как в роботе`;
-      } else {
-        annHint.textContent = "Для % годовых нужны депозит и период ≥ 1 календарного дня.";
+    const annSimple = annualSimplePct(agg.finresp, deposit, days);
+    const annCompound = annualCompoundPct(agg.finresp, deposit, days);
+    let annHintText = "";
+    if (liveSession) {
+      const mode = isLiveSandbox() ? "песочница (фейк)" : "реальная торговля";
+      const scope = state.live.active ? "с начала торговли" : "с начала live-сессии";
+      const periodPct = deposit > 0 && Number.isFinite(agg.finresp) ? (agg.finresp / deposit) * 100 : null;
+      const daysLabel = days == null
+        ? "—"
+        : (days < 1 ? `${Math.max(1, Math.round(days * 24 * 60))} мин` : `${Math.round(days * 10) / 10} календ. дн.`);
+      annHintText = `Live · ${mode} · FINRESP и % годовых ${scope} (${c0} — ${c1}, ${daysLabel})`
+        + (Number.isFinite(periodPct) ? ` · доходность за период: ${fmtPct(periodPct)}` : "")
+        + " · совпадает с FINRESP Σ в блоке «Реальная торговля».";
+    } else if (days && deposit > 0) {
+      const periodPct = (agg.finresp / deposit) * 100;
+      const windowDays = calendarDaysBetweenTimes(c0, c1);
+      const opDays = robotOperatingDays();
+      const scope = windowDays && opDays && windowDays !== opDays
+        ? `окно ${Math.round(windowDays)} дн., приведение к ${Math.round(opDays)} дн. расчёта`
+        : `${Math.round(days)} календ. дн. расчёта`;
+      annHintText =
+        `База ${fmt(deposit, 0)} ₽ · доходность за ${scope}: ${fmtPct(periodPct)} → % годовых: прибыль/база ÷ (дни/365), как в роботе`;
+    } else {
+      annHintText = "Для % годовых нужны депозит и период ≥ 1 календарного дня.";
+    }
+    const grossFin = (agg.finresp || 0) + (agg.commission || 0);
+    const annSimpleView = annDisplay(annSimple);
+    const annCompoundView = annDisplay(annCompound);
+    if (!bridgeSetResults({
+      finrespText: `${fmt(agg.finresp)} ₽`,
+      finrespColor: agg.finresp < 0 ? "#b91c1c" : "#047857",
+      grossText: `${fmt(grossFin)} ₽`,
+      grossColor: grossFin < 0 ? "#b91c1c" : grossFin > 0 ? "#047857" : "",
+      commissionText: commissionDisplayText(agg.commission || 0),
+      commissionColor: "#b91c1c",
+      candleCount: String(winLen),
+      position: fmt(agg.pos, 4),
+      cash: `${fmt(agg.cash)} ₽`,
+      bySecText: formatBySec(agg.bySec) || "—",
+      annSimpleText: annSimpleView.text,
+      annSimpleColor: annSimpleView.color,
+      annCompoundText: annCompoundView.text,
+      annCompoundColor: annCompoundView.color,
+      annHintText
+    })) {
+      $("calc-finresp").textContent = `${fmt(agg.finresp)} ₽`;
+      $("calc-finresp").style.color = agg.finresp < 0 ? "#b91c1c" : "#047857";
+      const grossEl = $("calc-finresp-gross");
+      if (grossEl) {
+        grossEl.textContent = `${fmt(grossFin)} ₽`;
+        grossEl.style.color = grossFin < 0 ? "#b91c1c" : grossFin > 0 ? "#047857" : "";
       }
+      setCommissionMetric("calc-commission", agg.commission || 0);
+      $("calc-count").textContent = String(winLen);
+      $("calc-pos").textContent = fmt(agg.pos, 4);
+      $("calc-cash").textContent = `${fmt(agg.cash)} ₽`;
+      $("calc-bysec").textContent = formatBySec(agg.bySec) || "—";
+      setAnnMetric("calc-ann-simple", annSimple);
+      setAnnMetric("calc-ann-compound", annCompound);
+      const annHint = $("calc-ann-hint");
+      if (annHint) annHint.textContent = annHintText;
     }
     state.anchorStartTime = c0 !== "—" ? c0 : state.anchorStartTime;
     state.anchorEndTime = c1 !== "—" ? c1 : state.anchorEndTime;
@@ -6712,5 +6789,6 @@ ${referenceBlock}
   window.__mlOnAccountModeUserChange = handleAccountModeUserChange;
   window.__mlFinrespVersion = CALC_PAGE_VERSION;
   window.__mlFinresp.bootPhase = "ok";
+  window.__mlFinrespBridge?.onBootReady?.();
   bootstrapLiveTradingPanelVisibility();
 })();

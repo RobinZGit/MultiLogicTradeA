@@ -3,7 +3,7 @@
 <div class="calc-title-actions" style="display:flex;flex-wrap:wrap;align-items:center;gap:.5rem .75rem;">
 <a class="calc-btn calc-btn-secondary" [href]="helpUrl" target="_blank" rel="noopener" title="Справка по калькулятору">Справка</a>
 <label class="account-mode" for="account-mode">Кошелёк:
-<select id="account-mode">
+<select id="account-mode" [formControl]="accountMode">
 <option value="paper" selected>Фиктивный кошелёк</option>
 <option value="tbank">T-Bank торговый счёт (депозит)</option>
 <option value="live">Реальная торговля T-Bank</option>

@@ -3,6 +3,7 @@ import {
   FINRESP_BOOTSTRAP_SCRIPTS,
   FINRESP_ENGINE_SCRIPTS,
 } from '../finresp-engine-scripts';
+import { FinrespBridgeService } from '../finresp-bridge.service';
 import { FinrespScriptLoaderService } from '../finresp-script-loader.service';
 
 @Component({
@@ -14,7 +15,11 @@ export class FinrespCalculatorComponent implements OnInit {
   readonly helpUrl: string;
   private bootStarted = false;
 
-  constructor(private readonly scripts: FinrespScriptLoaderService) {
+  constructor(
+    private readonly scripts: FinrespScriptLoaderService,
+    private readonly bridge: FinrespBridgeService,
+  ) {
+    this.bridge.installOnWindow();
     this.helpUrl = this.scripts.resolve('MultiLogic_FinrespCalculator_Help.html');
   }
 
