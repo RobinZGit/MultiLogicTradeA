@@ -1752,7 +1752,7 @@
     queueLiveCandleRefreshIfNeeded,
     startLiveStatsPoll, stopLiveStatsPoll, startLiveOrderBookPoll, stopLiveOrderBookPoll,
     startLivePositionsPoll, stopLivePositionsPoll, fillLiveTradingInstrumentSelects,
-    refreshLiveOrderBook, hideLivePositionsMenu, onLivePositionsMenuAction,
+    refreshLiveOrderBook, scheduleRefreshLiveOrderBook, hideLivePositionsMenu, onLivePositionsMenuAction,
     onLivePositionsTableContextMenu, onLivePositionsPointerDown, onLivePositionsPointerEnd,
     onLiveOrderBookPriceDblClick, parseLiveManualInstrumentKey,
     tbankRequest, tbankFindInstrument, tbankGetInstrumentById, tbankValidateTradable,
@@ -6642,21 +6642,9 @@ ${referenceBlock}
   });
   $("live-order-book-sec")?.addEventListener("change", () => {
     saveConfig();
-    if ($("live-order-book-panel")?.open) refreshLiveOrderBook();
+    if ($("live-order-book-panel")?.open) scheduleRefreshLiveOrderBook(true);
   });
-  $("live-order-book-panel")?.addEventListener("toggle", () => {
-    if ($("live-order-book-panel")?.open) {
-      fillLiveTradingInstrumentSelects();
-      startLiveOrderBookPoll();
-    } else stopLiveOrderBookPoll();
-  });
-  $("live-positions-panel")?.addEventListener("toggle", () => {
-    if ($("live-positions-panel")?.open) startLivePositionsPoll();
-    else {
-      stopLivePositionsPoll();
-      hideLivePositionsMenu();
-    }
-  });
+  $("live-order-book-table")?.addEventListener("dblclick", onLiveOrderBookPriceDblClick);
   $("live-positions-table")?.addEventListener("contextmenu", onLivePositionsTableContextMenu);
   $("live-positions-table")?.addEventListener("pointerdown", onLivePositionsPointerDown);
   $("live-positions-table")?.addEventListener("pointerup", onLivePositionsPointerEnd);
@@ -6670,7 +6658,6 @@ ${referenceBlock}
     hideLivePositionsMenu();
   });
   document.addEventListener("scroll", () => hideLivePositionsMenu(), true);
-  $("live-order-book-table")?.addEventListener("dblclick", onLiveOrderBookPriceDblClick);
   $("tbank-save-token").addEventListener("click", () => { saveConfig(); saveTbankToken(); });
   $("tbank-unlock-token")?.addEventListener("click", () => {
     unlockTbankTokenInteractive().catch((err) => {

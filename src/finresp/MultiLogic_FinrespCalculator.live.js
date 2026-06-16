@@ -1194,13 +1194,26 @@
 
   let journalRenderScheduled = false;
   let positionsRenderScheduled = false;
+  let orderBookRefreshScheduled = false;
+  let manualOrderSyncScheduled = false;
   let lastJournalSyncAt = 0;
   let lastJournalDomRenderAt = 0;
+  let lastPositionsDomRenderAt = 0;
+  let lastOrderBookDomRenderAt = 0;
   const JOURNAL_SYNC_MIN_MS = 400;
   const JOURNAL_DOM_RENDER_MIN_MS = 500;
+  const PANEL_DOM_RENDER_MIN_MS = 500;
 
   function isTradeHistoryPanelOpen() {
     return !!$("live-trade-history-panel")?.open;
+  }
+
+  function isOrderBookPanelOpen() {
+    return !!$("live-order-book-panel")?.open;
+  }
+
+  function isManualOrderPanelOpen() {
+    return !!$("live-manual-order-panel")?.open;
   }
 
   function isPositionsPanelOpen() {
@@ -1247,13 +1260,40 @@
     });
   }
 
-  function scheduleRenderLivePositionsPanel() {
+  function scheduleRenderLivePositionsPanel(force) {
     if (!isPositionsPanelOpen()) return;
+    const now = Date.now();
+    if (!force && positionsRenderScheduled) return;
+    if (!force && now - lastPositionsDomRenderAt < PANEL_DOM_RENDER_MIN_MS) return;
     if (positionsRenderScheduled) return;
     positionsRenderScheduled = true;
     requestAnimationFrame(() => {
       positionsRenderScheduled = false;
-      renderLivePositionsPanel();
+      void renderLivePositionsPanelAsync();
+    });
+  }
+
+  function scheduleRefreshLiveOrderBook(force) {
+    if (!isOrderBookPanelOpen()) return;
+    const now = Date.now();
+    if (!force && orderBookRefreshScheduled) return;
+    if (!force && now - lastOrderBookDomRenderAt < PANEL_DOM_RENDER_MIN_MS) return;
+    if (orderBookRefreshScheduled) return;
+    orderBookRefreshScheduled = true;
+    requestAnimationFrame(() => {
+      orderBookRefreshScheduled = false;
+      void refreshLiveOrderBookDeferred();
+    });
+  }
+
+  function scheduleSyncLiveManualOrderPanel(force) {
+    if (!isManualOrderPanelOpen() && !isOrderBookPanelOpen()) return;
+    if (!force && manualOrderSyncScheduled) return;
+    if (manualOrderSyncScheduled) return;
+    manualOrderSyncScheduled = true;
+    requestAnimationFrame(() => {
+      manualOrderSyncScheduled = false;
+      void syncLiveManualOrderPanelAsync();
     });
   }
 
@@ -1269,10 +1309,33 @@
         }
       });
     }
+    const manual = $("live-manual-order-panel");
+    if (manual) {
+      manual.addEventListener("toggle", () => {
+        if (manual.open) scheduleSyncLiveManualOrderPanel(true);
+      });
+    }
+    const ob = $("live-order-book-panel");
+    if (ob) {
+      ob.addEventListener("toggle", () => {
+        if (ob.open) {
+          scheduleRefreshLiveOrderBook(true);
+          startLiveOrderBookPoll();
+        } else {
+          stopLiveOrderBookPoll();
+        }
+      });
+    }
     const pos = $("live-positions-panel");
     if (pos) {
       pos.addEventListener("toggle", () => {
-        if (pos.open) renderLivePositionsPanel();
+        if (pos.open) {
+          scheduleRenderLivePositionsPanel(true);
+          startLivePositionsPoll();
+        } else {
+          stopLivePositionsPoll();
+          hideLivePositionsMenu();
+        }
       });
     }
   }
@@ -1870,8 +1933,9 @@
     if (!options.skipPanels) {
       scheduleRenderLiveOrdersPanel();
       scheduleRenderLivePositionsPanel();
+      scheduleRefreshLiveOrderBook();
+      if (isManualOrderPanelOpen()) scheduleSyncLiveManualOrderPanel();
     }
-    syncLiveManualOrderUi();
     if (isLive) {
       bindLivePanelCollapsibleToggles();
       bindLivePanelHeavyRenderOnOpen();
@@ -1969,7 +2033,7 @@
   /** Отрисовка элемента live-панели: `renderLiveOrderBookView`. */
   function renderLiveOrderBookView(ob) {
     const tableEl = $("live-order-book-table");
-    if (!tableEl) return;
+    if (!tableEl || !isOrderBookPanelOpen()) return;
     if (!ob) {
       tableEl.innerHTML = '<p class="live-order-book-empty">—</p>';
       return;
@@ -2018,6 +2082,14 @@
   }
 
   /** Обновление данных с источника: `refreshLiveOrderBook`. */
+  async function refreshLiveOrderBookDeferred() {
+    if (!isOrderBookPanelOpen()) return;
+    await yieldToUi();
+    fillLiveTradingInstrumentSelects();
+    await refreshLiveOrderBook();
+    lastOrderBookDomRenderAt = Date.now();
+  }
+
   async function refreshLiveOrderBook() {
     const panel = $("live-order-book-panel");
     if (!panel?.open || !isLiveMode()) return;
@@ -2054,13 +2126,13 @@
     stopLiveOrderBookPoll();
     const panel = $("live-order-book-panel");
     if (!panel?.open || !isLiveMode()) return;
-    refreshLiveOrderBook();
+    scheduleRefreshLiveOrderBook(true);
     state.live.orderBookTimer = setInterval(() => {
       if (!isLiveMode() || !$("live-order-book-panel")?.open) {
         stopLiveOrderBookPoll();
         return;
       }
-      refreshLiveOrderBook();
+      scheduleRefreshLiveOrderBook();
     }, LIVE_ORDER_BOOK_POLL_MS);
   }
 
@@ -2247,16 +2319,24 @@
     state.live.portfolioValue = cash + mtm;
     syncSessionPositionPricesFromPortfolio();
     renderLivePortfolioStats();
-    if ($("live-positions-panel")?.open) renderLivePositionsPanel();
+    if ($("live-positions-panel")?.open) scheduleRenderLivePositionsPanel();
     queueLiveChartsRefresh();
+  }
+
+  async function renderLivePositionsPanelAsync() {
+    if (!isPositionsPanelOpen()) return;
+    await yieldToUi();
+    renderLivePositionsPanel();
   }
 
   /** Отрисовка элемента live-панели: `renderLivePositionsPanel`. */
   function renderLivePositionsPanel() {
     hideLivePositionsMenu();
+    if (!isPositionsPanelOpen()) return;
     const tableEl = $("live-positions-table");
     const metaEl = $("live-positions-meta");
     if (!tableEl) return;
+    lastPositionsDomRenderAt = Date.now();
     if (!isLiveMode()) {
       tableEl.innerHTML = '<p class="live-order-book-empty">Доступно в режиме live.</p>';
       if (metaEl) metaEl.textContent = "Нереализованные позиции счёта. Закрытые (реализованные) не показываются.";
@@ -2550,20 +2630,23 @@
   async function refreshLiveOpenPositions(opts) {
     const options = opts || {};
     if (state.live.tradingActionBusy && !options.force) return;
+    const paintPositions = () => {
+      if (isPositionsPanelOpen()) scheduleRenderLivePositionsPanel(!!options.force);
+    };
     if (!isLiveMode()) {
       state.live.openPositions = [];
       state.live.positionsError = "";
-      renderLivePositionsPanel();
+      paintPositions();
       return;
     }
     if (isLiveSandbox()) {
       state.live.positionsError = "";
       await updateSandboxPortfolioDisplay();
-      renderLivePositionsPanel();
+      paintPositions();
       return;
     }
     if (!state.tbank.token || !state.tbank.selectedAccountId) {
-      renderLivePositionsPanel();
+      paintPositions();
       return;
     }
     if (state.live.positionsBusy) return;
@@ -2588,7 +2671,7 @@
       noteLiveTech("live-positions", state.live.positionsError, `account=${state.tbank.selectedAccountId || "—"}`);
     } finally {
       state.live.positionsBusy = false;
-      renderLivePositionsPanel();
+      paintPositions();
     }
   }
 
@@ -2597,7 +2680,7 @@
     stopLivePositionsPoll();
     const panel = $("live-positions-panel");
     if (!panel?.open || !isLiveMode()) return;
-    refreshLiveOpenPositions();
+    void refreshLiveOpenPositions({ force: true });
     state.live.positionsTimer = setInterval(() => {
       if (!isLiveMode() || !$("live-positions-panel")?.open) {
         stopLivePositionsPoll();
@@ -2889,7 +2972,7 @@
   /** Синхронизация UI/state: `syncSandboxPositionsTable`. */
   function syncSandboxPositionsTable() {
     state.live.openPositions = filterLiveOpenPositionRows([...ensureSandboxState().open.values()]);
-    renderLivePositionsPanel();
+    scheduleRenderLivePositionsPanel();
   }
 
   /** Подпрограмма `clearLiveManualFlatten`. */
@@ -4322,7 +4405,7 @@
     }
     await updateSandboxPortfolioDisplay();
     renderLiveOrdersPanel();
-    renderLivePositionsPanel();
+    scheduleRenderLivePositionsPanel(true);
     noteLiveTech("live-sandbox", "enabled", `start=${sb.startPortfolio}`);
   }
 
@@ -4374,7 +4457,7 @@
         state.live.portfolioValue = state.live.realPortfolioValue;
       }
       renderLivePortfolioStats();
-      renderLivePositionsPanel();
+      scheduleRenderLivePositionsPanel(true);
       renderLiveOrdersPanel();
     }
     noteLiveTech("live-sandbox", "disabled");
@@ -4543,6 +4626,12 @@
   }
 
   /** Синхронизация UI/state: `syncLiveManualOrderUi`. */
+  async function syncLiveManualOrderPanelAsync() {
+    if (!isManualOrderPanelOpen() && !isOrderBookPanelOpen()) return;
+    await yieldToUi();
+    syncLiveManualOrderUi();
+  }
+
   function syncLiveManualOrderUi() {
     fillLiveTradingInstrumentSelects();
     const isLive = isLiveMode();
@@ -7024,6 +7113,7 @@ ${referenceBlock}
       stopLivePositionsPoll,
       fillLiveTradingInstrumentSelects,
       refreshLiveOrderBook,
+      scheduleRefreshLiveOrderBook,
       hideLivePositionsMenu,
       onLivePositionsMenuAction,
       onLivePositionsTableContextMenu,
