@@ -128,4 +128,23 @@
 </div>
 </details>
 <app-finresp-live-journal></app-finresp-live-journal>
+<details class="live-order-book live-goal-panel" id="live-goal-panel">
+<summary class="live-manual-order-summary live-panel-summary">
+<span class="live-panel-summary-title" id="live-goal-summary-title">Цель</span>
+<div class="live-panel-summary-actions">
+<button type="button" class="extra-params-toggle" id="live-goal-toggle" aria-expanded="false">Развернуть</button>
+</div>
+</summary>
+<div class="live-order-book-body live-goal-body">
+<label class="live-goal-enable-label" for="live-goal-enabled">
+<input type="checkbox" id="live-goal-enabled"> Включить достижение цели
+</label>
+<p class="live-goal-status" id="live-goal-status" hidden role="status" aria-live="polite"></p>
+<div class="live-goal-grid">
+<label for="live-goal-end-date">Дата окончания торговли<input type="date" id="live-goal-end-date"></label>
+<label for="live-goal-ann-pct">Желаемый % годовых<input id="live-goal-ann-pct" type="number" min="0" step="0.1" value="100" inputmode="decimal"></label>
+</div>
+<p class="live-order-book-meta" id="live-goal-hint">Цель: остановить робота при достижении % годовых (модель FINRESP). По истечении даты торговля не останавливается — блок подсветится красным.</p>
+</div>
+</details>
 </div>

@@ -118,6 +118,10 @@
     const formatDay = (...a) => d.formatDay(...a);
     const todayDate = (...a) => d.todayDate(...a);
     const addDays = (...a) => d.addDays(...a);
+    const annualSimplePct = (...a) => d.annualSimplePct(...a);
+    const annualPeriodDays = (...a) => d.annualPeriodDays(...a);
+    const liveFinrespPeriodStart = (...a) => d.liveFinrespPeriodStart(...a);
+    const fmtPct = (...a) => d.fmtPct(...a);
     const maxCalcDays = (...a) => d.maxCalcDays(...a);
     const formatLiveRefreshClock = (...a) => d.formatLiveRefreshClock(...a);
     const logicEquityLabel = (...a) => d.logicEquityLabel(...a);
@@ -1886,6 +1890,192 @@
     if (st.includes("CANCEL") || st.includes("REJECT") || st.includes("REJECTED")) return false;
     return st.includes("NEW") || st.includes("PARTIALLY") || st.includes("PENDING") || st.includes("SUBMIT");
   }
+
+  // === Live: цель торговли (% годовых + дата окончания) ===
+
+  function liveGoalEnabled() {
+    return !!$("live-goal-enabled")?.checked;
+  }
+
+  function defaultLiveGoalEndDate() {
+    const t = todayDate();
+    return formatDay(new Date(t.getFullYear(), t.getMonth() + 1, t.getDate()));
+  }
+
+  function setLiveGoalDefaultFields() {
+    const dateEl = $("live-goal-end-date");
+    const pctEl = $("live-goal-ann-pct");
+    if (dateEl) dateEl.value = defaultLiveGoalEndDate();
+    if (pctEl) pctEl.value = "100";
+  }
+
+  function formatLiveGoalDateRu(iso) {
+    const raw = String(iso || "").trim();
+    const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return raw || "—";
+    return `${m[3]}.${m[2]}.${m[1]}`;
+  }
+
+  function readLiveGoalAnnPct() {
+    const raw = +($("live-goal-ann-pct")?.value ?? "");
+    return Number.isFinite(raw) && raw >= 0 ? raw : null;
+  }
+
+  function isLiveGoalEndDateExpired(endDateStr) {
+    const raw = String(endDateStr || "").trim();
+    if (!raw) return false;
+    const end = parseDay(raw);
+    if (Number.isNaN(end.getTime())) return false;
+    const today = todayDate();
+    return today > end;
+  }
+
+  function computeLiveGoalAnnPct() {
+    if (!isLiveTradingSession()) return null;
+    const fin = state.live.modelFinresp;
+    if (!Number.isFinite(fin)) return null;
+    const deposit = volConfig().deposit;
+    if (!(deposit > 0)) return null;
+    const pack = refPack();
+    if (!pack.length) return null;
+    const c1 = formatMoexBarTime(pack[pack.length - 1]?.time) || "—";
+    const c0 = liveFinrespPeriodStart() || c1;
+    const days = annualPeriodDays(c0, c1, { liveSession: true });
+    if (!days) return null;
+    return annualSimplePct(fin, deposit, days);
+  }
+
+  function liveGoalSummaryTitle() {
+    if (!liveGoalEnabled()) return "Цель";
+    if (state.live.goalAchieved) return "Цель достигнута";
+    const end = $("live-goal-end-date")?.value || "";
+    const dateRu = formatLiveGoalDateRu(end);
+    const pct = readLiveGoalAnnPct();
+    const pctStr = Number.isFinite(pct)
+      ? `${pct.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} %`
+      : "—";
+    if (isLiveGoalEndDateExpired(end)) {
+      return `Истёк срок торговли · до ${dateRu}`;
+    }
+    return `Цель установлена · до ${dateRu} · ${pctStr} годовых`;
+  }
+
+  function syncLiveTradingGoalUi() {
+    const panel = $("live-goal-panel");
+    const titleEl = $("live-goal-summary-title");
+    const statusEl = $("live-goal-status");
+    const hintEl = $("live-goal-hint");
+    if (!panel) return;
+    const enabled = liveGoalEnabled();
+    const expired = enabled && !state.live.goalAchieved && isLiveGoalEndDateExpired($("live-goal-end-date")?.value);
+    const achieved = enabled && !!state.live.goalAchieved;
+    panel.classList.toggle("live-goal-panel--active", enabled && !achieved && !expired);
+    panel.classList.toggle("live-goal-panel--achieved", achieved);
+    panel.classList.toggle("live-goal-panel--expired", expired);
+    if (titleEl) titleEl.textContent = liveGoalSummaryTitle();
+    if (statusEl) {
+      if (achieved) {
+        statusEl.hidden = false;
+        statusEl.textContent = "Цель достигнута";
+        statusEl.className = "live-goal-status live-goal-status--achieved";
+      } else if (expired) {
+        statusEl.hidden = false;
+        statusEl.textContent = "Истёк срок торговли";
+        statusEl.className = "live-goal-status live-goal-status--expired";
+      } else {
+        statusEl.hidden = true;
+        statusEl.textContent = "";
+        statusEl.className = "live-goal-status";
+      }
+    }
+    if (hintEl) {
+      if (!enabled) {
+        hintEl.textContent = "Включите галочку — робот остановится при достижении % годовых (модель FINRESP). По истечении даты торговля не останавливается.";
+      } else if (achieved) {
+        hintEl.textContent = "Желаемый % годовых достигнут — торговля остановлена автоматически.";
+      } else if (expired) {
+        hintEl.textContent = "Срок торговли по цели истёк. Робот продолжает работу, если торговля была запущена.";
+      } else {
+        const cur = computeLiveGoalAnnPct();
+        const target = readLiveGoalAnnPct();
+        const curTxt = Number.isFinite(cur) ? fmtPct(cur) : "—";
+        const tgtTxt = Number.isFinite(target) ? fmtPct(target) : "—";
+        hintEl.textContent = `Текущие % годовых (модель FINRESP): ${curTxt} · цель ${tgtTxt}. При достижении цели торговля остановится.`;
+      }
+    }
+  }
+
+  function stopLiveTradingByGoal(ann, targetPct) {
+    if (state.live.goalAchieved) return;
+    state.live.goalAchieved = true;
+    if (state.live.active) {
+      state.live.active = false;
+      state.live.tradingStartedAt = null;
+      resetLiveTradingBusyFlags();
+      state.live.lastError = "";
+    }
+    noteLiveTech("live-goal", "achieved", `ann=${Number.isFinite(ann) ? ann.toFixed(2) : "—"} target=${targetPct}`);
+    if (Number.isFinite(ann) && Number.isFinite(targetPct)) {
+      setCalcStatus(`Цель достигнута: ${fmtPct(ann)} годовых (цель ${fmtPct(targetPct)}). Торговля остановлена.`);
+    } else {
+      setCalcStatus("Цель достигнута. Торговля остановлена.");
+    }
+    syncLiveTradingGoalUi();
+    syncLiveTradingUi({ skipGoalCheck: true });
+    updateTechInfo("live-goal-achieved");
+  }
+
+  function checkLiveTradingGoal() {
+    if (!liveGoalEnabled() || !isLiveMode()) return;
+    syncLiveTradingGoalUi();
+    if (state.live.goalAchieved) return;
+    if (!state.live.active) return;
+    const targetPct = readLiveGoalAnnPct();
+    if (!Number.isFinite(targetPct)) return;
+    const ann = computeLiveGoalAnnPct();
+    if (Number.isFinite(ann) && ann >= targetPct) {
+      stopLiveTradingByGoal(ann, targetPct);
+    }
+  }
+
+  function onLiveGoalEnabledChange() {
+    if (!liveGoalEnabled()) {
+      state.live.goalAchieved = false;
+      setLiveGoalDefaultFields();
+    }
+    saveConfig();
+    syncLiveTradingGoalUi();
+    updateTechInfo("live-goal-toggle");
+  }
+
+  function bindLiveGoalUi() {
+    if (bindLiveGoalUi._done) return;
+    bindLiveGoalUi._done = true;
+    $("live-goal-enabled")?.addEventListener("change", onLiveGoalEnabledChange);
+    $("live-goal-end-date")?.addEventListener("change", () => {
+      saveConfig();
+      syncLiveTradingGoalUi();
+    });
+    $("live-goal-ann-pct")?.addEventListener("change", () => {
+      saveConfig();
+      syncLiveTradingGoalUi();
+    });
+    $("live-goal-ann-pct")?.addEventListener("input", () => { syncLiveTradingGoalUi(); });
+  }
+
+  function initLiveGoal() {
+    bindLiveGoalUi();
+    const hasDate = !!String($("live-goal-end-date")?.value || "").trim();
+    const hasPct = String($("live-goal-ann-pct")?.value ?? "").trim() !== "";
+    if (!liveGoalEnabled()) {
+      if (!hasDate || !hasPct) setLiveGoalDefaultFields();
+    } else if (!hasDate) {
+      $("live-goal-end-date").value = defaultLiveGoalEndDate();
+    }
+    if (!hasPct && $("live-goal-ann-pct")) $("live-goal-ann-pct").value = "100";
+    syncLiveTradingGoalUi();
+  }
+
   /** Синхронизация всей live-панели: статус, кнопки, опросы, стакан. */
   function syncLiveTradingUi(opts) {
     const options = opts || {};
@@ -2012,6 +2202,9 @@
       bindLivePanelCollapsibleToggles();
       bindLivePanelHeavyRenderOnOpen();
       bindTradeHistoryProtocolExport();
+      bindLiveGoalUi();
+      syncLiveTradingGoalUi();
+      if (!options.skipGoalCheck) checkLiveTradingGoal();
     }
     if (!options.skipBridge) publishLiveBridgeFromDom();
   }
@@ -6290,6 +6483,7 @@ ${referenceBlock}
         liveSession: true,
         silent: !!opts.silent
       });
+      checkLiveTradingGoal();
       syncLiveTradingUi();
       return true;
     } catch (err) {
@@ -6653,6 +6847,7 @@ ${referenceBlock}
     }
     clearLiveManualFlatten();
     state.live.lastError = "";
+    state.live.goalAchieved = false;
     syncLiveTradingUi();
 
     const startCheck = validateLiveTradingStart();
@@ -7305,6 +7500,10 @@ ${referenceBlock}
       refreshLiveCandleStream,
       bootstrapLiveChartsSession,
       refreshLiveManualLimitPrice,
+      initLiveGoal,
+      bindLiveGoalUi,
+      syncLiveTradingGoalUi,
+      checkLiveTradingGoal,
       refreshLiveChartsUi,
       refreshLiveEquityChartsUi,
       renderLiveOrdersPanel,

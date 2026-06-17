@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-tech-log-file-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-live-goal-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -425,6 +425,7 @@
     bindCollapsibleToggle("live-order-book-panel", "live-order-book-toggle");
     bindCollapsibleToggle("live-positions-panel", "live-positions-toggle");
     bindCollapsibleToggle("live-trade-history-panel", "live-trade-history-toggle");
+    bindCollapsibleToggle("live-goal-panel", "live-goal-toggle");
   }
 
   /** Построение структуры данных: `buildTechInfoText`. */
@@ -875,6 +876,7 @@
       positionsBusy: false,
       obTrendConfirm: false,
       obTrendCache: new Map(),
+      goalAchieved: false,
       positionsMenuIdx: null,
       manualPriceSec: "",
       tradeHistory: [],
@@ -1061,7 +1063,12 @@
           sec: $("live-order-book-sec")?.value || ""
         },
         obTrendConfirm: !!state.live?.obTrendConfirm,
-        sandboxMode: !!$("live-sandbox-mode")?.checked
+        sandboxMode: !!$("live-sandbox-mode")?.checked,
+        goal: {
+          enabled: !!$("live-goal-enabled")?.checked,
+          endDate: $("live-goal-end-date")?.value || "",
+          annPct: $("live-goal-ann-pct")?.value || ""
+        }
       },
       params: {
         sl: $("param-sl")?.value || "",
@@ -1177,6 +1184,11 @@
       }
       if ($("live-sandbox-mode")) {
         $("live-sandbox-mode").checked = !!cfg.live?.sandboxMode;
+      }
+      if (cfg.live?.goal) {
+        if ($("live-goal-enabled")) $("live-goal-enabled").checked = !!cfg.live.goal.enabled;
+        setValueIfExists("live-goal-end-date", cfg.live.goal.endDate);
+        setValueIfExists("live-goal-ann-pct", cfg.live.goal.annPct);
       }
       if ($("live-sandbox-match-mode")) {
         const mm = cfg.params?.sandboxMatchMode || cfg.live?.sandboxMatchMode;
@@ -1782,6 +1794,11 @@
     get formatDay() { return formatDay; },
     get todayDate() { return todayDate; },
     get addDays() { return addDays; },
+    get annualSimplePct() { return annualSimplePct; },
+    get annualPeriodDays() { return annualPeriodDays; },
+    get liveFinrespPeriodStart() { return liveFinrespPeriodStart; },
+    get fmtPct() { return fmtPct; },
+    get setCalcStatus() { return setCalcStatus; },
     get maxCalcDays() { return maxCalcDays; },
     get formatLiveRefreshClock() { return formatLiveRefreshClock; },
     get logicEquityLabel() { return logicEquityLabel; },
@@ -1813,6 +1830,7 @@
     enableLiveSandbox, disableLiveSandbox, stopLiveTradingOnModeChange,
     handleAccountModeUserChange, checkSandboxPortfolioStopperNotify,
     ensureSandboxStopperWatch, resetSandboxStopperWatch, syncTradeHistoryFromSources,
+    initLiveGoal, bindLiveGoalUi, syncLiveTradingGoalUi, checkLiveTradingGoal,
     noteLiveFinrespSkipped, tryLiveFinrespCalc, startLiveModePoll, stopLiveModePoll,
     queueLiveCandleRefreshIfNeeded,
     startLiveStatsPoll, stopLiveStatsPoll, startLiveOrderBookPoll, stopLiveOrderBookPoll,
@@ -7488,6 +7506,7 @@ ${referenceBlock}
     initAccountMode();
     initDates();
     applySavedConfig();
+    initLiveGoal();
     fillLogicSelect();
     updatePositionSlHint();
     updateAtParamsSummary();

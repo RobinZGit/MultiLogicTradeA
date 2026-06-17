@@ -5,8 +5,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const livePath = path.join(__dirname, '..', '..', 'src', 'finresp', 'MultiLogic_FinrespCalculator.live.js');
-const bootPath = path.join(__dirname, '..', '..', 'src', 'finresp', 'MultiLogic_FinrespCalculator.boot.js');
+const root = path.join(__dirname, '..', '..');
+const livePath = path.join(root, 'src', 'finresp', 'MultiLogic_FinrespCalculator.live.js');
+const bootPath = path.join(root, 'src', 'finresp', 'MultiLogic_FinrespCalculator.boot.js');
 
 test('live candle refresh uses async chart redraw (не блокирует UI синхронным equity)', () => {
   const src = fs.readFileSync(livePath, 'utf8');
@@ -59,6 +60,18 @@ test('sandbox entry does not block on interactive T-Bank unlock', () => {
   assert.match(liveSrc, /sandboxToggleBusy\) return false/);
   const bootSrc = fs.readFileSync(bootPath, 'utf8');
   assert.match(bootSrc, /sandboxLive\s*=\s*isLiveMode\(\)\s*&&\s*!!\$\("live-sandbox-mode"\)\?\.checked/);
+});
+
+test('live goal panel: enabled header shows target date and percent', () => {
+  const htmlPath = path.join(root, 'src', 'app', 'finresp', 'calculator', 'components', 'finresp-live-panel', 'finresp-live-panel.component.html');
+  const liveSrc = fs.readFileSync(livePath, 'utf8');
+  const html = fs.readFileSync(htmlPath, 'utf8');
+  assert.match(html, /id="live-goal-panel"/);
+  assert.match(html, /id="live-goal-summary-title"/);
+  assert.match(html, /id="live-goal-enabled"/);
+  assert.match(liveSrc, /liveGoalSummaryTitle/);
+  assert.match(liveSrc, /Цель установлена/);
+  assert.match(liveSrc, /live-goal-panel--active/);
 });
 
 test('order book panel toggle does not double-schedule refresh on open', () => {
