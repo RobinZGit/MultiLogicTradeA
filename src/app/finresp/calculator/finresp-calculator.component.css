@@ -583,6 +583,18 @@ body.calc-running .live-trading-panel--active .live-trading-toolbar{
 .live-ob-price-pick{cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px;}
 .live-ob-price-pick:hover{font-weight:800;}
 .live-page-version-badge{background:#450a0a;font-size:.72rem;font-weight:600;}
+.live-active-mode-badge{
+  background:#312e81;
+  border:2px solid #818cf8;
+  color:#eef2ff;
+  font-size:.72rem;
+  font-weight:800;
+}
+.live-trading-panel--sandbox .live-active-mode-badge{
+  background:#065f46;
+  border-color:#34d399;
+  color:#ecfdf5;
+}
 .live-banner-badges{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem;margin:.2rem 0 .1rem;}
 .live-logics-badge-wrap{position:relative;display:inline-block;}
 .live-logics-badge{

@@ -1944,6 +1944,7 @@
       sellAll.setAttribute("aria-disabled", sellAllDisabled ? "true" : "false");
     }
     syncPageVersionBadge();
+    syncLiveActiveModeBadge();
     const status = $("live-trading-status");
     if (status) {
       if (state.live.sandboxToggleBusy && isLive) {
@@ -2012,6 +2013,14 @@
       bindTradeHistoryProtocolExport();
     }
     if (!options.skipBridge) publishLiveBridgeFromDom();
+  }
+
+  function syncLiveActiveModeBadge() {
+    const el = $("live-active-mode-badge");
+    if (!el) return;
+    const on = liveOrderBookActivePollNeeded();
+    el.hidden = !on;
+    if (on) el.textContent = "Торговля по стакану активна";
   }
 
   /** Синхронизация live-панели с Angular FinrespLiveService. */
