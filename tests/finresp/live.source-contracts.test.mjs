@@ -57,7 +57,9 @@ test('sandbox entry does not block on interactive T-Bank unlock', () => {
   const enableBlock = liveSrc.match(/async function enableLiveSandbox\(\)[\s\S]*?^  \}/m);
   assert.ok(enableBlock, 'enableLiveSandbox');
   assert.doesNotMatch(enableBlock[0], /ensureTbankTokenUnlocked\(\{ interactive: true/);
-  assert.match(liveSrc, /sandboxToggleBusy\) return false/);
+  assert.doesNotMatch(enableBlock[0], /GetPortfolio/);
+  assert.match(liveSrc, /unstickLiveUi/);
+  assert.match(liveSrc, /sandbox-toggle-timeout|watchdog-timeout/);
   const bootSrc = fs.readFileSync(bootPath, 'utf8');
   assert.match(bootSrc, /sandboxLive\s*=\s*isLiveMode\(\)\s*&&\s*!!\$\("live-sandbox-mode"\)\?\.checked/);
 });

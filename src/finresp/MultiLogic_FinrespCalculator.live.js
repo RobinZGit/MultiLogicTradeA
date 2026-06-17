@@ -2123,6 +2123,32 @@
     }
   })();
   const LIVE_NOTIFY_URL = "http://127.0.0.1:4201/finresp-notify";
+  const LIVE_GOAL_UI_THROTTLE_MS = 2000;
+  let liveGoalUiLastSyncAt = 0;
+
+  function shouldThrottleLiveGoalUi(options) {
+    if (options?.forceGoalUi) return false;
+    const now = Date.now();
+    if (now - liveGoalUiLastSyncAt < LIVE_GOAL_UI_THROTTLE_MS) return true;
+    liveGoalUiLastSyncAt = now;
+    return false;
+  }
+
+  /** Сброс зависших busy-флагов live (аварийное восстановление UI). */
+  function unstickLiveUi(reason) {
+    state.live.sandboxToggleBusy = false;
+    state.live.candleRefreshBusy = false;
+    state.live.tradingActionBusy = false;
+    state.live.reconcileBusy = false;
+    state.live.chartsBootstrapBusy = false;
+    resetLiveTradingBusyFlags();
+    state.live.lastError = reason
+      ? String(reason)
+      : (state.live.lastError || "сброшены зависшие флаги busy");
+    syncLiveTradingUi({ forceGoalUi: true });
+    updateTechInfo("live-unstick");
+    noteLiveTech("live-unstick", reason || "busy-flags-cleared");
+  }
 
   function liveNotifyConfig() {
     return {
@@ -2398,7 +2424,10 @@
       bindLivePanelHeavyRenderOnOpen();
       bindTradeHistoryProtocolExport();
       bindLiveGoalUi();
-      syncLiveTradingGoalUi();
+      bindLiveNotifyUi();
+      if (!shouldThrottleLiveGoalUi(options)) {
+        syncLiveTradingGoalUi();
+      }
       if (!options.skipGoalCheck) checkLiveTradingGoal();
     }
     if (!options.skipBridge) publishLiveBridgeFromDom();
@@ -4933,20 +4962,11 @@
   async function enableLiveSandbox() {
     await yieldToUi();
     const depositFallback = (+$("vol-deposit")?.value || 0);
-    state.live.realPortfolioValue = state.live.portfolioValue ?? depositFallback;
-    if (state.tbank.token && state.tbank.selectedAccountId) {
-      try {
-        const portfolio = await tbankRequest("OperationsService/GetPortfolio", {
-          accountId: state.tbank.selectedAccountId,
-          currency: "RUB"
-        });
-        if (portfolio) {
-          state.live.realPortfolioValue = moneyValueRub(portfolio.totalAmountPortfolio);
-        }
-      } catch (_) {
-        state.live.realPortfolioValue = state.live.portfolioValue ?? depositFallback;
-      }
-    }
+    // Песочница не ждёт сеть T-Bank: стартовый портфель = депозит или уже известное значение UI.
+    const cachedPv = state.live.portfolioValue ?? state.live.realPortfolioValue;
+    state.live.realPortfolioValue = Number.isFinite(cachedPv) && cachedPv > 0
+      ? cachedPv
+      : (depositFallback > 0 ? depositFallback : 0);
     await yieldToUi();
     const sb = ensureSandboxState();
     sb.startPortfolio = state.live.realPortfolioValue ?? 0;
@@ -4969,7 +4989,7 @@
       resetSandboxStopperWatch();
     }
     await updateSandboxPortfolioDisplay();
-    renderLiveOrdersPanel();
+    scheduleRenderLiveOrdersPanel(true);
     scheduleRenderLivePositionsPanel(true);
     noteLiveTech("live-sandbox", "enabled", `start=${sb.startPortfolio}`);
   }
@@ -5031,10 +5051,19 @@
   /** Процедура (async): обработчик галочки «Песочница (фейк)». */
   async function onLiveSandboxToggle() {
     if (liveSandboxToggleInFlight) return liveSandboxToggleInFlight;
+    const watchdog = setTimeout(() => {
+      if (!state.live.sandboxToggleBusy) return;
+      state.live.sandboxToggleBusy = false;
+      state.live.lastError = "таймаут переключения песочницы — повторите или обновите страницу";
+      syncLiveTradingUi({ forceGoalUi: true });
+      noteLiveTech("live-sandbox-toggle", "watchdog-timeout");
+      updateTechInfo("sandbox-toggle-timeout");
+    }, 45000);
     liveSandboxToggleInFlight = onLiveSandboxToggleInner().finally(() => {
+      clearTimeout(watchdog);
       liveSandboxToggleInFlight = null;
       state.live.sandboxToggleBusy = false;
-      syncLiveTradingUi();
+      syncLiveTradingUi({ forceGoalUi: true });
       updateTechInfo("sandbox-toggle-done");
     });
     return liveSandboxToggleInFlight;
@@ -5044,10 +5073,11 @@
     const cb = $("live-sandbox-mode");
     const on = !!cb?.checked;
     state.live.sandboxToggleBusy = true;
-    syncLiveTradingUi();
-    await yieldToUi();
-    if (state.live.active) recordLiveModeRegionSwitch();
-    if (on) {
+    syncLiveTradingUi({ skipGoalCheck: true, forceGoalUi: true });
+    try {
+      await yieldToUi();
+      if (state.live.active) recordLiveModeRegionSwitch();
+      if (on) {
         await enableLiveSandbox();
         notifyLiveSandboxModeSwitch(true);
         await yieldToUi();
@@ -5070,7 +5100,7 @@
             if (cb) cb.checked = true;
             state.live.lastError = "Реальная торговля: расшифруйте токен T-Bank (пароль в настройках счёта).";
             saveConfig();
-            syncLiveTradingUi();
+            syncLiveTradingUi({ forceGoalUi: true });
             return;
           }
         }
@@ -5090,9 +5120,15 @@
           }
         }
       }
-    saveConfig();
-    syncLiveTradingUi();
-    setTimeout(() => { void bootstrapLiveChartsSession({ reason: "sandbox-toggle" }); }, 0);
+      saveConfig();
+      syncLiveTradingUi({ forceGoalUi: true });
+      setTimeout(() => { void bootstrapLiveChartsSession({ reason: "sandbox-toggle" }); }, 0);
+    } catch (err) {
+      state.live.lastError = err.message || String(err);
+      noteLiveTech("live-sandbox-toggle", err.message || String(err));
+      syncLiveTradingUi({ forceGoalUi: true });
+      throw err;
+    }
   }
 
   /** Запись причины, по которой reconcile не запустился или не отправил заявки. */
@@ -7704,6 +7740,7 @@ ${referenceBlock}
       checkLiveTradingGoal,
       initLiveNotify,
       bindLiveNotifyUi,
+      unstickLiveUi,
       refreshLiveChartsUi,
       refreshLiveEquityChartsUi,
       renderLiveOrdersPanel,

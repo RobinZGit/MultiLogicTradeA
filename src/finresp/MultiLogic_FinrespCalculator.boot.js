@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-live-notify-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-live-unstick-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -1852,7 +1852,7 @@
     handleAccountModeUserChange, checkSandboxPortfolioStopperNotify,
     ensureSandboxStopperWatch, resetSandboxStopperWatch, syncTradeHistoryFromSources,
     initLiveGoal, bindLiveGoalUi, syncLiveTradingGoalUi, checkLiveTradingGoal,
-    initLiveNotify, bindLiveNotifyUi,
+    initLiveNotify, bindLiveNotifyUi, unstickLiveUi,
     noteLiveFinrespSkipped, tryLiveFinrespCalc, startLiveModePoll, stopLiveModePoll,
     queueLiveCandleRefreshIfNeeded,
     startLiveStatsPoll, stopLiveStatsPoll, startLiveOrderBookPoll, stopLiveOrderBookPoll,
@@ -7605,6 +7605,11 @@ ${referenceBlock}
   window.__mlOnAccountModeUserChange = handleAccountModeUserChange;
   window.__mlFinrespVersion = CALC_PAGE_VERSION;
   window.__mlFinresp.bootPhase = "ok";
+  window.__mlFinresp.unstickUi = (reason) => {
+    if (typeof unstickLiveUi === "function") unstickLiveUi(reason);
+    if (state.uiBusy) setBusy(false);
+    updateTechInfo("manual-unstick");
+  };
   finalizeAngularFormFromConfig();
   installBridgeWindowHandler();
   bootstrapLiveTradingPanelVisibility();
