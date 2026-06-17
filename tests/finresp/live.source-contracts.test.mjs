@@ -69,9 +69,11 @@ test('live goal panel: enabled header shows target date and percent', () => {
   assert.match(html, /id="live-goal-panel"/);
   assert.match(html, /id="live-goal-summary-title"/);
   assert.match(html, /id="live-goal-enabled"/);
+  assert.match(html, /id="live-goal-banner-badge"/);
   assert.match(liveSrc, /liveGoalSummaryTitle/);
+  assert.match(liveSrc, /syncLiveGoalBanner/);
+  assert.match(liveSrc, /live-goal-banner-badge--active/);
   assert.match(liveSrc, /Цель установлена/);
-  assert.match(liveSrc, /live-goal-panel--active/);
 });
 
 test('order book panel toggle does not double-schedule refresh on open', () => {

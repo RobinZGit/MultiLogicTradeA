@@ -1960,6 +1960,40 @@
     return `Цель установлена · до ${dateRu} · ${pctStr} годовых`;
   }
 
+  function liveGoalBannerText() {
+    if (!liveGoalEnabled()) return "";
+    if (state.live.goalAchieved) return "Цель достигнута";
+    const end = $("live-goal-end-date")?.value || "";
+    const dateRu = formatLiveGoalDateRu(end);
+    if (isLiveGoalEndDateExpired(end)) {
+      return `Истёк срок торговли · до ${dateRu}`;
+    }
+    const pct = readLiveGoalAnnPct();
+    const pctStr = Number.isFinite(pct)
+      ? `${pct.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} %`
+      : "—";
+    return `Цель установлена · до ${dateRu} · ${pctStr} годовых`;
+  }
+
+  function syncLiveGoalBanner() {
+    const el = $("live-goal-banner-badge");
+    if (!el) return;
+    const enabled = liveGoalEnabled();
+    el.hidden = !enabled;
+    if (!enabled) {
+      el.textContent = "";
+      el.className = "live-trading-badge live-goal-banner-badge";
+      return;
+    }
+    const achieved = !!state.live.goalAchieved;
+    const expired = !achieved && isLiveGoalEndDateExpired($("live-goal-end-date")?.value);
+    el.textContent = liveGoalBannerText();
+    el.className = "live-trading-badge live-goal-banner-badge"
+      + (achieved ? " live-goal-banner-badge--achieved"
+        : expired ? " live-goal-banner-badge--expired"
+          : " live-goal-banner-badge--active");
+  }
+
   function syncLiveTradingGoalUi() {
     const panel = $("live-goal-panel");
     const titleEl = $("live-goal-summary-title");
@@ -2003,6 +2037,7 @@
         hintEl.textContent = `Текущие % годовых (модель FINRESP): ${curTxt} · цель ${tgtTxt}. При достижении цели торговля остановится.`;
       }
     }
+    syncLiveGoalBanner();
   }
 
   function stopLiveTradingByGoal(ann, targetPct) {

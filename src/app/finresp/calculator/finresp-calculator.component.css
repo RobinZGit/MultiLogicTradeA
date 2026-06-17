@@ -595,6 +595,31 @@ body.calc-running .live-trading-panel--active .live-trading-toolbar{
   border-color:#34d399;
   color:#ecfdf5;
 }
+.live-goal-banner-badge{
+  font-size:.74rem;
+  font-weight:800;
+  max-width:min(22rem,78vw);
+  white-space:normal;
+  line-height:1.25;
+  text-align:left;
+}
+.live-goal-banner-badge--active{
+  background:#3730a3;
+  border:2px solid #6366f1;
+  color:#eef2ff;
+}
+.live-goal-banner-badge--achieved{
+  background:linear-gradient(180deg,#fef3c7 0%,#fcd34d 100%);
+  border:2px solid #d97706;
+  color:#92400e;
+  font-size:.8rem;
+}
+.live-goal-banner-badge--expired{
+  background:linear-gradient(180deg,#fef2f2 0%,#fecaca 100%);
+  border:2px solid #7f1d1d;
+  color:#7f1d1d;
+  font-size:.78rem;
+}
 .live-banner-badges{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem;margin:.2rem 0 .1rem;}
 .live-logics-badge-wrap{position:relative;display:inline-block;}
 .live-logics-badge{
