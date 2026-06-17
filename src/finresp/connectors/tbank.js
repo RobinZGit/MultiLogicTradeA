@@ -297,11 +297,13 @@
       });
     }
 
-    async function fetchOrderBookCached(instrumentId) {
+    async function fetchOrderBookCached(instrumentId, opts) {
       const cacheKey = String(instrumentId || "");
       const prev = live.obTrendCache.get(cacheKey);
       const now = Date.now();
-      if (prev?.ob && now - (prev.at || 0) < 2500) return prev.ob;
+      const ttl = Math.max(0, +(live.orderBookCacheTtlMs ?? 2500) || 2500);
+      const force = !!opts?.force;
+      if (!force && prev?.ob && now - (prev.at || 0) < ttl) return prev.ob;
       const ob = await getOrderBook(instrumentId);
       live.obTrendCache.set(cacheKey, { ob, at: now });
       return ob;

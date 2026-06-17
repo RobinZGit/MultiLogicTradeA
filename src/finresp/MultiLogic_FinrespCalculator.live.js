@@ -2071,12 +2071,16 @@
     endLiveChartSession();
     stopLiveStatsPoll();
     stopLiveOrderBookPoll();
+    stopLiveOrderBookActivePoll();
     stopLivePositionsPoll();
     syncLiveTradingUi();
   }
 
   const LIVE_ORDER_BOOK_DEPTH = 10;
   const LIVE_ORDER_BOOK_POLL_MS = 4000;
+  const LIVE_ORDER_BOOK_ACTIVE_POLL_MS = 650;
+  const LIVE_ORDER_BOOK_ACTIVE_IDLE_MS = 5000;
+  const LIVE_ORDER_BOOK_ACTIVE_MAX_BACKOFF_MS = 30000;
 
   /** Заявка/ордер: `orderBookPrice`. */
   function orderBookPrice(q) {
@@ -2159,6 +2163,12 @@
     state.live.orderBookTimer = null;
   }
 
+  function stopLiveOrderBookActivePoll() {
+    if (state.live.orderBookActiveTimer) clearInterval(state.live.orderBookActiveTimer);
+    state.live.orderBookActiveTimer = null;
+    state.live.orderBookCacheTtlMs = 2500;
+  }
+
   /** Обновление данных с источника: `refreshLiveOrderBook`. */
   async function refreshLiveOrderBookDeferred() {
     if (!isOrderBookPanelOpen()) return;
@@ -2220,6 +2230,68 @@
       }
       scheduleRefreshLiveOrderBook();
     }, LIVE_ORDER_BOOK_POLL_MS);
+  }
+
+  function anySelectedLogicUsesOrderBook() {
+    const ids = selectedLogicIds();
+    if (!ids?.length) return false;
+    for (const id of ids) {
+      const line = state.customLines?.[id] || E.DEFAULT_LOGIC_LINES?.[id] || "";
+      if (E.logicUsesObTrend(line) || E.logicUsesObSignals(line)) return true;
+    }
+    return false;
+  }
+
+  function liveOrderBookActivePollNeeded() {
+    if (!isLiveMode() || !state.live.chartSession) return false;
+    if (!anySelectedLogicUsesOrderBook()) return false;
+    const sandbox = isLiveSandbox();
+    // user asked: if token is not active, do not enable (also for sandbox).
+    if (!state.tbank.token) return false;
+    if (!sandbox && !state.tbank.selectedAccountId) return false;
+    return true;
+  }
+
+  async function liveOrderBookActivePollTick() {
+    if (!liveOrderBookActivePollNeeded()) return;
+    if (state.live.orderBookBusy) return;
+    const nextAt = +(state.live.orderBookActiveNextTryAt || 0);
+    if (nextAt && Date.now() < nextAt) return;
+    const list = selectedInstruments?.() || [];
+    if (!list.length) return;
+    const idx = ((state.live.orderBookActiveRR || 0) + 1) % list.length;
+    state.live.orderBookActiveRR = idx;
+    const picked = list[idx];
+    if (!picked?.sec) return;
+    try {
+      const meta = await resolveLiveInstrumentMeta(picked.sec, picked.market);
+      const instrumentId = meta?.instrumentId;
+      if (!instrumentId) return;
+      // Force refresh at active frequency (respects connector TTL but can bypass it).
+      await tbankFetchOrderBookCached(instrumentId, { force: true });
+      state.live.orderBookActiveBackoffMs = 0;
+      state.live.orderBookActiveNextTryAt = 0;
+    } catch (err) {
+      const prev = Math.max(0, +(state.live.orderBookActiveBackoffMs || 0) || 0);
+      const next = prev ? Math.min(LIVE_ORDER_BOOK_ACTIVE_MAX_BACKOFF_MS, Math.round(prev * 1.8)) : 1200;
+      state.live.orderBookActiveBackoffMs = next;
+      state.live.orderBookActiveNextTryAt = Date.now() + next;
+      noteLiveTech("live-orderbook-active", err?.message || String(err), `backoff=${next}ms`);
+    }
+  }
+
+  function startLiveOrderBookActivePoll() {
+    if (state.live.orderBookActiveTimer) return;
+    if (!liveOrderBookActivePollNeeded()) return;
+    state.live.orderBookCacheTtlMs = LIVE_ORDER_BOOK_ACTIVE_POLL_MS;
+    state.live.orderBookActiveTimer = setInterval(() => {
+      if (!liveOrderBookActivePollNeeded()) {
+        stopLiveOrderBookActivePoll();
+        return;
+      }
+      void liveOrderBookActivePollTick();
+    }, LIVE_ORDER_BOOK_ACTIVE_POLL_MS);
+    void liveOrderBookActivePollTick();
   }
 
   const LIVE_POSITIONS_POLL_MS = 6000;
@@ -4997,8 +5069,8 @@
     return E.logicUsesObTrend(line) || E.logicUsesObSignals(line);
   }
 
-  async function tbankFetchOrderBookCached(instrumentId) {
-    return getBroker().fetchOrderBookCached(instrumentId);
+  async function tbankFetchOrderBookCached(instrumentId, opts) {
+    return getBroker().fetchOrderBookCached(instrumentId, opts);
   }
 
   /** Live-торговля: `liveObTrendAllowsOrder`. */
@@ -6500,6 +6572,9 @@ ${referenceBlock}
         stopLiveModePoll();
         return;
       }
+      // OB active mode: refresh order book cache frequently when OB logics are selected.
+      if (liveOrderBookActivePollNeeded()) startLiveOrderBookActivePoll();
+      else if (state.live.orderBookActiveTimer) stopLiveOrderBookActivePoll();
       if (state.live.candleRefreshBusy || (state.live.active && state.live.reconcileBusy) || state.live.tradingActionBusy) return;
       livePollTickAfterRefresh()
         .then((ok) => {
