@@ -2176,7 +2176,9 @@
     portfolioSlTp: "live-notify-ev-portfolio-sltp",
     positionSlTp: "live-notify-ev-position-sltp",
     tradingToggle: "live-notify-ev-trading-toggle",
-    formParams: "live-notify-ev-form-params"
+    formParams: "live-notify-ev-form-params",
+    goalAchieved: "live-notify-ev-goal-achieved",
+    goalExpired: "live-notify-ev-goal-expired"
   };
 
   const LIVE_NOTIFY_DEFAULT_EVENTS = {
@@ -2184,7 +2186,9 @@
     portfolioSlTp: true,
     positionSlTp: true,
     tradingToggle: true,
-    formParams: false
+    formParams: false,
+    goalAchieved: true,
+    goalExpired: true
   };
 
   function normalizeLiveNotifyEvents(raw) {
@@ -2220,6 +2224,8 @@
     if (eventId === "position_sl" || eventId === "position_tp") return !!ev.positionSlTp;
     if (eventId === "trading_start" || eventId === "trading_stop") return !!ev.tradingToggle;
     if (eventId === "form_params") return !!ev.formParams;
+    if (eventId === "goal_achieved") return !!ev.goalAchieved;
+    if (eventId === "goal_expired") return !!ev.goalExpired;
     return false;
   }
 
@@ -2422,12 +2428,32 @@
     });
   }
 
-  function notifyLiveGoalAchieved(_ann, _targetPct) {
-    /* цель — без e-mail; только остановка торговли */
+  function notifyLiveGoalAchieved(ann, targetPct) {
+    if (wasLiveNotifySent("goal_achieved")) return;
+    markLiveNotifySent("goal_achieved");
+    const annTxt = Number.isFinite(ann) ? fmtPct(ann) : "—";
+    const tgtTxt = Number.isFinite(targetPct) ? fmtPct(targetPct) : "—";
+    sendLiveNotify(
+      "goal_achieved",
+      "MultiLogic: цель достигнута",
+      `Цель достигнута: ${annTxt} годовых (цель ${tgtTxt}). Торговля остановлена.`
+    );
   }
 
   function checkLiveGoalExpiredNotify() {
-    /* срок цели — без e-mail */
+    if (!liveGoalEnabled() || !isLiveMode()) return;
+    if (state.live.goalAchieved) return;
+    const end = $("live-goal-end-date")?.value || "";
+    if (!isLiveGoalEndDateExpired(end)) return;
+    const key = `goal_expired:${end}`;
+    if (wasLiveNotifySent(key)) return;
+    markLiveNotifySent(key);
+    const dateRu = formatLiveGoalDateRu(end);
+    sendLiveNotify(
+      "goal_expired",
+      "MultiLogic: истёк срок цели",
+      `Истёк срок торговли по цели (до ${dateRu}). Торговля не останавливается автоматически.`
+    );
   }
 
   function notifyLiveTradingToggle(active) {

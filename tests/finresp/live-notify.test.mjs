@@ -10,7 +10,7 @@ const root = path.join(__dirname, '..', '..');
 const livePath = path.join(root, 'src', 'finresp', 'MultiLogic_FinrespCalculator.live.js');
 const bootPath = path.join(root, 'src', 'finresp', 'MultiLogic_FinrespCalculator.boot.js');
 const htmlPath = path.join(root, 'src', 'app', 'finresp', 'calculator', 'components', 'finresp-notify-panel', 'finresp-notify-panel.component.html');
-const calcHtmlPath = path.join(root, 'src', 'app', 'finresp', 'calculator', 'finresp-calculator.component.html');
+const livePanelHtmlPath = path.join(root, 'src', 'app', 'finresp', 'calculator', 'components', 'finresp-live-panel', 'finresp-live-panel.component.html');
 const NOTIFY_TEST_PORT = 4211;
 const serverPath = path.join(root, 'scripts', 'finresp-tech-log-server.mjs');
 
@@ -34,8 +34,8 @@ test('live notify UI and client contracts', () => {
   const liveSrc = fs.readFileSync(livePath, 'utf8');
   const bootSrc = fs.readFileSync(bootPath, 'utf8');
   const html = fs.readFileSync(htmlPath, 'utf8');
-  const calcHtml = fs.readFileSync(calcHtmlPath, 'utf8');
-  assert.match(calcHtml, /app-finresp-notify-panel/);
+  const livePanelHtml = fs.readFileSync(livePanelHtmlPath, 'utf8');
+  assert.match(livePanelHtml, /app-finresp-notify-panel/);
   assert.match(html, /id="live-notify-panel"/);
   assert.match(html, /id="live-notify-email"/);
   assert.doesNotMatch(html, /live-notify-phone/);
@@ -45,10 +45,16 @@ test('live notify UI and client contracts', () => {
   assert.match(html, /id="live-notify-ev-position-sltp"/);
   assert.match(html, /id="live-notify-ev-trading-toggle"/);
   assert.match(html, /id="live-notify-ev-form-params"/);
+  assert.match(html, /id="live-notify-ev-goal-achieved"/);
+  assert.match(html, /id="live-notify-ev-goal-expired"/);
   assert.match(liveSrc, /sendLiveNotify/);
   assert.match(liveSrc, /liveNotifyEventCategoryEnabled/);
   assert.match(liveSrc, /notifyLiveSandboxModeSwitch/);
   assert.match(liveSrc, /notifyLiveTradingToggle/);
+  assert.match(liveSrc, /notifyLiveGoalAchieved/);
+  assert.match(liveSrc, /checkLiveGoalExpiredNotify/);
+  assert.match(liveSrc, /goal_achieved/);
+  assert.match(liveSrc, /goal_expired/);
   assert.match(liveSrc, /checkPortfolioStopperNotify/);
   assert.match(liveSrc, /checkPositionSlTpNotify/);
   assert.match(liveSrc, /onLiveConfigSavedForNotify/);

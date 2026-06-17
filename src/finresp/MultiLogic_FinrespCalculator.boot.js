@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-live-notify-events-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-live-notify-goal-events-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -553,6 +553,8 @@
           `liveNotifyEvPositionSlTp=${!!$("live-notify-ev-position-sltp")?.checked}`,
           `liveNotifyEvTrading=${!!$("live-notify-ev-trading-toggle")?.checked}`,
           `liveNotifyEvFormParams=${!!$("live-notify-ev-form-params")?.checked}`,
+          `liveNotifyEvGoalAchieved=${!!$("live-notify-ev-goal-achieved")?.checked}`,
+          `liveNotifyEvGoalExpired=${!!$("live-notify-ev-goal-expired")?.checked}`,
           `liveNotifySinkUrl=http://127.0.0.1:4201/finresp-notify`,
           `liveNotifySinkReachable=${nd?.sinkReachable ?? "—"}`,
           `liveNotifySmtpConfigured=${nd?.smtpConfigured ?? "—"}`,
@@ -1111,7 +1113,9 @@
             portfolioSlTp: !!$("live-notify-ev-portfolio-sltp")?.checked,
             positionSlTp: !!$("live-notify-ev-position-sltp")?.checked,
             tradingToggle: !!$("live-notify-ev-trading-toggle")?.checked,
-            formParams: !!$("live-notify-ev-form-params")?.checked
+            formParams: !!$("live-notify-ev-form-params")?.checked,
+            goalAchieved: !!$("live-notify-ev-goal-achieved")?.checked,
+            goalExpired: !!$("live-notify-ev-goal-expired")?.checked
           }
         }
       },
@@ -1268,7 +1272,9 @@
           portfolioSlTp: true,
           positionSlTp: true,
           tradingToggle: true,
-          formParams: false
+          formParams: false,
+          goalAchieved: true,
+          goalExpired: true
         };
         if ($("live-notify-ev-sandbox-mode")) {
           $("live-notify-ev-sandbox-mode").checked = ev.sandboxMode != null ? !!ev.sandboxMode : evDefaults.sandboxMode;
@@ -1284,6 +1290,12 @@
         }
         if ($("live-notify-ev-form-params")) {
           $("live-notify-ev-form-params").checked = ev.formParams != null ? !!ev.formParams : evDefaults.formParams;
+        }
+        if ($("live-notify-ev-goal-achieved")) {
+          $("live-notify-ev-goal-achieved").checked = ev.goalAchieved != null ? !!ev.goalAchieved : evDefaults.goalAchieved;
+        }
+        if ($("live-notify-ev-goal-expired")) {
+          $("live-notify-ev-goal-expired").checked = ev.goalExpired != null ? !!ev.goalExpired : evDefaults.goalExpired;
         }
       }
       if ($("live-sandbox-match-mode")) {

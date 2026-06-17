@@ -78,7 +78,7 @@ test('live goal panel: enabled header shows target date and percent', () => {
   assert.match(liveSrc, /Цель установлена/);
 });
 
-test('notify panel is separate Angular component', () => {
+test('notify panel lives inside live trading panel under goal', () => {
   const notifyHtml = fs.readFileSync(
     path.join(root, 'src', 'app', 'finresp', 'calculator', 'components', 'finresp-notify-panel', 'finresp-notify-panel.component.html'),
     'utf8'
@@ -87,8 +87,14 @@ test('notify panel is separate Angular component', () => {
     path.join(root, 'src', 'app', 'finresp', 'calculator', 'components', 'finresp-live-panel', 'finresp-live-panel.component.html'),
     'utf8'
   );
+  const calcHtml = fs.readFileSync(
+    path.join(root, 'src', 'app', 'finresp', 'calculator', 'finresp-calculator.component.html'),
+    'utf8'
+  );
   assert.match(notifyHtml, /id="live-notify-panel"/);
-  assert.doesNotMatch(livePanelHtml, /id="live-notify-panel"/);
+  assert.match(livePanelHtml, /app-finresp-notify-panel/);
+  assert.match(livePanelHtml, /live-goal-panel[\s\S]*app-finresp-notify-panel/);
+  assert.doesNotMatch(calcHtml, /app-finresp-notify-panel/);
 });
 
 test('order book panel toggle does not double-schedule refresh on open', () => {
