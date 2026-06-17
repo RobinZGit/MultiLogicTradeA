@@ -110,7 +110,7 @@ describe("tradeMarkersFromBar", () => {
     const candles = makeCandles("GAZP", BAR_COUNT);
     const a = 120;
     const b = candles.length - 1;
-    const ind = { stoch: true, totstoch: true };
+    const ind = { stoch: true, ctgstoch: true };
     const base = { sec: "GAZP" };
     const spec = (key) => E.resolveLogicSpec(key, {}, E.DEFAULT_PARAMS, ind);
     const runFts = (p, o) => E.runOnCandles(candles, spec("FTS"), a, b, p, vol, { ...base, ...o });

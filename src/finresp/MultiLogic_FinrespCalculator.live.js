@@ -766,13 +766,14 @@
 
   function scheduleBrokerConnectIfReady(source) {
     if (!isTbankBackedMode() || !safeStorageGet(brokerTokenStoreKey())) return Promise.resolve();
+    const isPageInit = source === "page-init";
     const connectGen = brokerOpsGeneration;
     const brokerAtStart = readBrokerIdFromUi();
     const hasPass = !!getBrokerPassphrase();
     if (!hasPass) {
       const hint = `Брокер ${brokerLabel()}: введите пароль в блоке настроек и нажмите «Расшифровать и подключить».`;
       setBrokerConnectionStatus(hint, true);
-      openBrokerPassphraseUi(hint, { focus: false });
+      openBrokerPassphraseUi(hint, { focus: isPageInit ? false : true });
       noteBrokerTechDeduped("unlock-needed", source || "no-passphrase");
       return scheduleBrokerUnlockPrompt(source, connectGen);
     }
@@ -783,7 +784,7 @@
         await connectTbankAndLoadDeposit({
           interactive: true,
           openUi: false,
-          useModal: IS_FILE_PROTOCOL
+          useModal: IS_FILE_PROTOCOL || isPageInit
         });
       })(),
       brokerLabel()
@@ -3344,6 +3345,98 @@
     checkLiveGoalExpiredNotify();
   }
 
+  /** Строки FINRESP для reconcile: текущий расчёт или снимок до live-сессии. */
+  function liveFinrespPerSec() {
+    if (state.lastResult?.perSec?.length) return state.lastResult.perSec;
+    return state.live.preCalcSnapshot?.result?.perSec || [];
+  }
+
+  function liveFinrespReady() {
+    return liveFinrespPerSec().length > 0;
+  }
+
+  function liveFinrespWarnOnly(err) {
+    const e = String(err || "");
+    return (e.startsWith("пропущено")
+      || e.startsWith("FINRESP пустой")
+      || e.startsWith("Нет сигнала")
+      || e.startsWith("Сигнал по"))
+      && !e.includes("ошибки заявок");
+  }
+
+  /** Текст бейджа статуса live-торговли (единый источник для bridge и DOM). */
+  function computeLiveTradingStatusText(isLive, sandbox) {
+    if (!isLive) return "остановлена";
+    if (state.live.sandboxToggleBusy) {
+      return "переключение песочница ↔ реальная торговля…";
+    }
+    if (state.live.lastError) {
+      const warnOnly = liveFinrespWarnOnly(state.live.lastError);
+      return `${warnOnly ? "внимание" : "ошибка"}: ${state.live.lastError}`;
+    }
+    if (state.live.active) {
+      const boot = state.live.candleRefreshBusy
+        || state.live.finrespBootstrapProgress
+        || (isLiveFinrespBootstrapPending() && !liveHasAnyCandles());
+      if (boot) {
+        const src = liveCandleSourceEffectiveLabel();
+        const prog = state.live.finrespBootstrapProgress;
+        const progHint = prog ? ` ${prog.done}/${prog.total}` : "";
+        return `подготовка: свечи ${src} и FINRESP${progHint}…`;
+      }
+      const { calcEnd, freshest } = liveMoexBarTimes(state.packs);
+      const bar = formatMoexBarTime(calcEnd || state.live.lastCandleBarTime);
+      const freshHint = freshest && calcEnd && freshest > calcEnd
+        ? ` (самый свежий тикер ${formatMoexBarTime(freshest)})`
+        : "";
+      const polled = formatLiveRefreshClock(state.live.lastCandleRefreshAt);
+      const src = liveCandleSourceEffectiveLabel();
+      const busy = state.live.candleRefreshBusy ? " · обновление свечей…" : "";
+      const sandboxHint = sandbox ? " · песочница (фейк)" : "";
+      return `торговля активна${sandboxHint} · источник ${src} · бары до ${bar}${freshHint} · опрос ${polled}${busy}`;
+    }
+    const src = liveCandleSourceEffectiveLabel();
+    const busyParts = [];
+    if (state.live.candleRefreshBusy) busyParts.push("обновление свечей");
+    if (state.live.tradingActionBusy) busyParts.push("операция");
+    if (state.live.finrespBootstrapProgress) {
+      const prog = state.live.finrespBootstrapProgress;
+      busyParts.push(`FINRESP ${prog.done}/${prog.total}`);
+    }
+    const busyHint = busyParts.length ? ` · ${busyParts.join(" · ")}…` : "";
+    return sandbox
+      ? `остановлена · песочница (фейк) · источник ${src}${busyHint}`
+      : `остановлена · источник ${src}${busyHint}`;
+  }
+
+  /** Патч для Angular live$-панели из state (не читать DOM — Angular перезаписывает биндинги). */
+  function buildLiveBridgePatch(isLive, sandbox) {
+    const toggleDisabled = liveCriticalToggleDisabled(isLive);
+    const sellAllDisabled = liveCriticalSellAllDisabled(isLive);
+    const commissionEl = $("live-commission-paid");
+    const err = isLive && state.live.lastError ? String(state.live.lastError) : "";
+    const statusIsWarn = !!err && liveFinrespWarnOnly(err);
+    const statusIsError = !!err && !statusIsWarn;
+    return {
+      statusText: computeLiveTradingStatusText(isLive, sandbox),
+      statusIsError,
+      statusIsWarn,
+      leverageText: $("live-leverage-value")?.textContent ?? "—",
+      portfolioText: $("live-portfolio-value")?.textContent ?? "—",
+      freeCashText: $("live-free-cash-value")?.textContent ?? "—",
+      commissionText: commissionEl?.textContent ?? "0",
+      commissionColor: commissionEl?.style.color ?? "#b91c1c",
+      finresultText: $("live-finresult-value")?.textContent ?? "—",
+      statsHintText: $("live-trading-stats-hint")?.textContent ?? "",
+      commissionLabel: $("live-commission-label")?.textContent ?? "",
+      journalMetaText: $("live-trade-history-meta")?.textContent ?? "",
+      toggleText: state.live.active ? "Остановить торговлю" : "Начать торговлю",
+      toggleActive: !!state.live.active,
+      toggleDisabled,
+      sellAllDisabled,
+    };
+  }
+
   /** Синхронизация всей live-панели: статус, кнопки, опросы, стакан. */
   function syncLiveTradingUi(opts) {
     const options = opts || {};
@@ -3381,78 +3474,8 @@
     }
     if (select) select.classList.toggle("account-mode-select--live", isLive);
     if (label) label.classList.toggle("account-mode--live", isLive);
-    const toggleDisabled = liveCriticalToggleDisabled(isLive);
-    const sellAllDisabled = liveCriticalSellAllDisabled(isLive);
-    const toggle = $("live-trading-toggle");
-    if (toggle) {
-      toggle.textContent = state.live.active ? "Остановить торговлю" : "Начать торговлю";
-      toggle.classList.toggle("live-trading-toggle--active", state.live.active);
-      if (state.live.active) {
-        toggle.disabled = false;
-        toggle.removeAttribute("disabled");
-        toggle.classList.add("live-critical-control");
-      } else {
-        toggle.classList.remove("live-critical-control");
-        toggle.disabled = toggleDisabled;
-      }
-      toggle.setAttribute("aria-disabled", toggle.disabled ? "true" : "false");
-    }
-    const sellAll = $("live-trading-sell-all");
-    if (sellAll) {
-      sellAll.disabled = sellAllDisabled;
-      sellAll.setAttribute("aria-disabled", sellAllDisabled ? "true" : "false");
-    }
     syncPageVersionBadge();
     syncLiveActiveModeBadge();
-    const status = $("live-trading-status");
-    if (status) {
-      if (state.live.sandboxToggleBusy && isLive) {
-        status.textContent = "переключение песочница ↔ реальная торговля…";
-      } else if (state.live.lastError && isLive) {
-        const warnOnly = (state.live.lastError.startsWith("пропущено")
-          || state.live.lastError.startsWith("FINRESP пустой")
-          || state.live.lastError.startsWith("Нет сигнала")
-          || state.live.lastError.startsWith("Сигнал по"))
-          && !state.live.lastError.includes("ошибки заявок");
-        status.textContent = `${warnOnly ? "внимание" : "ошибка"}: ${state.live.lastError}`;
-      }
-      else if (state.live.active) {
-        const boot = state.live.candleRefreshBusy
-          || state.live.finrespBootstrapProgress
-          || (isLiveFinrespBootstrapPending() && !liveHasAnyCandles());
-        if (boot) {
-          const src = liveCandleSourceEffectiveLabel();
-          const prog = state.live.finrespBootstrapProgress;
-          const progHint = prog ? ` ${prog.done}/${prog.total}` : "";
-          status.textContent = `подготовка: свечи ${src} и FINRESP${progHint}…`;
-        } else {
-          const { calcEnd, freshest } = liveMoexBarTimes(state.packs);
-          const bar = formatMoexBarTime(calcEnd || state.live.lastCandleBarTime);
-          const freshHint = freshest && calcEnd && freshest > calcEnd
-            ? ` (самый свежий тикер ${formatMoexBarTime(freshest)})`
-            : "";
-          const polled = formatLiveRefreshClock(state.live.lastCandleRefreshAt);
-          const src = liveCandleSourceEffectiveLabel();
-          const busy = state.live.candleRefreshBusy ? " · обновление свечей…" : "";
-          const sandboxHint = sandbox ? " · песочница (фейк)" : "";
-          status.textContent =
-            `торговля активна${sandboxHint} · источник ${src} · бары до ${bar}${freshHint} · опрос ${polled}${busy}`;
-        }
-      } else {
-        const src = liveCandleSourceEffectiveLabel();
-        const busyParts = [];
-        if (state.live.candleRefreshBusy) busyParts.push("обновление свечей");
-        if (state.live.tradingActionBusy) busyParts.push("операция");
-        if (state.live.finrespBootstrapProgress) {
-          const prog = state.live.finrespBootstrapProgress;
-          busyParts.push(`FINRESP ${prog.done}/${prog.total}`);
-        }
-        const busyHint = busyParts.length ? ` · ${busyParts.join(" · ")}…` : "";
-        status.textContent = sandbox
-          ? `остановлена · песочница (фейк) · источник ${src}${busyHint}`
-          : `остановлена · источник ${src}${busyHint}`;
-      }
-    }
     syncLiveCandleSourceUi(isLive);
     syncLiveCandleDelayUi(isLive);
     const sandboxCb = $("live-sandbox-mode");
@@ -3492,27 +3515,11 @@
   function publishLiveBridgeFromDom() {
     const api = root.__mlFinrespBridge;
     if (!api || typeof api.setLive !== "function") return;
-    const status = $("live-trading-status");
-    const toggle = $("live-trading-toggle");
     const isLive = isLiveMode();
-  try {
-    api.setLive({
-      statusText: status?.textContent ?? "",
-      leverageText: $("live-leverage-value")?.textContent ?? "—",
-      portfolioText: $("live-portfolio-value")?.textContent ?? "—",
-      freeCashText: $("live-free-cash-value")?.textContent ?? "—",
-      commissionText: $("live-commission-paid")?.textContent ?? "0",
-      commissionColor: $("live-commission-paid")?.style.color ?? "#b91c1c",
-      finresultText: $("live-finresult-value")?.textContent ?? "—",
-      statsHintText: $("live-trading-stats-hint")?.textContent ?? "",
-      commissionLabel: $("live-commission-label")?.textContent ?? "",
-      journalMetaText: $("live-trade-history-meta")?.textContent ?? "",
-      toggleText: toggle?.textContent ?? "",
-      toggleActive: !!toggle?.classList.contains("live-trading-toggle--active"),
-      toggleDisabled: liveCriticalToggleDisabled(isLive),
-      sellAllDisabled: liveCriticalSellAllDisabled(isLive)
-    });
-  } catch (_) { /* ignore */ }
+    const sandbox = isLiveSandbox();
+    try {
+      api.setLive(buildLiveBridgePatch(isLive, sandbox));
+    } catch (_) { /* ignore */ }
   }
 
   /** Остановка периодического опроса: `stopLiveTradingPoll`. */
@@ -4464,19 +4471,21 @@
   /** Разрешение id/метаданных: `resolveLiveCandleSource`. */
   function resolveLiveCandleSource() {
     const ui = liveCandleSourceUi();
+    const hasBrokerToken = !!activeBrokerState().token;
     if (ui === "moex") return "moex";
-    if (ui === "tbank") return activeBrokerState().token ? "tbank" : "moex";
-    return activeBrokerState().token ? "tbank" : "moex";
+    if (ui === "tbank" || ui === "auto") return hasBrokerToken ? "broker" : "moex";
+    return hasBrokerToken ? "broker" : "moex";
   }
 
   /** Подпись фактического источника свечей (может отличаться от выбора в select). */
   function liveCandleSourceEffectiveLabel() {
     const ui = liveCandleSourceUi();
-    const labels = { tbank: "T-Bank", moex: "MOEX", cache: "кэш" };
+    const labels = { broker: brokerLabel(), tbank: brokerLabel(), moex: "MOEX", cache: "кэш" };
     const actualKey = state.live.candleSource || resolveLiveCandleSource();
     const actual = labels[actualKey] || actualKey;
-    if (ui === "tbank" && !activeBrokerState().token) return `${actual} (нет токена T-Bank)`;
-    if (ui === "auto" && !activeBrokerState().token) return `${actual} (авто → MOEX)`;
+    if ((ui === "tbank" || ui === "auto") && !activeBrokerState().token) {
+      return ui === "auto" ? `${actual} (авто → MOEX)` : `${actual} (нет токена ${brokerLabel()})`;
+    }
     if (state.live.candleRefreshBusy) return `загрузка ${actual}…`;
     return actual;
   }
@@ -6526,7 +6535,7 @@
 
   /** Live-торговля: `liveReconcileTargets`. */
   function liveReconcileTargets() {
-    const rows = state.lastResult?.perSec || [];
+    const rows = liveFinrespPerSec();
     if (!state.live.manualFlatten) return rows;
     return rows.map((p) => ({ ...p, pos: 0 }));
   }
@@ -6625,7 +6634,7 @@
 
   /** FINRESP ещё не посчитан после старта торговли. */
   function isLiveFinrespBootstrapPending() {
-    return !!state.live.active && !(state.lastResult?.perSec?.length);
+    return !!state.live.active && !liveFinrespReady();
   }
 
   /** Первые минуты после старта live-торговли — не считать задержкой опроса/FINRESP. */
@@ -6674,7 +6683,9 @@
     const { freshest } = liveMoexBarTimes(state.packs);
     const barMs = parseMoexTime(freshest)?.getTime();
     const barLagMs = Number.isFinite(barMs) ? now - barMs : Infinity;
-    const src = state.live.candleSource === "tbank" ? "T-Bank" : (state.live.candleSource === "cache" ? "кэш" : "MOEX");
+    const src = state.live.candleSource === "broker" || state.live.candleSource === "tbank"
+      ? brokerLabel()
+      : (state.live.candleSource === "cache" ? "кэш" : "MOEX");
 
     if (!hasCandles) {
       if (inGrace) return { stale: false, message: "" };
@@ -7015,7 +7026,7 @@ ${referenceBlock}
     snapshotLiveSessionPortfolioBaseline();
     state.live.modelFinresp = 0;
     state.live.modelCommission = 0;
-    const liveSessionHint = "Live-сессия: нажмите «Рассчитать» для FINRESP за период; при опросе live — прирост с момента старта сессии.";
+    const liveSessionHint = "Live-сессия: FINRESP и сделки считаются при опросе свечей; нижний блок «Рассчитать» — только для теоретической оценки.";
     const bridge = window.__mlFinrespBridge;
     if (bridge?.setResults) {
       bridge.setResults({
@@ -7056,7 +7067,7 @@ ${referenceBlock}
     refreshLiveChartsUi();
     void bootstrapLiveChartsSession({ reason: "session-start" });
     renderLiveFinResultStat();
-    startLiveModePoll();
+    if (state.live.active) startLiveModePoll();
     return true;
   }
 
@@ -7661,7 +7672,7 @@ ${referenceBlock}
   async function refreshLiveCandleStreamInner(options) {
     const opts = options || {};
     if (!isLiveMode() || !state.live.chartSession) return false;
-    const needsBootstrap = !liveHasAnyCandles() || !state.lastResult?.perSec?.length;
+    const needsBootstrap = !liveHasAnyCandles() || !liveFinrespReady();
     if (state.live.candleRefreshBusy) return false;
     if (!liveRefreshMayProceed(needsBootstrap)) return false;
     const instruments = selectedInstruments();
@@ -7676,7 +7687,7 @@ ${referenceBlock}
       const byKey = packsByInstrumentKey(state.packs);
       const candleSource = resolveLiveCandleSource();
       let refreshed;
-      if (candleSource === "tbank") {
+      if (candleSource === "broker" || candleSource === "tbank") {
         if (!state.packs.length) {
           if (IS_FILE_PROTOCOL) {
             const cacheBoot = await refreshLiveCacheOnlyPacks(instruments, from, till, interval, byKey);
@@ -7697,7 +7708,7 @@ ${referenceBlock}
         } else {
           refreshed = await refreshLiveTbankTail(instruments, from, till, interval, byKey);
         }
-        state.live.candleSource = "tbank";
+        state.live.candleSource = "broker";
       } else if (IS_FILE_PROTOCOL) {
         refreshed = await refreshLiveCacheOnlyPacks(instruments, from, till, interval, byKey);
         state.live.candleSource = "cache";
@@ -7799,10 +7810,7 @@ ${referenceBlock}
     if (!(vol.maxPositions > 0)) {
       return { ok: false, error: "Max positions должен быть > 0" };
     }
-    if (!state.lastResult?.perSec?.length) {
-      return { ok: false, error: "сначала нажмите «Рассчитать»" };
-    }
-    const meta = state.lastResultMeta;
+    const meta = liveFinrespReady() ? state.lastResultMeta : null;
     const brokerId = readBrokerIdFromUi();
     if (meta?.brokerId && meta.brokerId !== brokerId) {
       return {
@@ -7871,7 +7879,7 @@ ${referenceBlock}
       market: selectedInstruments().find((i) => String(i.sec).toUpperCase() === String(p.sec || "").toUpperCase())?.market || "shares"
     }));
     if (!targets.length) {
-      const n = state.lastResult?.perSec?.length ?? 0;
+      const n = liveFinrespPerSec().length;
       if (n === 0 && (state.live.candleRefreshBusy || isLiveBootstrapWindow())) {
         return;
       }
@@ -8052,11 +8060,11 @@ ${referenceBlock}
    */
   function queueLiveCandleRefreshIfNeeded() {
     if (!isLiveMode() || !state.live.chartSession) return;
-    const needsBootstrap = !liveHasAnyCandles() || !state.lastResult?.perSec?.length;
+    const needsBootstrap = !liveHasAnyCandles() || !liveFinrespReady();
     if (!liveRefreshMayProceed(needsBootstrap)) return;
     setTimeout(() => {
       if (!isLiveMode() || !state.live.chartSession) return;
-      const boot = !liveHasAnyCandles() || !state.lastResult?.perSec?.length;
+      const boot = !liveHasAnyCandles() || !liveFinrespReady();
       if (!liveRefreshMayProceed(boot)) return;
       void refreshLiveCandleStream({ silent: true }).catch(() => {});
     }, 50);
@@ -8069,8 +8077,8 @@ ${referenceBlock}
     if (!isLiveMode() || !state.live.chartSession) return false;
     const ok = await refreshLiveCandleStream({ silent: true });
     if (!ok) return false;
-    if (state.lastResult?.perSec?.length) refreshLiveChartsUi();
-    if (state.live.active && state.lastResult?.perSec?.length && !state.live.tradingActionBusy) {
+    if (liveFinrespReady()) refreshLiveChartsUi();
+    if (state.live.active && liveFinrespReady() && !state.live.tradingActionBusy) {
       await liveTradingReconcile();
       queueLiveChartsRefresh();
     }
@@ -8186,7 +8194,13 @@ ${referenceBlock}
 
     ensureLiveChartSession();
     if (sandbox) {
-      await prepareSandboxTradingSession();
+      try {
+        await prepareSandboxTradingSession();
+      } catch (err) {
+        state.live.lastError = err.message || String(err);
+        syncLiveTradingUi();
+        return;
+      }
       state.live.sessionPositionBaseline = sandboxPositionsByTicker();
       state.live.active = true;
       state.live.tradingStartedAt = new Date().toISOString();
@@ -8466,8 +8480,6 @@ ${referenceBlock}
     syncLiveTradingUi();
     if (isLive) {
       try {
-        const needsUnlock = !!safeStorageGet(brokerTokenStoreKey()) && !activeBrokerState().token;
-        if (!needsUnlock) ensureLiveChartSession();
         if (activeBrokerState().token) startLiveStatsPoll();
       } catch (err) {
         noteLiveTech("live-chart-session", err?.message || String(err));
@@ -8954,8 +8966,19 @@ ${referenceBlock}
     openBrokerPassphraseUi();
     return false;
   }
+  /** Синхронизировать lastBrokerProviderId и панели настроек без смены брокера. */
+  function syncBrokerProviderFromDom() {
+    lastBrokerProviderId = readBrokerIdFromUi();
+    syncBrokerSettingsPanels();
+  }
+
   /** Подпрограмма `handleAccountModeUserChange`. */
   async function handleAccountModeUserChange() {
+    if (window.__mlFinresp?.deferBrokerConnect) {
+      state.accountMode = readAccountModeFromUi();
+      syncAccountModeUi();
+      return;
+    }
     if ($("account-mode")?.value !== "live" && state.live.active) stopLiveTradingOnModeChange();
     const prevMode = state.accountMode || readAccountModeFromUi();
     state.accountMode = readAccountModeFromUi();
@@ -9054,6 +9077,7 @@ ${referenceBlock}
       unlockTbankTokenInteractive,
       unlockAlorTokenInteractive,
       syncBrokerSettingsPanels,
+      syncBrokerProviderFromDom,
       readBrokerIdFromUi,
       activeBrokerState,
       brokerTokenStoreKey,

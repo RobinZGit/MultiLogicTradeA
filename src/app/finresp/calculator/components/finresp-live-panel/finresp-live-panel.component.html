@@ -3,7 +3,7 @@
 <div class="live-trading-leverage"><b>Плечо</b><span id="live-leverage-value">{{ live.leverageText }}</span></div>
 <div class="live-trading-banner-main">
 <strong class="live-trading-title">Реальная торговля</strong>
-<span class="live-trading-badge" id="live-trading-status">{{ live.statusText }}</span>
+<span class="live-trading-badge" id="live-trading-status" [class.live-trading-badge--error]="live.statusIsError" [class.live-trading-badge--warn]="live.statusIsWarn">{{ live.statusText }}</span>
 <div class="live-sandbox-row">
 <label class="live-sandbox-label" for="live-sandbox-mode" title="Заявки на биржу не отправляются — симуляция портфеля; продажа без позиции открывает шорт (маржа)">
 <input type="checkbox" id="live-sandbox-mode"> Песочница (фейк)
@@ -26,8 +26,8 @@
 <p class="live-trading-candle-alert" id="live-candle-delay-alert" hidden role="alert"></p>
 <div class="live-trading-toolbar">
 <div class="live-trading-actions">
-<button type="button" class="live-trading-btn live-trading-btn-start" id="live-trading-toggle" [class.live-trading-toggle--active]="live.toggleActive">{{ live.toggleText }}</button>
-<button type="button" class="live-trading-btn live-trading-btn-sell" id="live-trading-sell-all" title="Закрыть все открытые позиции по рынку (лонг — продажа, шорт — покупка)">Закрыть все позиции</button>
+<button type="button" class="live-trading-btn live-trading-btn-start" id="live-trading-toggle" [class.live-trading-toggle--active]="live.toggleActive" [class.live-critical-control]="live.toggleActive" [disabled]="live.toggleDisabled">{{ live.toggleText }}</button>
+<button type="button" class="live-trading-btn live-trading-btn-sell" id="live-trading-sell-all" title="Закрыть все открытые позиции по рынку (лонг — продажа, шорт — покупка)" [disabled]="live.sellAllDisabled">Закрыть все позиции</button>
 </div>
 <div class="live-trading-controls">
 <label for="live-order-type" title="Для ручной заявки. Робот всегда выставляет рыночные заявки.">Тип заявки</label>
@@ -36,9 +36,9 @@
 <option value="limit">Лимитная</option>
 </select>
 <label for="live-candle-source">Свечи live</label>
-<select id="live-candle-source" title="T-Bank — свежие бары с брокера; MOEX ISS — бесплатно, но с задержкой 10–20 мин">
-<option value="auto" selected>T-Bank (если токен)</option>
-<option value="tbank">Только T-Bank</option>
+<select id="live-candle-source" title="Брокер — свежие бары с API выбранного брокера; MOEX ISS — бесплатно, задержка 10–20 мин">
+<option value="auto" selected>Брокер (если токен)</option>
+<option value="tbank">Только брокер</option>
 <option value="moex">Только MOEX ISS</option>
 </select>
 <span class="live-candle-source-hint" id="live-candle-source-hint" hidden></span>

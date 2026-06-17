@@ -42,6 +42,8 @@ export const EMPTY_FINRESP_RESULTS: FinrespResultsViewModel = {
 
 export interface FinrespLiveViewModel {
   statusText: string;
+  statusIsError: boolean;
+  statusIsWarn: boolean;
   leverageText: string;
   portfolioText: string;
   freeCashText: string;
@@ -61,6 +63,8 @@ export interface FinrespLiveViewModel {
 
 export const EMPTY_FINRESP_LIVE: FinrespLiveViewModel = {
   statusText: 'остановлена',
+  statusIsError: false,
+  statusIsWarn: false,
   leverageText: '—',
   portfolioText: '—',
   freeCashText: '—',

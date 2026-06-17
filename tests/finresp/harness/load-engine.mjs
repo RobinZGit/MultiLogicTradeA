@@ -22,7 +22,9 @@ const INDICATOR_SCRIPTS = [
   'cci.js',
   'macd.js',
   'rand.js',
-  join('tot', 'totstoch.js')
+  join('tot', 'totstoch.js'),
+  join('ctg', 'contango-series.js'),
+  join('ctg', 'ctgstoch.js')
 ].map((p) => join(INDICATOR_DIR, p));
 const LOGIC_SCRIPTS = [
   'parser.js',

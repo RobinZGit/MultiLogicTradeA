@@ -25,7 +25,7 @@ function packsN(n, barCount) {
 }
 
 function ftsSpec() {
-  return E.resolveLogicSpec("FTS", {}, E.DEFAULT_PARAMS, { stoch: true, totstoch: true });
+  return E.resolveLogicSpec("FTS", {}, E.DEFAULT_PARAMS, { stoch: true, ctgstoch: true });
 }
 
 describe("simulateAutoReversesPick (@@AutoReverses)", () => {

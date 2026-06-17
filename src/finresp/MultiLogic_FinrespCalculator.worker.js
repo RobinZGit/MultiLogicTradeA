@@ -12,6 +12,8 @@
   imp("indicators/atr.js");
   imp("indicators/stoch.js");
   imp("indicators/tot/totstoch.js");
+  imp("indicators/ctg/contango-series.js");
+  imp("indicators/ctg/ctgstoch.js");
   imp("indicators/linreg.js");
   imp("indicators/bollinger.js");
   imp("indicators/momentum.js");
@@ -48,12 +50,13 @@
   imp("MultiLogic_FinrespCalculator.engine.js");
 
   self.onmessage = async (e) => {
-    const { id, packs, spec, startIdx, endIdx, params, volConfig, stopperConfig, randomPriceShift } = e.data || {};
+    const { id, packs, spec, startIdx, endIdx, params, volConfig, stopperConfig, randomPriceShift, ctgSpotPacks } = e.data || {};
     try {
       const E = self.MultiLogicFinrespEngine;
       if (!E?.runMulti) throw new Error("engine not loaded in worker");
       const runOpts = {
         ...(randomPriceShift ? { signalPacks: E.applyRandomPriceShift(packs) } : {}),
+        ...(ctgSpotPacks ? { ctgSpotPacks } : {}),
         onProgress: (pct, text, detail) => {
           self.postMessage({ id, type: "progress", pct, text, detail: detail || null });
         }

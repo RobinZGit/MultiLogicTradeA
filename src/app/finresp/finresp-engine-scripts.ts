@@ -7,6 +7,8 @@ export const FINRESP_ENGINE_SCRIPTS = [
   'indicators/atr.js',
   'indicators/stoch.js',
   'indicators/tot/totstoch.js',
+  'indicators/ctg/contango-series.js',
+  'indicators/ctg/ctgstoch.js',
   'indicators/linreg.js',
   'indicators/bollinger.js',
   'indicators/momentum.js',

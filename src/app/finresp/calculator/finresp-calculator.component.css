@@ -370,6 +370,17 @@ body.calc-running .live-trading-panel--active .live-trading-toolbar{
 }
 .live-trading-panel--sandbox .live-trading-title{color:#14532d;}
 .live-trading-panel--sandbox .live-trading-badge{background:#166534;}
+.live-trading-badge--error{background:#991b1b !important;color:#fff !important;}
+.live-trading-badge--warn{background:#b45309 !important;color:#fff !important;}
+#calc-run.calc-run--highlight{
+  outline:3px solid #f59e0b;
+  outline-offset:2px;
+  animation:calc-run-pulse 1s ease-in-out 3;
+}
+@keyframes calc-run-pulse{
+  0%,100%{outline-color:#f59e0b;}
+  50%{outline-color:#ef4444;}
+}
 .live-trading-panel--sandbox .live-trading-warn{color:#166534;}
 .live-trading-panel--sandbox .live-trading-toolbar{border-color:#166534;box-shadow:0 2px 10px rgba(22,101,52,.1);}
 .live-trading-panel--sandbox .live-trading-btn-start{background:#166534;box-shadow:0 3px 10px rgba(22,101,52,.22);}

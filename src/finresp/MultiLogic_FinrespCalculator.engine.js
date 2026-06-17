@@ -75,6 +75,7 @@
     { key: "atr", label: "ATR" },
     { key: "stoch", label: "Stoch" },
     { key: "totstoch", label: "TotStoch" },
+    { key: "ctgstoch", label: "CtgStoch" },
     { key: "linreg", label: "LinReg" },
     { key: "macd", label: "MACD" },
     { key: "cci", label: "CCI" },
@@ -672,7 +673,60 @@
     if (k === "vwma") return "vwap";
     if (k === "random") return "rand";
     if (k === "totstoch" || k === "tot-stoch" || k === "tot_stoch" || k === "totalstoch") return "totstoch";
+    if (k === "ctgstoch" || k === "ctg-stoch" || k === "ctg_stoch" || k === "contangostoch") return "ctgstoch";
     return k;
+  }
+
+  /** Подпрограмма `parsedUsesCtgStoch`. */
+  function parsedUsesCtgStoch(parsed) {
+    if (!parsed) return false;
+    for (const a of [...(parsed.opAtoms || []), ...(parsed.clAtoms || [])]) {
+      if (indicatorKey(a?.kind) === "ctgstoch") return true;
+    }
+    return false;
+  }
+
+  /** Подпрограмма `specUsesCtgStoch`. */
+  function specUsesCtgStoch(spec) {
+    if (!spec || spec.disabled) return false;
+    if (spec.type === "logic_line") return parsedUsesCtgStoch(spec.parsed);
+    if (spec.type === "multi_logic") {
+      return (spec.specs || []).some((s) => s?.type === "logic_line" && parsedUsesCtgStoch(s.parsed));
+    }
+    return false;
+  }
+
+  /** Подпрограмма `resolveCtgCandles`. */
+  function resolveCtgCandles(signalCandles, ctgSpotPacks, sec) {
+    const buildFn = IND.buildContangoCandles;
+    const key = String(sec || signalCandles?.[0]?.sec || "").trim();
+    const spot = ctgSpotPacks && (ctgSpotPacks[key] || ctgSpotPacks.get?.(key));
+    if (typeof buildFn === "function" && spot?.length) return buildFn(signalCandles, spot);
+    return signalCandles;
+  }
+
+  /** Подпрограмма `indicatorCacheExtrasForParsed`. */
+  function indicatorCacheExtrasForParsed(signalCandles, parsed, opts) {
+    if (!parsedUsesCtgStoch(parsed)) return null;
+    const sec = opts?.sec || signalCandles?.[0]?.sec || "?";
+    return { ctgCandles: resolveCtgCandles(signalCandles, opts?.ctgSpotPacks, sec) };
+  }
+
+  /** Подпрограмма `createLogicIndicatorCache`. */
+  function createLogicIndicatorCache(signalCandles, parsed, opts) {
+    if (opts?.indicatorCache) return opts.indicatorCache;
+    const extras = indicatorCacheExtrasForParsed(signalCandles, parsed, opts);
+    return extras ? new IndicatorCache(signalCandles, extras) : new IndicatorCache(signalCandles);
+  }
+
+  /** Подпрограмма `createStackIndicatorCache`. */
+  function createStackIndicatorCache(signalCandles, parsedList, opts) {
+    if (opts?.indicatorCache) return opts.indicatorCache;
+    if (!(parsedList || []).some(parsedUsesCtgStoch)) return new IndicatorCache(signalCandles);
+    const sec = opts?.sec || signalCandles?.[0]?.sec || "?";
+    return new IndicatorCache(signalCandles, {
+      ctgCandles: resolveCtgCandles(signalCandles, opts?.ctgSpotPacks, sec)
+    });
   }
 
   /** Разбор строки Op/Cl в AST/spec для симуляции одной логики. */
@@ -787,11 +841,13 @@
       this.candles = candles;
       this.closes = candles.map((c) => c.close);
       this.totCandles = ex.totCandles || candles;
+      this.ctgCandles = ex.ctgCandles || candles;
       this._sma = new Map();
       this._cma = new Map();
       this._atr = new Map();
       this._stoch = new Map();
       this._totStoch = new Map();
+      this._ctgStoch = new Map();
       this._linreg = new Map();
       this._linregAtr = new Map();
       this._bollinger = new Map();
@@ -828,6 +884,14 @@
         this._totStoch.set(key, fn(this.totCandles, k1, k2, d));
       }
       return this._totStoch.get(key);
+    }
+    ctgStoch(k1, k2, d) {
+      const key = `${k1}-${k2}-${d}`;
+      if (!this._ctgStoch.has(key)) {
+        const fn = IND.ctgStochSeries || stochSeries;
+        this._ctgStoch.set(key, fn(this.ctgCandles, k1, k2, d));
+      }
+      return this._ctgStoch.get(key);
     }
     linreg(len, dev) {
       const key = `${len};${dev}`;
@@ -928,6 +992,13 @@
     if (kind === "totstoch") {
       const k1 = pm.K1 || 14, k2 = pm.K2 || 3, d = pm.D || 3;
       const st = cache.totStoch(k1, k2, d);
+      const k = st.k[idx];
+      if (k == null) return false;
+      return evalThreshold(sig, k, close);
+    }
+    if (kind === "ctgstoch") {
+      const k1 = pm.K1 || 14, k2 = pm.K2 || 3, d = pm.D || 3;
+      const st = cache.ctgStoch(k1, k2, d);
       const k = st.k[idx];
       if (k == null) return false;
       return evalThreshold(sig, k, close);
@@ -1654,7 +1725,7 @@
     const parsedList = prep?.parsedList
       || logicSpecs.map((s) => applySlTpParams({ ...s.parsed }, p));
     const signalCandles = opts.signalCandles || candles;
-    const cache = opts.indicatorCache || new IndicatorCache(signalCandles);
+    const cache = opts.indicatorCache || createStackIndicatorCache(signalCandles, parsedList, opts);
     const atrByLen = prep?.atrByLen || (() => {
       const atrLenSet = new Set(parsedList.map((x) => x.slTpAtrLen || DEFAULT_PARAMS.slTpAtrLen));
       return new Map([...atrLenSet].map((len) => [len, cache.atr(len)]));
@@ -1807,7 +1878,7 @@
     const opts = options || {};
     const logicId = opts.logicId || parsed?.logicId || "logic";
     const signalCandles = opts.signalCandles || candles;
-    const cache = opts.indicatorCache || new IndicatorCache(signalCandles);
+    const cache = opts.indicatorCache || createLogicIndicatorCache(signalCandles, parsed, opts);
     const atrLen = parsed.slTpAtrLen || DEFAULT_PARAMS.slTpAtrLen;
     const needAtrStops = (parsed.slAtr > 0 || parsed.tpAtr > 0);
     const atrSlTp = needAtrStops ? cache.atr(atrLen) : null;
@@ -2906,6 +2977,26 @@
         }
       }
     }
+    const wantCtg = specUsesCtgStoch(spec);
+    if (wantCtg && ctxs.length) {
+      const ctgSpotPacks = options?.ctgSpotPacks;
+      for (const ctx of ctxs) {
+        const ctgCandles = resolveCtgCandles(ctx.signalCandles, ctgSpotPacks, ctx.sec);
+        const extras = { ctgCandles };
+        if (ctx.indicatorCache?.totCandles) extras.totCandles = ctx.indicatorCache.totCandles;
+        ctx.indicatorCache = new IndicatorCache(ctx.signalCandles, extras);
+        const gridPrep = buildGridSimulationPrep(spec, params, volConfig, ctx.indicatorCache, options);
+        ctx.preparedRun = gridPrep;
+        ctx.preparedStack = gridPrep.preparedStack || ctx.preparedStack;
+        if (ctx.preparedStack && !ctx.preparedStack.atrByLen && ctx.preparedStack.parsedList?.length > 1) {
+          const atrLenSet = new Set(ctx.preparedStack.parsedList.map((x) => x.slTpAtrLen || DEFAULT_PARAMS.slTpAtrLen));
+          ctx.preparedStack = {
+            ...ctx.preparedStack,
+            atrByLen: new Map([...atrLenSet].map((len) => [len, ctx.indicatorCache.atr(len)]))
+          };
+        }
+      }
+    }
     return { ctxs, gridPrepBase };
   }
 
@@ -3666,6 +3757,73 @@
       if (start > 20000) break;
     }
     return exact?.SECID || front?.SECID || null;
+  }
+
+  const futuresAssetCodeCache = new Map();
+
+  /** Разрешение id/метаданных: `resolveFuturesAssetCode`. */
+  async function resolveFuturesAssetCode(secOrPrefix, period) {
+    const moexSec = await resolveFuturesMoexSec(secOrPrefix, period);
+    const lookup = String(moexSec || secOrPrefix || "").trim().toUpperCase();
+    if (!lookup) return null;
+    if (futuresAssetCodeCache.has(lookup)) return futuresAssetCodeCache.get(lookup);
+    const today = new Date().toISOString().slice(0, 10);
+    const from = normMoexDate(period?.from) || today;
+    const till = normMoexDate(period?.till) || from;
+    let assetCode = null;
+    let start = 0;
+    while (true) {
+      const url = new URL("https://iss.moex.com/iss/engines/futures/markets/forts/securities.json");
+      url.searchParams.set("iss.meta", "off");
+      url.searchParams.set("securities.columns", "SECID,ASSETCODE,LASTTRADEDATE,FIRSTTRADEDATE,BOARDID");
+      url.searchParams.set("start", String(start));
+      const data = await moexFetchJson(url, lookup);
+      const chunk = data?.securities?.data || [];
+      const cols = data?.securities?.columns || [];
+      if (!chunk.length) break;
+      const secCol = cols.indexOf("SECID");
+      const assetCol = cols.indexOf("ASSETCODE");
+      const boardCol = cols.indexOf("BOARDID");
+      const ltdCol = cols.indexOf("LASTTRADEDATE");
+      const ftdCol = cols.indexOf("FIRSTTRADEDATE");
+      for (const row of chunk) {
+        if (boardCol >= 0 && row[boardCol] !== "RFUD") continue;
+        const o = {
+          SECID: row[secCol],
+          ASSETCODE: row[assetCol],
+          LASTTRADEDATE: ltdCol >= 0 ? row[ltdCol] : null,
+          FIRSTTRADEDATE: ftdCol >= 0 ? row[ftdCol] : null
+        };
+        if (!o.ASSETCODE || !futuresMatchesCalcPeriod(o, from, till)) continue;
+        if (String(o.SECID || "").toUpperCase() !== lookup) continue;
+        assetCode = String(o.ASSETCODE || "").trim();
+        break;
+      }
+      if (assetCode) break;
+      if (chunk.length < 100) break;
+      start += chunk.length;
+      if (start > 20000) break;
+    }
+    if (assetCode) futuresAssetCodeCache.set(lookup, assetCode);
+    return assetCode;
+  }
+
+  /** Загрузка spot-свечей базового актива для фьючерсов (контанго). */
+  async function loadCtgSpotPacks(packs, from, till, interval, cache) {
+    const out = {};
+    const seen = new Set();
+    for (const pack of packs || []) {
+      const c0 = pack?.[0];
+      if (!c0 || c0.market !== "futures") continue;
+      const sec = String(c0.sec || "").trim();
+      if (!sec || seen.has(sec)) continue;
+      seen.add(sec);
+      const asset = await resolveFuturesAssetCode(sec, { from, till });
+      if (!asset) continue;
+      const r = await loadInstrumentSec(asset, from, till, interval, "shares", cache);
+      if (r.ok && r.pack?.length) out[sec] = r.pack;
+    }
+    return out;
   }
 
   /** Разрешение id/метаданных: `resolveFuturesContract`. */
@@ -4449,6 +4607,7 @@
     if (workUnits.length > 1) {
       const synced = runPacksOnTimeGrid(packs, workUnits, times, spec, params, volConfig, {
         signalPacks,
+        ctgSpotPacks: opts.ctgSpotPacks,
         buildIndicatorCache: !!cfg,
         shouldCancel: opts.shouldCancel,
         progressStride: gridYieldStride(syncTotalSteps),
@@ -4502,6 +4661,7 @@
         const runOpts = {
           sec,
           portfolioCap,
+          ctgSpotPacks: opts.ctgSpotPacks,
           ...(signalPacks ? { signalCandles } : {}),
           ...(indicatorCache ? { indicatorCache } : {}),
           ...(preparedRun ? { preparedRun } : {}),
@@ -4641,6 +4801,7 @@
     if (workUnits.length > 1) {
       const synced = await runPacksOnTimeGridAsync(packs, workUnits, times, spec, params, volConfig, {
         signalPacks,
+        ctgSpotPacks: opts.ctgSpotPacks,
         buildIndicatorCache: !!cfg,
         shouldCancel: opts.shouldCancel,
         onStep: async ({ doneSteps, totalSteps, sec, candleTime }) => {
@@ -4694,6 +4855,7 @@
         const runOpts = {
           sec,
           portfolioCap,
+          ctgSpotPacks: opts.ctgSpotPacks,
           ...(signalPacks ? { signalCandles } : {}),
           ...(indicatorCache ? { indicatorCache } : {}),
           ...(preparedRun ? { preparedRun } : {}),
@@ -4851,11 +5013,14 @@
     loadManyBatched,
     loadManyDetailed,
     loadInstrumentSec,
+    loadCtgSpotPacks,
     refreshLiveMoexPacks,
     mergeCandleSeries,
     listShareTickers,
     listFuturesPrefixes,
     resolveFuturesContract,
+    resolveFuturesAssetCode,
+    specUsesCtgStoch,
     DEFAULT_STOCK_TICKERS_RAW,
     DEFAULT_FUTURES_PREFIXES_RAW,
     parseTickerPrefixes,

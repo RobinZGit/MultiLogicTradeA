@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-broker-switch-debounce-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-live-no-calc-required-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -901,6 +901,7 @@
   const state = {
     _initOk: false,
     packs: [],
+    ctgSpotPacks: {},
     shareList: [],
     futuresList: [],
     futuresFromMoex: false,
@@ -1338,6 +1339,22 @@
     syncObTrendConfirmUi();
   }
 
+  /** Брокер из config: Алор только если сохранён его токен, иначе T-Bank. */
+  function resolveBrokerProviderFromConfig(cfg) {
+    let broker = "tbank";
+    if (cfg?.brokerProvider === "alor" || cfg?.brokerProvider === "tbank") {
+      broker = cfg.brokerProvider;
+    }
+    if (broker === "alor") {
+      try {
+        if (!localStorage.getItem(ALOR_TOKEN_STORE_KEY)) broker = "tbank";
+      } catch (_) {
+        broker = "tbank";
+      }
+    }
+    return broker;
+  }
+
   /** Восстановление формы и state из сохранённого config. */
   function applySavedConfig() {
     const cfg = readSavedConfig();
@@ -1347,9 +1364,7 @@
       if (cfg.accountMode === "tbank" || cfg.accountMode === "paper" || cfg.accountMode === "live") {
         $("account-mode").value = cfg.accountMode;
       }
-      if (cfg.brokerProvider === "alor" || cfg.brokerProvider === "tbank") {
-        setValueIfExists("broker-provider", cfg.brokerProvider);
-      }
+      setValueIfExists("broker-provider", resolveBrokerProviderFromConfig(cfg));
       if (cfg.alor?.portfolioId != null) setValueIfExists("alor-portfolio-id", cfg.alor.portfolioId);
       if (cfg.alor?.exchange != null) setValueIfExists("alor-exchange", cfg.alor.exchange);
       setValueIfExists("calc-tf", cfg.timeframe);
@@ -1371,7 +1386,7 @@
       restoreBrokerDeposit(state.tbank, cfg.brokers?.tbank);
       restoreBrokerDeposit(state.alor, cfg.brokers?.alor);
       if (!cfg.brokers && cfg.volume?.deposit != null) {
-        const cred = cfg.brokerProvider === "alor" ? state.alor : state.tbank;
+        const cred = resolveBrokerProviderFromConfig(cfg) === "alor" ? state.alor : state.tbank;
         cred.depositRub = +cfg.volume.deposit || null;
         cred.depositProvisional = true;
         cred.depositLoaded = false;
@@ -1517,6 +1532,7 @@
       syncObTrendConfirmUi();
       if (!state.tbank.token) state.tbank.depositLoaded = false;
       if (!state.alor.token) state.alor.depositLoaded = false;
+      syncBrokerProviderFromDom?.();
       syncVolDepositDomFromBroker?.();
       return true;
     } finally {
@@ -2091,7 +2107,7 @@
     snapshotLiveSessionPortfolioBaseline, liveFreeCashRub, liveFinResultRub,
     requireTbankDepositForRun, initAccountMode, connectTbankAndLoadDeposit,
     connectTbankForLive, saveTbankToken, saveAlorToken, unlockTbankTokenInteractive, unlockAlorTokenInteractive,
-    syncBrokerSettingsPanels, readBrokerIdFromUi, activeBrokerState, brokerTokenStoreKey,
+    syncBrokerSettingsPanels, syncBrokerProviderFromDom, readBrokerIdFromUi, activeBrokerState, brokerTokenStoreKey,
     onBrokerProviderChange, resetBrokerInst, setAlorStatus,
     persistBrokerDepositFromDom, syncVolDepositDomFromBroker, activeView, clearLiveRuntimeBroker,
     ensureTbankTokenUnlocked, loadTbankAccounts, loadTbankDeposit, fillTbankAccounts,
@@ -2141,6 +2157,9 @@
     const reverseSignals = !!$("param-reverse-signals")?.checked;
     const opts = reverseSignals ? { reverseSignals } : {};
     if (signalPacks) opts.signalPacks = signalPacks;
+    if (state.ctgSpotPacks && Object.keys(state.ctgSpotPacks).length) {
+      opts.ctgSpotPacks = state.ctgSpotPacks;
+    }
     return Object.keys(opts).length ? opts : undefined;
   }
 
@@ -2756,6 +2775,7 @@
   async function finishCancelledRun(runGen, loadedData) {
     if (loadedData?.packs?.length) {
       state.packs = loadedData.packs;
+      state.ctgSpotPacks = loadedData.ctgSpotPacks || {};
       state.failedInstruments = loadedData.failures || [];
       state.lastLoadMeta = {
         periodKey: loadedData.periodKey,
@@ -2823,6 +2843,7 @@
     const worker = getCalcWorker();
     const progressOpts = {
       ...(randomPriceShift ? { signalPacks: E.applyRandomPriceShift(packs) } : {}),
+      ...(ro.ctgSpotPacks ? { ctgSpotPacks: ro.ctgSpotPacks } : {}),
       shouldCancel: ro.shouldCancel,
       ...(ro.silent ? {} : { onProgress: buildRunProgressHandler(ro) })
     };
@@ -2855,7 +2876,11 @@
       };
       worker.addEventListener("message", onMsg);
       worker.addEventListener("error", onErr);
-      worker.postMessage({ id, packs, spec, startIdx: a, endIdx: b, params, volConfig, stopperConfig: sc, randomPriceShift: !!randomPriceShift });
+      worker.postMessage({
+        id, packs, spec, startIdx: a, endIdx: b, params, volConfig, stopperConfig: sc,
+        randomPriceShift: !!randomPriceShift,
+        ctgSpotPacks: ro.ctgSpotPacks || undefined
+      });
     });
   }
 
@@ -3537,8 +3562,8 @@
       if (s === "GrOk") return "волатильность/ATR растёт (есть движение)";
       return "условие по ATR";
     }
-    if (k === "Stoch" || k === "TotStoch") {
-      const name = k === "TotStoch" ? "TotStoch" : "Stoch";
+    if (k === "Stoch" || k === "TotStoch" || k === "CtgStoch") {
+      const name = k === "TotStoch" ? "TotStoch" : k === "CtgStoch" ? "CtgStoch" : "Stoch";
       if (/K<=\s*10/.test(s) || /K<=\s*20/.test(s)) return `${name}: перепроданность (низкие K)`;
       if (/K>=\s*90/.test(s) || /K>=\s*80/.test(s)) return `${name}: перекупленность (высокие K)`;
       return `${name}: условие по K/D`;
@@ -7191,10 +7216,16 @@ ${referenceBlock}
       if (!wantKeys.has(key)) byKey.delete(key);
     }
     const packs = orderPacksForInstruments(instruments, byKey);
+    const hasFutures = instruments.some((i) => i.market === "futures");
+    let ctgSpotPacks = {};
+    if (hasFutures && packs.length) {
+      ctgSpotPacks = await E.loadCtgSpotPacks(packs, from, till, interval, state.candleCache || null);
+    }
     return {
       packs,
       failures: failures.filter((f) => wantKeys.has(instrumentKey({ sec: f.sec, market: f.market }))),
-      periodKey
+      periodKey,
+      ctgSpotPacks
     };
   }
 
@@ -7271,6 +7302,7 @@ ${referenceBlock}
         throw new Error(`MOEX не вернул свечи ни по одному инструменту${sample ? ` (${sample}${tail})` : ""}.`);
       }
       state.packs = loadedData.packs;
+      state.ctgSpotPacks = loadedData.ctgSpotPacks || {};
       state.failedInstruments = loadedData.failures;
       state.windowSkipped = [];
       resetEquityConfigMarkers();
@@ -7428,13 +7460,11 @@ ${referenceBlock}
       if (toggleBtn) {
         e.preventDefault();
         e.stopPropagation();
-        if (state.live.active || !toggleBtn.disabled) {
-          toggleLiveTrading().catch((err) => {
-            state.live.lastError = err.message;
-            syncLiveTradingUi();
-            noteLiveTech("toggleLiveTrading", err.message);
-          });
-        }
+        toggleLiveTrading().catch((err) => {
+          state.live.lastError = err.message;
+          syncLiveTradingUi();
+          noteLiveTech("toggleLiveTrading", err.message);
+        });
         return;
       }
       const sellBtn = e.target?.closest?.("#live-trading-sell-all");
@@ -7774,6 +7804,35 @@ ${referenceBlock}
   bindLivePanelCollapsibleToggles();
   }
 
+  let liveInitCompleted = false;
+
+  /** Песочница/live и bootstrap брокера — один раз после готовности Angular-формы. */
+  async function completeLiveInitAfterFormReady() {
+    if (liveInitCompleted) return;
+    liveInitCompleted = true;
+    window.__mlFinresp.deferBrokerConnect = false;
+    syncBrokerProviderFromDom?.();
+    const sandboxLive = isLiveMode() && !!$("live-sandbox-mode")?.checked;
+    if (isTbankBackedMode()) {
+      await bootstrapBrokerOnPageInit();
+    }
+    if (sandboxLive) {
+      await yieldToUi();
+      await enableLiveSandbox().catch((err) => {
+        noteLiveTech("live-sandbox-init", err.message);
+      });
+      syncLiveTradingUi();
+    } else if (isLiveMode()) {
+      void connectTbankForLive().catch((err) => {
+        noteLiveTech("live-init-for-live", err.message);
+      });
+    }
+    if (isLiveMode()) {
+      void refreshLiveManualLimitPrice({ force: true }).catch(() => {});
+    }
+    updateTechInfo("init-ok");
+  }
+
   /** Восстановить Angular-форму из localStorage после рендера компонентов. */
   function finalizeAngularFormFromConfig() {
     const cfg = readSavedConfig();
@@ -7803,9 +7862,13 @@ ${referenceBlock}
     syncAccountModeUi();
     bootstrapLiveTradingPanelVisibility();
     api?.onBootReady?.();
+    void completeLiveInitAfterFormReady().catch((err) => {
+      noteTechError(`live-init-after-form: ${err?.message || err}`);
+    });
   }
 
   try {
+    window.__mlFinresp.deferBrokerConnect = true;
     fillLogicSelect();
     fillLogicEditor();
     initIndicatorToggles();
@@ -7841,37 +7904,9 @@ ${referenceBlock}
     initCandleCache();
     applyUiLocks();
     syncAccountModeUi();
-    const runLiveInit = async () => {
-      state._initOk = true;
-      syncPageVersionBadge();
-      syncProtocolUi();
-      const sandboxLive = isLiveMode() && !!$("live-sandbox-mode")?.checked;
-      if (isTbankBackedMode()) {
-        await bootstrapBrokerOnPageInit();
-      }
-      if (sandboxLive) {
-        await yieldToUi();
-        await enableLiveSandbox().catch((err) => {
-          noteLiveTech("live-sandbox-init", err.message);
-        });
-        syncLiveTradingUi();
-      } else if (isLiveMode()) {
-        void connectTbankForLive().catch((err) => {
-          noteLiveTech("live-init-for-live", err.message);
-        });
-      }
-      if (isLiveMode()) {
-        void refreshLiveManualLimitPrice({ force: true }).catch(() => {});
-      }
-      updateTechInfo("init-ok");
-    };
-    runLiveInit().catch((err) => {
-      noteTechError(`live-init: ${err?.message || err}`);
-      state._initOk = true;
-      syncPageVersionBadge();
-      syncProtocolUi();
-      updateTechInfo("init-ok-partial");
-    });
+    state._initOk = true;
+    syncPageVersionBadge();
+    syncProtocolUi();
   } catch (err) {
     noteTechError(`init: ${err?.message || err}`);
     setCalcStatus(
