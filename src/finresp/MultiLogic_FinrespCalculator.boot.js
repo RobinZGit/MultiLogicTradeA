@@ -3635,8 +3635,10 @@
     if (!protocolHasFullRows(proto)) {
       setCalcStatus(
         baseMsg
-        + " Протокол v1 содержит только события сделок (events), без полного ряда свечей/close по каждому бару — графики и пересчёт по барам восстановить нельзя. Нужно доработать протокол: добавить time+close (и лучше pos/cash) для каждой строки (rows) или компактный series."
+        + " В фоне начнётся загрузка свечей по тикерам и периоду из протокола (MOEX/кэш), затем пересчёт FINRESP."
       );
+      // Auto-load candles and re-run after protocol load (best effort).
+      setTimeout(() => { void loadCandlesForLoadedProtocol(true); }, 0);
       return;
     }
 
@@ -3647,6 +3649,54 @@
     } catch (err) {
       setCalcStatus(baseMsg + ` Графики восстановить не удалось: ${err.message}`);
     }
+  }
+
+  async function loadCandlesForLoadedProtocol(auto) {
+    const proto = state.loadedProtocol;
+    if (!proto || proto.format !== CALC_PROTOCOL_FORMAT) {
+      if (!auto) setCalcStatus("Сначала загрузите протокол (JSON).");
+      return;
+    }
+    if (state.uiBusy || isOptimizing()) {
+      if (!auto) setCalcStatus("Дождитесь окончания текущего расчёта/оптимизации.");
+      return;
+    }
+    if (IS_FILE_PROTOCOL) {
+      setCalcStatus("file://: загрузка свечей с MOEX заблокирована CORS. Запустите через run-dev.bat / run-prod.bat.");
+      return;
+    }
+
+    const tf = String(proto.calc?.tf || $("calc-tf")?.value || "60");
+    const from = String(proto.calc?.periodFrom || $("calc-from")?.value || "");
+    const till = String(proto.calc?.periodTill || $("calc-till")?.value || "");
+    if ($("calc-tf")) $("calc-tf").value = tf;
+    if ($("calc-from") && from) $("calc-from").value = from;
+    if ($("calc-till") && till) $("calc-till").value = till;
+
+    const tickers = (proto.perSec || []).map((p) => normalizeProtocolTicker(p)).filter(Boolean);
+    const secSel = $("calc-sec");
+    if (secSel && tickers.length) {
+      const set = new Set(tickers.map((t) => String(t).toUpperCase()));
+      for (const o of secSel.options) {
+        o.selected = set.has(String(o.value || "").toUpperCase());
+      }
+      syncSelectAllCheckboxes();
+      publishInstrumentSelectionFromDom();
+    }
+
+    const instruments = selectedInstruments();
+    if (!instruments.length) {
+      setCalcStatus("Протокол: не удалось сопоставить тикеры со списком MOEX в форме (calc-sec).");
+      return;
+    }
+
+    setCalcStatus(`Протокол: загрузка свечей ${instruments.length} инстр. (${from || "?"} — ${till || "?"}, tf=${tf})…`);
+    await ensureInstrumentPacks(instruments, from, till, tf);
+    await yieldToUi();
+
+    setCalcStatus("Протокол: свечи загружены. Пересчёт FINRESP…");
+    await yieldToUi();
+    run();
   }
 
   function renderProtocolStepCharts(proto) {
@@ -7200,9 +7250,6 @@ ${referenceBlock}
   $("calc-restore-defaults")?.addEventListener("click", () => { restoreCalcDefaultsInteractive(); });
   $("calc-protocol-download")?.addEventListener("click", () => { downloadLastProtocol(); });
   $("calc-protocol-load")?.addEventListener("click", () => { $("calc-protocol-file-input")?.click(); });
-  $("calc-protocol-load-candles")?.addEventListener("click", () => {
-    loadCandlesForLoadedProtocol().catch((err) => setCalcStatus(`Протокол: загрузка свечей — ошибка: ${err.message}`));
-  });
   $("logic-catalog-file-input")?.addEventListener("change", async (ev) => {
     const file = ev.target.files?.[0];
     ev.target.value = "";
@@ -7233,55 +7280,7 @@ ${referenceBlock}
     if (!file) return;
     loadProtocolFromFileInput(file);
   });
-
-  async function loadCandlesForLoadedProtocol() {
-    const proto = state.loadedProtocol;
-    if (!proto || proto.format !== CALC_PROTOCOL_FORMAT) {
-      setCalcStatus("Сначала загрузите протокол (JSON).");
-      return;
-    }
-    if (state.uiBusy || isOptimizing()) {
-      setCalcStatus("Дождитесь окончания текущего расчёта/оптимизации.");
-      return;
-    }
-    if (IS_FILE_PROTOCOL) {
-      setCalcStatus("file://: загрузка свечей с MOEX заблокирована CORS. Запустите через run-dev.bat / run-prod.bat.");
-      return;
-    }
-
-    const tf = String(proto.calc?.tf || $("calc-tf")?.value || "60");
-    const from = String(proto.calc?.periodFrom || $("calc-from")?.value || "");
-    const till = String(proto.calc?.periodTill || $("calc-till")?.value || "");
-    if ($("calc-tf")) $("calc-tf").value = tf;
-    if ($("calc-from") && from) $("calc-from").value = from;
-    if ($("calc-till") && till) $("calc-till").value = till;
-
-    const tickers = (proto.perSec || []).map((p) => normalizeProtocolTicker(p)).filter(Boolean);
-    const secSel = $("calc-sec");
-    if (secSel && tickers.length) {
-      const set = new Set(tickers.map((t) => String(t).toUpperCase()));
-      for (const o of secSel.options) {
-        o.selected = set.has(String(o.value || "").toUpperCase());
-      }
-      syncSelectAllCheckboxes();
-      publishInstrumentSelectionFromDom();
-    }
-
-    const instruments = selectedInstruments();
-    if (!instruments.length) {
-      setCalcStatus("Протокол: не удалось сопоставить тикеры со списком MOEX в форме (calc-sec).");
-      return;
-    }
-
-    // Load packs into state.packs (cache first, then MOEX) without blocking UI.
-    setCalcStatus(`Протокол: загрузка свечей ${instruments.length} инстр. (${from || "?"} — ${till || "?"}, tf=${tf})…`);
-    await ensureInstrumentPacks(instruments, from, till, tf);
-    await yieldToUi();
-
-    setCalcStatus("Протокол: свечи загружены. Пересчёт FINRESP…");
-    await yieldToUi();
-    run();
-  }
+  // Candle loading for protocol is now automatic (applyLoadedProtocol → loadCandlesForLoadedProtocol).
   $("logic-lines")?.addEventListener("click", (ev) => {
     const helpBtn = ev.target?.closest?.("[data-help-logic]");
     if (helpBtn) {
