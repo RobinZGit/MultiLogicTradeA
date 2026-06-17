@@ -6,6 +6,7 @@ import vm from 'node:vm';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FINRESP_ROOT = join(__dirname, '..', '..', '..', 'src', 'finresp');
 const ENGINE_PATH = join(FINRESP_ROOT, 'MultiLogic_FinrespCalculator.engine.js');
+const TRADING_PERIODS_PATH = join(FINRESP_ROOT, 'trading-periods.js');
 const INDICATOR_DIR = join(FINRESP_ROOT, 'indicators');
 const LOGIC_DIR = join(FINRESP_ROOT, 'logics');
 const INDICATOR_SCRIPTS = [
@@ -69,6 +70,7 @@ export function loadEngine() {
     const src = readFileSync(p, 'utf8');
     vm.runInContext(src, context, { filename: p });
   }
+  vm.runInContext(readFileSync(TRADING_PERIODS_PATH, 'utf8'), context, { filename: TRADING_PERIODS_PATH });
   vm.runInContext(code, context, { filename: ENGINE_PATH });
   const E = context.MultiLogicFinrespEngine;
   if (!E) throw new Error('MultiLogicFinrespEngine not exported');

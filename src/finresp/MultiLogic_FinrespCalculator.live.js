@@ -47,6 +47,12 @@
       }
     }
 
+    function liveTradingPeriodsBlocked() {
+      const TP = root.MultiLogicFinrespTradingPeriods;
+      if (!TP?.isLiveNonTradingNow || typeof readTradingPeriodsConfigFromDom !== "function") return false;
+      return TP.isLiveNonTradingNow(readTradingPeriodsConfigFromDom());
+    }
+
     const fmt = d.fmt;
     const fmtSignedRub = d.fmtSignedRub;
     const RUB_SIGN = d.RUB_SIGN;
@@ -101,6 +107,7 @@
     const indicatorSelection = (...a) => d.indicatorSelection(...a);
     const normalizeSliders = (...a) => d.normalizeSliders(...a);
     const finrespRunOptions = (...a) => d.finrespRunOptions(...a);
+    const readTradingPeriodsConfigFromDom = (...a) => d.readTradingPeriodsConfigFromDom(...a);
     const bindCollapsibleToggle = (...a) => d.bindCollapsibleToggle(...a);
     const syncCollapsibleToggleLabel = (...a) => d.syncCollapsibleToggleLabel(...a);
     const bindLivePanelCollapsibleToggles = (...a) => d.bindLivePanelCollapsibleToggles(...a);
@@ -6570,6 +6577,9 @@
         throw new Error(`${sec}: не найден в T-Bank.`);
       }
       const ticker = String(ti.ticker || sec).toUpperCase();
+      if (liveTradingPeriodsBlocked()) {
+        throw new Error("Сейчас неторговый период по расписанию MOEX — заявка не отправлена.");
+      }
       if (!sandbox) {
         const tradable = await tbankValidateTradable(instrumentId, ti, orderType);
         if (!tradable.ok) throw new Error(`${ticker}: ${tradable.reason}`);
@@ -7670,7 +7680,8 @@ ${referenceBlock}
         sec,
         portfolioCap,
         reverseSides: !!p.ReverseSides,
-        reverseSignals: !!p.ReverseSignals
+        reverseSignals: !!p.ReverseSignals,
+        ...(finrespRunOptions() || {})
       });
       if (!r.rows?.length) {
         skipped.push({ sec, error: "нет данных для сигнала на свечах" });
@@ -8170,6 +8181,25 @@ ${referenceBlock}
             signalOp: diag?.op,
             signalCl: diag?.cl,
             logicId: diag?.logicId
+          });
+          continue;
+        }
+        if (liveTradingPeriodsBlocked()) {
+          skipped.push(liveIssueEntry(ticker, p.sec, {
+            reason: "неторговый период (расписание MOEX)",
+            target: targetPieces,
+            current: currentPieces,
+            delta
+          }));
+          targetDetails.push({
+            sec: p.sec,
+            ticker,
+            target: targetPieces,
+            current: currentPieces,
+            delta,
+            lot,
+            action: "skipped",
+            reason: "неторговый период"
           });
           continue;
         }

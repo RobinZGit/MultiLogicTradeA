@@ -82,6 +82,13 @@ test('live goal panel: enabled header shows target date and percent', () => {
   const cssPath = path.join(root, 'src', 'app', 'finresp', 'calculator', 'finresp-calculator.component.css');
   const css = fs.readFileSync(cssPath, 'utf8');
   assert.match(css, /live-goal-banner-badge--achieved[\s\S]*live-trading-panel--sandbox/);
+  const calcFormHtml = fs.readFileSync(
+    path.join(root, 'src', 'app', 'finresp', 'calculator', 'components', 'finresp-calc-form', 'finresp-calc-form.component.html'),
+    'utf8'
+  );
+  assert.match(calcFormHtml, /id="trading-periods-days"/);
+  assert.match(calcFormHtml, /id="trading-periods-master"/);
+  assert.match(liveSrc, /liveTradingPeriodsBlocked/);
   assert.match(liveSrc, /Цель установлена/);
 });
 

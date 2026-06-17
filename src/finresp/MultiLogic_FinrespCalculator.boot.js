@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-goal-achieved-colors-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-trading-periods-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -1286,6 +1286,7 @@
       logicCatalogVersion: 4,
       logicLabels: { ...state.logicLabels },
       randomPriceShift: !!$("random-price-shift")?.checked,
+      tradingPeriods: readTradingPeriodsConfigFromDom(),
       charts: {
         equityDeltaPeriod: equityDeltaPeriod()
       }
@@ -1500,6 +1501,7 @@
       if ($("random-price-shift")) {
         $("random-price-shift").checked = !!cfg.randomPriceShift;
       }
+      if (cfg.tradingPeriods) applyTradingPeriodsConfig(cfg.tradingPeriods);
       state.savedEquityDeltaPeriod = cfg.charts?.equityDeltaPeriod ?? null;
       setValueIfExists("equity-delta-period", normalizeEquityDeltaTf(state.savedEquityDeltaPeriod));
       if (cfg.prefixes?.stocks != null && String(cfg.prefixes.stocks).trim()) {
@@ -2078,6 +2080,7 @@
     get indicatorSelection() { return indicatorSelection; },
     get normalizeSliders() { return normalizeSliders; },
     get finrespRunOptions() { return finrespRunOptions; },
+    get readTradingPeriodsConfigFromDom() { return readTradingPeriodsConfigFromDom; },
     get bindCollapsibleToggle() { return bindCollapsibleToggle; },
     get syncCollapsibleToggleLabel() { return syncCollapsibleToggleLabel; },
     get bindLivePanelCollapsibleToggles() { return bindLivePanelCollapsibleToggles; },
@@ -2171,12 +2174,16 @@
   function finrespRunOptions() {
     const signalPacks = signalPacksForCalc();
     const reverseSignals = !!$("param-reverse-signals")?.checked;
-    const opts = reverseSignals ? { reverseSignals } : {};
+    const opts = {
+      tradingPeriods: readTradingPeriodsConfigFromDom(),
+      calcTf: $("calc-tf")?.value || "60"
+    };
+    if (reverseSignals) opts.reverseSignals = true;
     if (signalPacks) opts.signalPacks = signalPacks;
     if (state.ctgSpotPacks && Object.keys(state.ctgSpotPacks).length) {
       opts.ctgSpotPacks = state.ctgSpotPacks;
     }
-    return Object.keys(opts).length ? opts : undefined;
+    return opts;
   }
 
   /** Синхронизация UI/state: `syncPageVersionBadge`. */
@@ -2860,6 +2867,7 @@
     const progressOpts = {
       ...(randomPriceShift ? { signalPacks: E.applyRandomPriceShift(packs) } : {}),
       ...(ro.ctgSpotPacks ? { ctgSpotPacks: ro.ctgSpotPacks } : {}),
+      ...(ro.tradingPeriods ? { tradingPeriods: ro.tradingPeriods, calcTf: ro.calcTf } : {}),
       shouldCancel: ro.shouldCancel,
       ...(ro.silent ? {} : { onProgress: buildRunProgressHandler(ro) })
     };
@@ -2895,7 +2903,9 @@
       worker.postMessage({
         id, packs, spec, startIdx: a, endIdx: b, params, volConfig, stopperConfig: sc,
         randomPriceShift: !!randomPriceShift,
-        ctgSpotPacks: ro.ctgSpotPacks || undefined
+        ctgSpotPacks: ro.ctgSpotPacks || undefined,
+        tradingPeriods: ro.tradingPeriods || undefined,
+        calcTf: ro.calcTf || undefined
       });
     });
   }
@@ -4275,6 +4285,9 @@
     setValueIfExists("vol-maxpos", v.maxPositions);
     setValueIfExists("commission-pct", E.DEFAULT_COMMISSION.value);
     if ($("random-price-shift")) $("random-price-shift").checked = false;
+    if (window.MultiLogicFinrespTradingPeriods) {
+      applyTradingPeriodsConfig(window.MultiLogicFinrespTradingPeriods.defaultMoexConfig());
+    }
     document.querySelectorAll("#indicator-toggles input[type=checkbox]").forEach((el) => {
       el.checked = true;
     });
@@ -4723,6 +4736,139 @@
     const domLogicIds = Array.from(sel.selectedOptions).map((o) => o.value);
     bridgeApplyLogicSelection(domLogicIds, state.logicSelectionCleared);
     syncLogicSelectedHint();
+  }
+
+  /** Чтение неторговых периодов из DOM (нормализованный конфиг). */
+  function readTradingPeriodsConfigFromDom() {
+    const TP = window.MultiLogicFinrespTradingPeriods;
+    if (!TP?.DAY_KEYS) return { version: 1, days: {}, anyEnabled: false };
+    const days = {};
+    for (const key of TP.DAY_KEYS) {
+      const enabled = !!$(`trading-periods-day-${key}-enabled`)?.checked;
+      const tbody = $(`trading-periods-day-${key}-rows`);
+      const periods = [];
+      if (tbody) {
+        tbody.querySelectorAll("tr").forEach((row) => {
+          const from = row.querySelector(".trading-period-from")?.value?.trim();
+          const to = row.querySelector(".trading-period-to")?.value?.trim();
+          if (from && to) periods.push({ from, to });
+        });
+      }
+      days[key] = { enabled, periods };
+    }
+    return TP.normalizeConfig({ version: 1, days });
+  }
+
+  function buildTradingPeriodRow(dayKey, period) {
+    const tr = document.createElement("tr");
+    tr.dataset.day = dayKey;
+    const mkCell = (cls, value, title) => {
+      const td = document.createElement("td");
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = cls;
+      input.value = value || "";
+      input.size = 6;
+      input.maxLength = 5;
+      input.title = title;
+      input.addEventListener("change", saveConfig);
+      input.addEventListener("input", saveConfig);
+      td.appendChild(input);
+      return td;
+    };
+    tr.appendChild(mkCell("trading-period-from", period?.from || "", "Начало (MSK), ЧЧ:ММ"));
+    tr.appendChild(mkCell("trading-period-to", period?.to || "", "Конец (MSK), ЧЧ:ММ; 24:00 — конец суток"));
+    const tdDel = document.createElement("td");
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "calc-btn calc-btn-secondary trading-period-del";
+    del.title = "Удалить период";
+    del.textContent = "×";
+    del.addEventListener("click", () => {
+      tr.remove();
+      syncTradingPeriodsMasterCheckbox();
+      saveConfig();
+    });
+    tdDel.appendChild(del);
+    tr.appendChild(tdDel);
+    return tr;
+  }
+
+  function syncTradingPeriodsMasterCheckbox() {
+    const master = $("trading-periods-master");
+    const TP = window.MultiLogicFinrespTradingPeriods;
+    if (!master || !TP?.DAY_KEYS) return;
+    const states = TP.DAY_KEYS.map((k) => !!$(`trading-periods-day-${k}-enabled`)?.checked);
+    const allOn = states.every(Boolean);
+    const allOff = states.every((x) => !x);
+    master.checked = allOn;
+    master.indeterminate = !allOn && !allOff;
+  }
+
+  function applyTradingPeriodsConfig(cfg) {
+    const TP = window.MultiLogicFinrespTradingPeriods;
+    if (!TP?.DAY_KEYS) return;
+    const norm = TP.normalizeConfig(cfg);
+    for (const key of TP.DAY_KEYS) {
+      const day = norm.days[key];
+      const cb = $(`trading-periods-day-${key}-enabled`);
+      if (cb) cb.checked = !!day.enabled;
+      const tbody = $(`trading-periods-day-${key}-rows`);
+      if (!tbody) continue;
+      tbody.innerHTML = "";
+      for (const p of day.periods) {
+        tbody.appendChild(buildTradingPeriodRow(key, p));
+      }
+    }
+    syncTradingPeriodsMasterCheckbox();
+  }
+
+  /** Панель «Торговые периоды» в доп. параметрах. */
+  function initTradingPeriodsPanel() {
+    const host = $("trading-periods-days");
+    const TP = window.MultiLogicFinrespTradingPeriods;
+    if (!host || !TP?.DAY_KEYS) return;
+    host.innerHTML = "";
+    const defaults = TP.defaultMoexConfig();
+    for (const key of TP.DAY_KEYS) {
+      const block = document.createElement("div");
+      block.className = "trading-period-day";
+      block.innerHTML = `
+        <div class="trading-period-day-head">
+          <label class="indicator-toggle trading-period-day-toggle" for="trading-periods-day-${key}-enabled">
+            <input type="checkbox" id="trading-periods-day-${key}-enabled" checked>
+            <span>${TP.DAY_LABELS[key]} — учитывать неторговые периоды</span>
+          </label>
+          <button type="button" class="calc-btn calc-btn-secondary trading-period-add" data-day="${key}">+ Период</button>
+        </div>
+        <table class="trading-periods-table" aria-label="Неторговые периоды ${TP.DAY_LABELS[key]}">
+          <thead><tr><th>С (MSK)</th><th>По (MSK)</th><th></th></tr></thead>
+          <tbody id="trading-periods-day-${key}-rows"></tbody>
+        </table>`;
+      host.appendChild(block);
+      const tbody = $(`trading-periods-day-${key}-rows`);
+      for (const p of defaults.days[key].periods) {
+        tbody.appendChild(buildTradingPeriodRow(key, p));
+      }
+      $(`trading-periods-day-${key}-enabled`)?.addEventListener("change", () => {
+        syncTradingPeriodsMasterCheckbox();
+        saveConfig();
+      });
+      block.querySelector(".trading-period-add")?.addEventListener("click", () => {
+        tbody.appendChild(buildTradingPeriodRow(key, { from: "12:00", to: "13:00" }));
+        saveConfig();
+      });
+    }
+    $("trading-periods-master")?.addEventListener("change", () => {
+      const on = !!$("trading-periods-master").checked;
+      for (const key of TP.DAY_KEYS) {
+        const cb = $(`trading-periods-day-${key}-enabled`);
+        if (cb) cb.checked = on;
+      }
+      syncTradingPeriodsMasterCheckbox();
+      saveConfig();
+    });
+    syncTradingPeriodsMasterCheckbox();
   }
 
   /** Подпрограмма `initIndicatorToggles`. */
@@ -7888,6 +8034,7 @@ ${referenceBlock}
     window.__mlFinresp.deferBrokerConnect = true;
     fillLogicSelect();
     fillLogicEditor();
+    initTradingPeriodsPanel();
     initIndicatorToggles();
     updatePositionSlHint();
     initPrefixFields();

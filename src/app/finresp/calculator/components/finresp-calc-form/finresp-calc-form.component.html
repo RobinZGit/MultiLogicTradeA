@@ -179,6 +179,14 @@
 </label>
 <p class="note">Каждый пересчёт: OHLC для индикаторов и сигналов Op/Cl сдвигаются случайно в пределах 0,1%. FINRESP, комиссии и сделки — по реальным ценам MOEX.</p>
 
+<p class="extra-section">Торговые периоды</p>
+<label class="indicator-toggle trading-periods-master-toggle" for="trading-periods-master" style="max-width:42rem;margin:.35rem 0 .55rem">
+<input type="checkbox" id="trading-periods-master" checked>
+<span>Учитывать неторговые периоды (все дни недели)</span>
+</label>
+<div id="trading-periods-days" class="trading-periods-days"></div>
+<p class="note">По умолчанию — перерывы сессий MOEX (ММВБ): будни 06:50–23:50 с техническими окнами; суббота/воскресенье — ДСВД 09:50–19:00. Если для дня включена галочка и заданы интервалы, сделки в расчёте и в live не исполняются в эти часы (MSK). Дневной ТФ (1 день) — без фильтра по часам.</p>
+
 <p class="extra-section">Стакан (@OBT, live)</p>
 <label class="indicator-toggle" for="live-ob-trend-confirm" style="max-width:42rem;margin:.35rem 0 .55rem">
 <input type="checkbox" id="live-ob-trend-confirm">

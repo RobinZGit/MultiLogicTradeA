@@ -47,16 +47,18 @@
   imp("logics/ob_sma.js");
   imp("logics/ob_only.js");
   imp("logics/_descriptions.js");
+  imp("trading-periods.js");
   imp("MultiLogic_FinrespCalculator.engine.js");
 
   self.onmessage = async (e) => {
-    const { id, packs, spec, startIdx, endIdx, params, volConfig, stopperConfig, randomPriceShift, ctgSpotPacks } = e.data || {};
+    const { id, packs, spec, startIdx, endIdx, params, volConfig, stopperConfig, randomPriceShift, ctgSpotPacks, tradingPeriods, calcTf } = e.data || {};
     try {
       const E = self.MultiLogicFinrespEngine;
       if (!E?.runMulti) throw new Error("engine not loaded in worker");
       const runOpts = {
         ...(randomPriceShift ? { signalPacks: E.applyRandomPriceShift(packs) } : {}),
         ...(ctgSpotPacks ? { ctgSpotPacks } : {}),
+        ...(tradingPeriods ? { tradingPeriods, calcTf } : {}),
         onProgress: (pct, text, detail) => {
           self.postMessage({ id, type: "progress", pct, text, detail: detail || null });
         }

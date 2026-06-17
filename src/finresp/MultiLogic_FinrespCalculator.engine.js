@@ -46,6 +46,14 @@
     commissionPct: 0
   };
   const DEFAULT_COMMISSION = { type: "Percent", value: 0.02 };
+  const TradingPeriods = root.MultiLogicFinrespTradingPeriods || {};
+
+  /** Блокировать сделки на баре, если время попадает в неторговый период (MSK). */
+  function tradesBlockedOnBar(candle, opts) {
+    const cfg = opts?.tradingPeriods;
+    if (!cfg?.anyEnabled || typeof TradingPeriods.isNonTradingMsk !== "function") return false;
+    return TradingPeriods.isNonTradingMsk(candle?.time, cfg, { calcTf: opts?.calcTf });
+  }
 
   // === Комиссия и объём сделки ===
 
@@ -1781,7 +1789,9 @@
         opts.onProgress(i - from + 1, barSpan, candles[i]?.time);
       }
 
-      if (pos !== 0 && activeIdx >= 0 && activeIdx < parsedList.length) {
+      const tradesBlocked = tradesBlockedOnBar(candles[i], opts);
+
+      if (!tradesBlocked && pos !== 0 && activeIdx >= 0 && activeIdx < parsedList.length) {
         const parsed = parsedList[activeIdx];
         const activeLogicId = logicSpecs[activeIdx]?.logicId || opts.logicId || "?";
         if (positionStopsEnabled(parsed) && entryPrice != null) {
@@ -1813,7 +1823,7 @@
         }
       }
 
-      if (pos === 0) {
+      if (!tradesBlocked && pos === 0) {
         activeIdx = -1;
         entryBarIdx = null;
         entryMid = null;
@@ -1927,9 +1937,11 @@
         opts.onProgress(i - from + 1, barSpan, candles[i]?.time);
       }
 
+      const tradesBlocked = tradesBlockedOnBar(candles[i], opts);
+
       let posStop = null;
       const markerMeta = {};
-      if (pos !== 0 && positionStopsEnabled(parsed) && entryPrice != null) {
+      if (!tradesBlocked && pos !== 0 && positionStopsEnabled(parsed) && entryPrice != null) {
         const a = needAtrStops ? atrSlTp[i] : null;
         const stop = checkPositionSlTp(pos, entryPrice, price, parsed, a);
         if (stop) {
@@ -1944,36 +1956,38 @@
       const posCtx = buildPosCtx(pos, entryBarIdx, entryMid, entryBeta);
       const sig = logicLineExecSignals(parsed, cache, i, posCtx, opts);
 
-      if (pos > 0 && (sig.longClHit || sig.shortOpHit)) {
-        markerMeta.tradeOutLogic = logicId;
-        markerMeta.tradeOutSignal = logicLineExitSignal(pos, sig);
-        markerMeta.tradeOutExpr = markerExitExpr(parsed, pos, sig, null);
-        sell += flatten(price);
-      } else if (pos < 0 && (sig.shortClHit || sig.longOpHit)) {
-        markerMeta.tradeOutLogic = logicId;
-        markerMeta.tradeOutSignal = logicLineExitSignal(pos, sig);
-        markerMeta.tradeOutExpr = markerExitExpr(parsed, pos, sig, null);
-        sell += flatten(price);
-      }
-      if (pos === 0 && sig.longOpHit !== sig.shortOpHit) {
-        const lot = resolveOpenLot(price, volConfig, opts);
-        if (lot > 0) {
-          pos = sig.longOpHit ? lot : -lot;
-          cash -= pos * price;
-          const comm = commissionCost(price, lot, volConfig);
-          cash -= comm;
-          commissionPaid += comm;
-          entryPrice = price;
-          if (pos > 0) buy += lot;
-          else sell += lot;
-          markerMeta.tradeInLogic = logicId;
-          markerMeta.tradeInSignal = sig.longOpHit ? "op_long" : "op_short";
-          markerMeta.tradeInExpr = markerOpExpr(parsed, sig.longOpHit ? "long" : "short");
-          const anchor = captureEntryAnchor(cache, parsed, i);
-          entryBarIdx = anchor.entryBarIdx;
-          entryMid = anchor.entryMid;
-          entryBeta = anchor.entryBeta;
-          portfolioSyncPos(opts, pos, price);
+      if (!tradesBlocked) {
+        if (pos > 0 && (sig.longClHit || sig.shortOpHit)) {
+          markerMeta.tradeOutLogic = logicId;
+          markerMeta.tradeOutSignal = logicLineExitSignal(pos, sig);
+          markerMeta.tradeOutExpr = markerExitExpr(parsed, pos, sig, null);
+          sell += flatten(price);
+        } else if (pos < 0 && (sig.shortClHit || sig.longOpHit)) {
+          markerMeta.tradeOutLogic = logicId;
+          markerMeta.tradeOutSignal = logicLineExitSignal(pos, sig);
+          markerMeta.tradeOutExpr = markerExitExpr(parsed, pos, sig, null);
+          sell += flatten(price);
+        }
+        if (pos === 0 && sig.longOpHit !== sig.shortOpHit) {
+          const lot = resolveOpenLot(price, volConfig, opts);
+          if (lot > 0) {
+            pos = sig.longOpHit ? lot : -lot;
+            cash -= pos * price;
+            const comm = commissionCost(price, lot, volConfig);
+            cash -= comm;
+            commissionPaid += comm;
+            entryPrice = price;
+            if (pos > 0) buy += lot;
+            else sell += lot;
+            markerMeta.tradeInLogic = logicId;
+            markerMeta.tradeInSignal = sig.longOpHit ? "op_long" : "op_short";
+            markerMeta.tradeInExpr = markerOpExpr(parsed, sig.longOpHit ? "long" : "short");
+            const anchor = captureEntryAnchor(cache, parsed, i);
+            entryBarIdx = anchor.entryBarIdx;
+            entryMid = anchor.entryMid;
+            entryBeta = anchor.entryBeta;
+            portfolioSyncPos(opts, pos, price);
+          }
         }
       }
 
@@ -2047,8 +2061,9 @@
       let sell = 0;
       let posStop = null;
       const posBefore = pos;
+      const tradesBlocked = tradesBlockedOnBar(candle, opts);
 
-      if (useStops && pos !== 0 && entryPrice != null) {
+      if (!tradesBlocked && useStops && pos !== 0 && entryPrice != null) {
         const a = atrSlTp[i];
         if (a != null && a > 0) {
           let hit = false;
@@ -2082,7 +2097,7 @@
         }
       }
 
-      if (s != null) {
+      if (!tradesBlocked && s != null) {
         const d = signalPrice - s;
         const scale = calcTradeVolume(price, volConfig) / Math.max(price, 1e-9);
         if (side === "above") {
@@ -2180,8 +2195,9 @@
       let sell = 0;
       let posStop = null;
       const posBefore = pos;
+      const tradesBlocked = tradesBlockedOnBar(candle, opts);
 
-      if (useStops && pos !== 0 && entryPrice != null) {
+      if (!tradesBlocked && useStops && pos !== 0 && entryPrice != null) {
         const a = atrSlTp[i];
         if (a != null && a > 0) {
           let hit = false;
@@ -2215,7 +2231,7 @@
         }
       }
 
-      if (s != null) {
+      if (!tradesBlocked && s != null) {
         const d = signalPrice - s;
         const scale = calcTradeVolume(price, volConfig) / Math.max(price, 1e-9);
         if (side === "above") {
@@ -2321,8 +2337,9 @@
       const posBefore = pos;
       let smaUpper = null;
       let smaLower = null;
+      const tradesBlocked = tradesBlockedOnBar(candle, opts);
 
-      if (useStops && pos !== 0 && entryPrice != null && a != null && a > 0) {
+      if (!tradesBlocked && useStops && pos !== 0 && entryPrice != null && a != null && a > 0) {
         let hit = false;
         if (pos > 0) {
           if (slAtr > 0 && price <= entryPrice - slAtr * a) {
@@ -2353,7 +2370,7 @@
         }
       }
 
-      if (s != null && a != null && a > 0) {
+      if (!tradesBlocked && s != null && a != null && a > 0) {
         const band = corridorK * a;
         smaUpper = s + band;
         smaLower = s - band;

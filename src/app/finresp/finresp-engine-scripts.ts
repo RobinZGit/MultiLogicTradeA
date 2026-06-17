@@ -46,6 +46,7 @@ export const FINRESP_ENGINE_SCRIPTS = [
   'connectors/broker-ops.js',
   'connectors/tbank.js',
   'connectors/alor.js',
+  'trading-periods.js',
   'MultiLogic_FinrespCalculator.engine.js',
   'MultiLogic_FinrespCalculator.charts.js',
   'MultiLogic_FinrespCalculator.live.js',
