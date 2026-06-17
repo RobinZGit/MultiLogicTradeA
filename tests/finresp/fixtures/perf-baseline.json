@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "updated": "2026-06-15",
+  "updated": "2026-06-17",
   "note": "Эталонные ms (Node, синтетические свечи). Допуск: PERF_REGRESS_FACTOR или PERF_FACTOR (по умолчанию 2.5). Обновить: PERF_UPDATE_BASELINE=1 npm run test:perf:smoke",
   "cases": {
     "smoke_runMulti_2x400_sma": {
-      "ms": 75,
+      "ms": 80,
       "label": "runMulti · 2 инстр. · 400 свечей 15m · sma_below"
     },
     "smoke_runPacksOnTimeGrid_2x400_sma": {
