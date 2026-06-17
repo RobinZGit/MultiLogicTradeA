@@ -86,7 +86,8 @@ test('live goal panel: enabled header shows target date and percent', () => {
     path.join(root, 'src', 'app', 'finresp', 'calculator', 'components', 'finresp-calc-form', 'finresp-calc-form.component.html'),
     'utf8'
   );
-  assert.match(calcFormHtml, /id="trading-periods-days"/);
+  assert.match(calcFormHtml, /id="trading-periods-panel"/);
+  assert.match(calcFormHtml, /id="trading-periods-toggle"/);
   assert.match(calcFormHtml, /id="trading-periods-master"/);
   assert.match(liveSrc, /liveTradingPeriodsBlocked/);
   assert.match(liveSrc, /Цель установлена/);

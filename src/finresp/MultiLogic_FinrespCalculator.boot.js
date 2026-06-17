@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-tot-ctg-stoch-indicators-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-scroll-results-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -484,6 +484,7 @@
     bindCollapsibleToggle("tech-info-panel", "tech-info-toggle");
     bindCollapsibleToggle("logic-catalog-panel", "logic-catalog-toggle");
     bindCollapsibleToggle("extra-params", "extra-params-toggle");
+    bindCollapsibleToggle("trading-periods-panel", "trading-periods-toggle");
     bindCollapsibleToggle("tbank-settings", "tbank-settings-toggle");
     bindCollapsibleToggle("alor-settings", "alor-settings-toggle");
   }
@@ -2682,11 +2683,18 @@
     await yieldToUi();
   }
 
-  /** Подпрограмма: после расчёта прокрутить к блоку FINRESP/результатов. */
-  function scrollResultsIntoView() {
+  /** Подпрограмма: после расчёта показать блок FINRESP по центру экрана. */
+  async function scrollResultsIntoView() {
+    collapseExtraParamsIfOpen();
+    await yieldToUi();
+    await yieldToUi();
     const el = $("calc-result-hero") || $("finresp-calc");
     if (!el || typeof el.scrollIntoView !== "function") return;
-    el.scrollIntoView({ block: "start", inline: "nearest", behavior: "smooth" });
+    try {
+      el.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+    } catch (_) {
+      el.scrollIntoView({ block: "center", inline: "nearest" });
+    }
   }
 
   /** Подпрограмма `clearCalcProgress`. */
@@ -7467,6 +7475,7 @@ ${referenceBlock}
     state.runCheckpoint = null;
     const shouldCancel = () => isRunCancelled(runGen);
     let partialApplied = false;
+    let focusResultsAfterRun = false;
     const finishIfCancelled = async (loadedData) => {
       if (partialApplied) return true;
       if (!isRunCancelled(runGen) && !state.runCancelRequested) return false;
@@ -7570,10 +7579,9 @@ ${referenceBlock}
         }
         if (runGen === state.runGeneration) {
           await finishCalcProgress("Расчёт завершён");
-          scrollResultsIntoView();
+          focusResultsAfterRun = true;
         }
       }
-      if (runGen === state.runGeneration) collapseExtraParamsIfOpen();
     } catch (err) {
       if (shouldCancel() || err?.message === "cancelled") {
         await finishIfCancelled(loadedData);
@@ -7592,6 +7600,9 @@ ${referenceBlock}
       }
       state.runCancelRequested = false;
       releaseRunBusy(runGen);
+      if (focusResultsAfterRun && runGen === state.runGeneration) {
+        await scrollResultsIntoView();
+      }
       if (runGen === state.runGeneration) updateTechInfo("run-finished");
     }
   }
