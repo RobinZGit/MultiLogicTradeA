@@ -1,0 +1,37 @@
+<details class="live-order-book live-notify-panel" id="live-notify-panel">
+<summary class="live-manual-order-summary live-panel-summary">
+<span class="live-panel-summary-title" id="live-notify-summary-title">Рассылка e-mail</span>
+<div class="live-panel-summary-actions">
+<button type="button" class="extra-params-toggle" id="live-notify-toggle" aria-expanded="false">Развернуть</button>
+</div>
+</summary>
+<div class="live-order-book-body live-notify-body">
+<div class="live-notify-master">
+<label class="live-notify-field live-notify-field--wide" for="live-notify-email">E-mail
+<input type="email" id="live-notify-email" autocomplete="email" placeholder="user@mail.ru" inputmode="email">
+</label>
+<label class="live-notify-send-label" for="live-notify-email-enabled">
+<input type="checkbox" id="live-notify-email-enabled"> Рассылать на e-mail
+</label>
+</div>
+<fieldset class="live-notify-events" id="live-notify-events">
+<legend class="live-notify-events-legend">События</legend>
+<label class="live-notify-ev-label" for="live-notify-ev-sandbox-mode">
+<input type="checkbox" id="live-notify-ev-sandbox-mode" checked> Песочница ↔ реальная торговля
+</label>
+<label class="live-notify-ev-label" for="live-notify-ev-portfolio-sltp">
+<input type="checkbox" id="live-notify-ev-portfolio-sltp" checked> Портфельный stop-loss / take-profit
+</label>
+<label class="live-notify-ev-label" for="live-notify-ev-position-sltp">
+<input type="checkbox" id="live-notify-ev-position-sltp" checked> Позиционный stop-loss / take-profit
+</label>
+<label class="live-notify-ev-label" for="live-notify-ev-trading-toggle">
+<input type="checkbox" id="live-notify-ev-trading-toggle" checked> Включение / остановка торговли
+</label>
+<label class="live-notify-ev-label" for="live-notify-ev-form-params">
+<input type="checkbox" id="live-notify-ev-form-params"> Изменение параметров формы
+</label>
+</fieldset>
+<p class="live-order-book-meta" id="live-notify-hint">Только e-mail. Локально: run-dev / run-prod (порт 4201) + SMTP Mail.ru в notify.local.json. Отметьте события и «Рассылать на e-mail».</p>
+</div>
+</details>

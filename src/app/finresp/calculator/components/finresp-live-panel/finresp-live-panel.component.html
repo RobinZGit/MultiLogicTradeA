@@ -148,29 +148,4 @@
 <p class="live-order-book-meta" id="live-goal-hint">Цель: остановить робота при достижении % годовых (модель FINRESP). По истечении даты торговля не останавливается — блок подсветится красным.</p>
 </div>
 </details>
-<details class="live-order-book live-notify-panel" id="live-notify-panel">
-<summary class="live-manual-order-summary live-panel-summary">
-<span class="live-panel-summary-title" id="live-notify-summary-title">Рассылка</span>
-<div class="live-panel-summary-actions">
-<button type="button" class="extra-params-toggle" id="live-notify-toggle" aria-expanded="false">Развернуть</button>
-</div>
-</summary>
-<div class="live-order-book-body live-notify-body">
-<div class="live-notify-grid">
-<label class="live-notify-field" for="live-notify-email">E-mail
-<input type="email" id="live-notify-email" autocomplete="email" placeholder="user@example.com" inputmode="email">
-</label>
-<label class="live-notify-send-label" for="live-notify-email-enabled">
-<input type="checkbox" id="live-notify-email-enabled"> Рассылать
-</label>
-<label class="live-notify-field" for="live-notify-phone">Телефон <span class="live-notify-phone-hint">(РФ: +7 или 8)</span>
-<input type="tel" id="live-notify-phone" autocomplete="tel" placeholder="+7 900 123-45-67" inputmode="tel">
-</label>
-<label class="live-notify-send-label" for="live-notify-phone-enabled">
-<input type="checkbox" id="live-notify-phone-enabled"> Рассылать
-</label>
-</div>
-<p class="live-order-book-meta" id="live-notify-hint">События: достижение цели, истечение срока цели, переключение песочница ↔ реал. Рассылка только при включённых галочках. Локально: run-dev / run-prod + SMTP или SMS.ru в окружении сервера (порт 4201).</p>
-</div>
-</details>
 </div>

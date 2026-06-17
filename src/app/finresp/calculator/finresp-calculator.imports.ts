@@ -2,6 +2,7 @@ import { FinrespProgressBannerComponent } from './components/finresp-progress-ba
 import { FinrespHeaderComponent } from './components/finresp-header/finresp-header.component';
 import { FinrespTitleBarComponent } from './components/finresp-title-bar/finresp-title-bar.component';
 import { FinrespLivePanelComponent } from './components/finresp-live-panel/finresp-live-panel.component';
+import { FinrespNotifyPanelComponent } from './components/finresp-notify-panel/finresp-notify-panel.component';
 import { FinrespLiveJournalComponent } from './components/finresp-live-journal/finresp-live-journal.component';
 import { FinrespInstrumentsComponent } from './components/finresp-instruments/finresp-instruments.component';
 import { FinrespLogicsComponent } from './components/finresp-logics/finresp-logics.component';
@@ -17,6 +18,7 @@ export const FINRESP_UI_COMPONENTS = [
   FinrespHeaderComponent,
   FinrespTitleBarComponent,
   FinrespLivePanelComponent,
+  FinrespNotifyPanelComponent,
   FinrespLiveJournalComponent,
   FinrespInstrumentsComponent,
   FinrespLogicsComponent,

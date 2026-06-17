@@ -39,12 +39,22 @@ rem Free port 4200 if a previous dev server is still running
 echo Checking port 4200...
 powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 4200 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }" >nul 2>nul
 
+rem Free port 4201 — old tech-log/notify server must restart to pick up updates
+echo Checking port 4201...
+powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 4201 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }" >nul 2>nul
+
+echo.
+echo Mail.ru SMTP ^(рассылка^)...
+node scripts\ensure-notify-smtp.mjs
+echo.
+
 set "MLTA_URL=http://127.0.0.1:4200/finresp"
 echo.
 echo Starting Angular dev server on %MLTA_URL%
 echo Waiting for first compile, then opening browser...
 echo Logs: window titled "MultiLogicTradeA-dev"
 echo Tech info file: logs\finresp-tech-log.txt ^(when tech-log server runs^)
+echo Notify log: logs\finresp-notify.log ^(SMTP from notify.local.json^)
 echo.
 
 start "MultiLogicTradeA-techlog" /MIN cmd /c "cd /d ""%~dp0"" && node scripts\finresp-tech-log-server.mjs"

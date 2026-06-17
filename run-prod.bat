@@ -77,6 +77,15 @@ echo Starting static server on %MLTA_URL%
 echo Serving folder: %DIST_DIR%
 echo Waiting for port 5173, then opening browser...
 echo Tech info file: logs\finresp-tech-log.txt ^(when tech-log server runs^)
+echo Notify log: logs\finresp-notify.log ^(SMTP from notify.local.json^)
+echo.
+
+rem Free port 4201 — old tech-log/notify server must restart to pick up updates
+powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 4201 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }" >nul 2>nul
+
+echo.
+echo Mail.ru SMTP ^(рассылка^)...
+node scripts\ensure-notify-smtp.mjs
 echo.
 
 start "MultiLogicTradeA-techlog" /MIN cmd /c "cd /d ""%~dp0"" && node scripts\finresp-tech-log-server.mjs"

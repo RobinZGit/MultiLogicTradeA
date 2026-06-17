@@ -9,11 +9,16 @@
  * Optional env for real delivery:
  *   ML_NOTIFY_SMSRU_API_ID   — SMS.ru API id (Russia +7)
  *   ML_NOTIFY_SMTP_HOST, ML_NOTIFY_SMTP_PORT, ML_NOTIFY_SMTP_USER, ML_NOTIFY_SMTP_PASS, ML_NOTIFY_SMTP_FROM
+ *
+ * Or run run-dev.bat / run-prod.bat — they call ensure-notify-smtp.mjs and save notify.local.json (gitignored).
  */
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { applyNotifyLocalJsonToEnv, writeNotifyEmailCache } from './notify-local-config.mjs';
+
+applyNotifyLocalJsonToEnv();
 
 const PORT = Number(process.env.FINRESP_LOCAL_PORT) || 4201;
 const HOST = '127.0.0.1';
@@ -103,6 +108,8 @@ async function handleNotifyRequest(data) {
   appendNotifyLog(`[${stamp}] event=${event} email=${emailEnabled ? email : '—'} phone=${phoneEnabled ? phone : '—'}`);
   appendNotifyLog(`  subject=${subject}`);
   appendNotifyLog(`  ${message.replace(/\r?\n/g, ' ')}`);
+
+  if (email) writeNotifyEmailCache({ email, phone, source: 'notify-event' });
 
   if (emailEnabled) {
     try {
@@ -202,6 +209,24 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       res.writeHead(400, { ...corsHeaders(origin), 'Content-Type': 'text/plain; charset=utf-8' });
       res.end(String(err?.message || err));
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/finresp-notify-cache') {
+    try {
+      const raw = await readBody(req);
+      const data = JSON.parse(raw.toString('utf8'));
+      writeNotifyEmailCache({
+        email: data.email,
+        phone: data.phone,
+        source: data.source || 'finresp-ui'
+      });
+      res.writeHead(200, { ...corsHeaders(origin), 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(400, { ...corsHeaders(origin), 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, error: String(err?.message || err) }));
     }
     return;
   }

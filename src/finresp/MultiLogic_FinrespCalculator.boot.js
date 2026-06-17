@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-live-notify-diag-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-live-notify-events-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -536,7 +536,6 @@
         );
         const nd = lv.notifyDiag;
         const notifyEmail = String($("live-notify-email")?.value || "").trim();
-        const notifyPhone = String($("live-notify-phone")?.value || "").trim();
         const maskEmail = (v) => {
           const s = String(v || "").trim();
           if (!s) return "—";
@@ -544,28 +543,23 @@
           if (at <= 0) return `${s.slice(0, 2)}***`;
           return `${s.slice(0, Math.min(2, at))}***${s.slice(at)}`;
         };
-        const maskPhone = (v) => {
-          const d = String(v || "").replace(/\D/g, "");
-          if (!d) return "—";
-          return `***${d.slice(-4)}`;
-        };
         lines.push(
           `liveNotifyLocalHost=${typeof location !== "undefined" && (location.hostname === "127.0.0.1" || location.hostname === "localhost")}`,
           `liveNotifyEmailSet=${!!notifyEmail}`,
           `liveNotifyEmailOn=${!!$("live-notify-email-enabled")?.checked}`,
           `liveNotifyEmailMasked=${maskEmail(notifyEmail)}`,
-          `liveNotifyPhoneSet=${!!notifyPhone}`,
-          `liveNotifyPhoneOn=${!!$("live-notify-phone-enabled")?.checked}`,
-          `liveNotifyPhoneMasked=${maskPhone(notifyPhone)}`,
+          `liveNotifyEvSandbox=${!!$("live-notify-ev-sandbox-mode")?.checked}`,
+          `liveNotifyEvPortfolioSlTp=${!!$("live-notify-ev-portfolio-sltp")?.checked}`,
+          `liveNotifyEvPositionSlTp=${!!$("live-notify-ev-position-sltp")?.checked}`,
+          `liveNotifyEvTrading=${!!$("live-notify-ev-trading-toggle")?.checked}`,
+          `liveNotifyEvFormParams=${!!$("live-notify-ev-form-params")?.checked}`,
           `liveNotifySinkUrl=http://127.0.0.1:4201/finresp-notify`,
           `liveNotifySinkReachable=${nd?.sinkReachable ?? "—"}`,
           `liveNotifySmtpConfigured=${nd?.smtpConfigured ?? "—"}`,
-          `liveNotifySmsruConfigured=${nd?.smsruConfigured ?? "—"}`,
           `liveNotifyLastEvent=${nd?.lastEvent || "—"}`,
           `liveNotifyLastStatus=${nd?.lastStatus || "—"}`,
           `liveNotifyLastDetail=${nd?.lastDetail || "—"}`,
           `liveNotifyEmailDelivery=${nd?.emailDelivery || "—"}`,
-          `liveNotifySmsDelivery=${nd?.smsDelivery || "—"}`,
           `liveNotifyUpdatedAt=${nd?.updatedAt || "—"}`
         );
         const fd = lv.lastFinrespDiag;
@@ -1112,8 +1106,13 @@
         notify: {
           email: $("live-notify-email")?.value || "",
           emailEnabled: !!$("live-notify-email-enabled")?.checked,
-          phone: $("live-notify-phone")?.value || "",
-          phoneEnabled: !!$("live-notify-phone-enabled")?.checked
+          events: {
+            sandboxMode: !!$("live-notify-ev-sandbox-mode")?.checked,
+            portfolioSlTp: !!$("live-notify-ev-portfolio-sltp")?.checked,
+            positionSlTp: !!$("live-notify-ev-position-sltp")?.checked,
+            tradingToggle: !!$("live-notify-ev-trading-toggle")?.checked,
+            formParams: !!$("live-notify-ev-form-params")?.checked
+          }
         }
       },
       params: {
@@ -1161,9 +1160,31 @@
     if (state.restoringConfig) return;
     try {
       safeStorageSet(CONFIG_STORE_KEY, JSON.stringify(collectConfig()));
+      syncNotifyEmailCacheToServer();
+      onLiveConfigSavedForNotify?.();
     } catch (err) {
       noteTechError(`save-config: ${err.message}`);
     }
+  }
+
+  let notifyEmailCacheTimer = null;
+  /** Зеркало e-mail/телефона рассылки в notify.email.cache.json (через :4201). */
+  function syncNotifyEmailCacheToServer() {
+    try {
+      const h = location.hostname;
+      if (h !== "127.0.0.1" && h !== "localhost") return;
+      const email = String($("live-notify-email")?.value || "").trim();
+      if (!email) return;
+      clearTimeout(notifyEmailCacheTimer);
+      notifyEmailCacheTimer = setTimeout(() => {
+        void fetch("http://127.0.0.1:4201/finresp-notify-cache", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, phone: "", source: "finresp-ui" }),
+          keepalive: true
+        }).catch(() => {});
+      }, 400);
+    } catch (_) { /* ignore */ }
   }
 
   const OBT_TREND_CHECKBOX_IDS = ["live-ob-trend-confirm", "live-ob-trend-confirm-panel"];
@@ -1241,9 +1262,28 @@
         if ($("live-notify-email-enabled")) {
           $("live-notify-email-enabled").checked = !!cfg.live.notify.emailEnabled;
         }
-        setValueIfExists("live-notify-phone", cfg.live.notify.phone);
-        if ($("live-notify-phone-enabled")) {
-          $("live-notify-phone-enabled").checked = !!cfg.live.notify.phoneEnabled;
+        const ev = cfg.live.notify.events || {};
+        const evDefaults = {
+          sandboxMode: true,
+          portfolioSlTp: true,
+          positionSlTp: true,
+          tradingToggle: true,
+          formParams: false
+        };
+        if ($("live-notify-ev-sandbox-mode")) {
+          $("live-notify-ev-sandbox-mode").checked = ev.sandboxMode != null ? !!ev.sandboxMode : evDefaults.sandboxMode;
+        }
+        if ($("live-notify-ev-portfolio-sltp")) {
+          $("live-notify-ev-portfolio-sltp").checked = ev.portfolioSlTp != null ? !!ev.portfolioSlTp : evDefaults.portfolioSlTp;
+        }
+        if ($("live-notify-ev-position-sltp")) {
+          $("live-notify-ev-position-sltp").checked = ev.positionSlTp != null ? !!ev.positionSlTp : evDefaults.positionSlTp;
+        }
+        if ($("live-notify-ev-trading-toggle")) {
+          $("live-notify-ev-trading-toggle").checked = ev.tradingToggle != null ? !!ev.tradingToggle : evDefaults.tradingToggle;
+        }
+        if ($("live-notify-ev-form-params")) {
+          $("live-notify-ev-form-params").checked = ev.formParams != null ? !!ev.formParams : evDefaults.formParams;
         }
       }
       if ($("live-sandbox-match-mode")) {
@@ -1330,6 +1370,7 @@
       return true;
     } finally {
       state.restoringConfig = false;
+      syncNotifyEmailCacheToServer();
     }
   }
 
@@ -1887,7 +1928,7 @@
     handleAccountModeUserChange, checkSandboxPortfolioStopperNotify,
     ensureSandboxStopperWatch, resetSandboxStopperWatch, syncTradeHistoryFromSources,
     initLiveGoal, bindLiveGoalUi, syncLiveTradingGoalUi, checkLiveTradingGoal,
-    initLiveNotify, bindLiveNotifyUi, unstickLiveUi,
+    initLiveNotify, bindLiveNotifyUi, onLiveConfigSavedForNotify, unstickLiveUi,
     noteLiveFinrespSkipped, tryLiveFinrespCalc, startLiveModePoll, stopLiveModePoll,
     queueLiveCandleRefreshIfNeeded,
     startLiveStatsPoll, stopLiveStatsPoll, startLiveOrderBookPoll, stopLiveOrderBookPoll,

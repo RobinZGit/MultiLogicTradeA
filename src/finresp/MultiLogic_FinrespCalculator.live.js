@@ -444,10 +444,9 @@
     );
   }
 
-  /** Проверка портфельного stopper в песочнице (уведомления отключены). */
-  function checkSandboxPortfolioStopperNotify() {
-    if (!liveSandboxNotifyActive()) return;
-    if (!("Notification" in window) || Notification.permission !== "granted") return;
+  /** Проверка портфельного stopper (песочница и реал) + e-mail. */
+  function checkPortfolioStopperNotify() {
+    if (!isLiveMode()) return;
     const cfg = stopperConfig();
     if (!cfg.useSl && !cfg.useTp) return;
     const pv = state.live.portfolioValue;
@@ -477,8 +476,30 @@
     if (watch.lastNotifyKey === notifyKey) return;
     watch.lastNotifyKey = notifyKey;
 
-    showSandboxStopperNotification(hit);
+    notifyPortfolioStopperHit(hit);
     watch.referenceEquity = hit.equity;
+  }
+
+  function notifyPortfolioStopperHit(hit) {
+    if (!hit) return;
+    const isSl = hit.kind === "sl";
+    const mode = isLiveSandbox() ? "песочница" : "реал";
+    sendLiveNotify(
+      isSl ? "portfolio_sl" : "portfolio_tp",
+      `MultiLogic: портфельный ${isSl ? "stop-loss" : "take-profit"}`,
+      `${isSl ? "Stop-loss" : "Take-profit"} (${mode}) · портфель ${fmt(hit.equity, 0)} ₽`
+      + ` · база ${fmt(hit.referenceEquity, 0)} ₽ · порог ${fmt(hit.triggerLevel, 0)} ₽ · ATR ${fmt(hit.atr, 0)} ₽`
+    );
+    noteLiveTech(
+      "portfolio-stopper-notify",
+      `${hit.kind} @ ${hit.time || "—"}`,
+      `eq=${fmt(hit.equity, 0)} ref=${fmt(hit.referenceEquity, 0)}`
+    );
+  }
+
+  /** @deprecated alias */
+  function checkSandboxPortfolioStopperNotify() {
+    checkPortfolioStopperNotify();
   }
 
   // === T-Bank: токен, счета, статус подключения ===
@@ -2150,27 +2171,69 @@
     noteLiveTech("live-unstick", reason || "busy-flags-cleared");
   }
 
+  const LIVE_NOTIFY_EVENT_DOM = {
+    sandboxMode: "live-notify-ev-sandbox-mode",
+    portfolioSlTp: "live-notify-ev-portfolio-sltp",
+    positionSlTp: "live-notify-ev-position-sltp",
+    tradingToggle: "live-notify-ev-trading-toggle",
+    formParams: "live-notify-ev-form-params"
+  };
+
+  const LIVE_NOTIFY_DEFAULT_EVENTS = {
+    sandboxMode: true,
+    portfolioSlTp: true,
+    positionSlTp: true,
+    tradingToggle: true,
+    formParams: false
+  };
+
+  function normalizeLiveNotifyEvents(raw) {
+    const src = raw && typeof raw === "object" ? raw : {};
+    const out = { ...LIVE_NOTIFY_DEFAULT_EVENTS };
+    for (const k of Object.keys(LIVE_NOTIFY_DEFAULT_EVENTS)) {
+      if (src[k] != null) out[k] = !!src[k];
+    }
+    return out;
+  }
+
+  function liveNotifyEventsFromDom() {
+    const out = { ...LIVE_NOTIFY_DEFAULT_EVENTS };
+    for (const [key, id] of Object.entries(LIVE_NOTIFY_EVENT_DOM)) {
+      const el = $(id);
+      if (el) out[key] = !!el.checked;
+    }
+    return out;
+  }
+
+  function applyLiveNotifyEventsToDom(events) {
+    const ev = normalizeLiveNotifyEvents(events);
+    for (const [key, id] of Object.entries(LIVE_NOTIFY_EVENT_DOM)) {
+      const el = $(id);
+      if (el) el.checked = !!ev[key];
+    }
+  }
+
+  function liveNotifyEventCategoryEnabled(eventId) {
+    const ev = liveNotifyEventsFromDom();
+    if (eventId === "sandbox_on" || eventId === "sandbox_off") return !!ev.sandboxMode;
+    if (eventId === "portfolio_sl" || eventId === "portfolio_tp") return !!ev.portfolioSlTp;
+    if (eventId === "position_sl" || eventId === "position_tp") return !!ev.positionSlTp;
+    if (eventId === "trading_start" || eventId === "trading_stop") return !!ev.tradingToggle;
+    if (eventId === "form_params") return !!ev.formParams;
+    return false;
+  }
+
   function liveNotifyConfig() {
     return {
       email: String($("live-notify-email")?.value || "").trim(),
       emailEnabled: !!$("live-notify-email-enabled")?.checked,
-      phone: String($("live-notify-phone")?.value || "").trim(),
-      phoneEnabled: !!$("live-notify-phone-enabled")?.checked
+      events: liveNotifyEventsFromDom()
     };
   }
 
   function isLiveNotifyChannelActive() {
     const cfg = liveNotifyConfig();
-    return (cfg.emailEnabled && !!cfg.email) || (cfg.phoneEnabled && !!cfg.phone);
-  }
-
-  function normalizeRuPhoneForSms(raw) {
-    const digits = String(raw || "").replace(/\D/g, "");
-    if (!digits) return null;
-    if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
-    if (digits.length === 11 && digits.startsWith("7")) return digits;
-    if (digits.length === 10) return `7${digits}`;
-    return null;
+    return cfg.emailEnabled && !!cfg.email;
   }
 
   function isValidNotifyEmail(email) {
@@ -2208,12 +2271,6 @@
     return `${s.slice(0, Math.min(2, at))}***${s.slice(at)}`;
   }
 
-  function maskNotifyPhone(v) {
-    const d = String(v || "").replace(/\D/g, "");
-    if (!d) return "—";
-    return `***${d.slice(-4)}`;
-  }
-
   function recordLiveNotifyDiag(patch) {
     state.live.notifyDiag = {
       ...(state.live.notifyDiag || {}),
@@ -2229,17 +2286,17 @@
     if (!hint) return;
     const cfg = liveNotifyConfig();
     const nd = state.live.notifyDiag || {};
-    const base = "События: цель, срок цели, песочница ↔ реал. Нужны галочки «Рассылать» + run-dev/run-prod (порт 4201) + SMTP/SMS.ru в окружении сервера.";
+    const base = "Только e-mail. run-dev / run-prod (порт 4201) + SMTP Mail.ru. Отметьте события и «Рассылать на e-mail».";
     const parts = [base];
     if (!LIVE_NOTIFY_HOST) parts.push("Сейчас: не localhost — рассылка отключена.");
-    else if (!cfg.emailEnabled && !cfg.phoneEnabled) {
-      parts.push("Сейчас: адреса без галочек «Рассылать» — уведомления не отправляются.");
+    else if (!cfg.emailEnabled) {
+      parts.push("Сейчас: галочка «Рассылать на e-mail» выключена.");
+    } else if (!cfg.email) {
+      parts.push("Сейчас: укажите e-mail.");
     } else if (nd.sinkReachable === false) {
       parts.push(`Сейчас: сервер :4201 недоступен (${nd.sinkReason || "—"}). Перезапустите run-dev.bat.`);
-    } else if (nd.smtpConfigured === false && cfg.emailEnabled) {
-      parts.push("E-mail: сервер только пишет в logs/finresp-notify.log (нет ML_NOTIFY_SMTP_HOST).");
-    } else if (nd.smsruConfigured === false && cfg.phoneEnabled) {
-      parts.push("SMS: сервер только пишет в log (нет ML_NOTIFY_SMSRU_API_ID).");
+    } else if (nd.smtpConfigured === false) {
+      parts.push("E-mail: сервер только пишет в logs/finresp-notify.log (нет SMTP в notify.local.json).");
     }
     if (nd.lastStatus && nd.lastEvent) {
       parts.push(`Последнее: ${nd.lastEvent} → ${nd.lastStatus}${nd.lastDetail ? ` (${nd.lastDetail})` : ""}.`);
@@ -2279,9 +2336,7 @@
         lastStatus: "skip-not-localhost",
         lastDetail: location.hostname,
         email: maskNotifyEmail(cfg.email),
-        phone: maskNotifyPhone(cfg.phone),
-        emailOn: cfg.emailEnabled,
-        phoneOn: cfg.phoneEnabled
+        emailOn: cfg.emailEnabled
       });
       return;
     }
@@ -2289,26 +2344,27 @@
       recordLiveNotifyDiag({ lastEvent: eventId, lastStatus: "skip-not-live" });
       return;
     }
-    if (!cfg.emailEnabled && !cfg.phoneEnabled) {
+    if (!liveNotifyEventCategoryEnabled(eventId)) {
       recordLiveNotifyDiag({
         lastEvent: eventId,
-        lastStatus: "skip-channels-off",
-        lastDetail: "включите галочки «Рассылать»",
-        email: maskNotifyEmail(cfg.email),
-        phone: maskNotifyPhone(cfg.phone),
-        emailOn: false,
-        phoneOn: false
+        lastStatus: "skip-event-off",
+        lastDetail: "событие выключено в панели «Рассылка»"
       });
       return;
     }
-    if (cfg.emailEnabled && !isValidNotifyEmail(cfg.email)) {
-      recordLiveNotifyDiag({ lastEvent: eventId, lastStatus: "skip-email-invalid", email: maskNotifyEmail(cfg.email) });
-      noteLiveTech("live-notify", "skip-email-invalid", eventId);
+    if (!cfg.emailEnabled) {
+      recordLiveNotifyDiag({
+        lastEvent: eventId,
+        lastStatus: "skip-channel-off",
+        lastDetail: "включите «Рассылать на e-mail»",
+        email: maskNotifyEmail(cfg.email),
+        emailOn: false
+      });
       return;
     }
-    if (cfg.phoneEnabled && !normalizeRuPhoneForSms(cfg.phone)) {
-      recordLiveNotifyDiag({ lastEvent: eventId, lastStatus: "skip-phone-invalid", phone: maskNotifyPhone(cfg.phone) });
-      noteLiveTech("live-notify", "skip-phone-invalid", eventId);
+    if (!isValidNotifyEmail(cfg.email)) {
+      recordLiveNotifyDiag({ lastEvent: eventId, lastStatus: "skip-email-invalid", email: maskNotifyEmail(cfg.email) });
+      noteLiveTech("live-notify", "skip-email-invalid", eventId);
       return;
     }
     const payload = JSON.stringify({
@@ -2316,20 +2372,18 @@
       event: eventId,
       subject: String(subject || "").slice(0, 200),
       message: String(message || "").slice(0, 4000),
-      email: cfg.emailEnabled ? cfg.email : "",
-      phone: cfg.phoneEnabled ? normalizeRuPhoneForSms(cfg.phone) : "",
-      emailEnabled: !!cfg.emailEnabled,
-      phoneEnabled: !!cfg.phoneEnabled
+      email: cfg.email,
+      phone: "",
+      emailEnabled: true,
+      phoneEnabled: false
     });
     recordLiveNotifyDiag({
       lastEvent: eventId,
       lastStatus: "sending",
       email: maskNotifyEmail(cfg.email),
-      phone: maskNotifyPhone(cfg.phone),
-      emailOn: cfg.emailEnabled,
-      phoneOn: cfg.phoneEnabled
+      emailOn: true
     });
-    noteLiveTech("live-notify", eventId, cfg.emailEnabled ? cfg.email : cfg.phone);
+    noteLiveTech("live-notify", eventId, cfg.email);
     void fetch(LIVE_NOTIFY_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2343,13 +2397,11 @@
         recordLiveNotifyDiag({
           lastStatus: `http-${res.status}`,
           lastDetail: String(data.error || text).slice(0, 240),
-          emailDelivery: "—",
-          smsDelivery: "—"
+          emailDelivery: "—"
         });
         return;
       }
       const emailR = data.results?.email;
-      const smsR = data.results?.sms;
       const fmtDelivery = (r) => {
         if (!r) return "—";
         if (r.skipped) return `skipped:${r.reason || "—"}`;
@@ -2359,10 +2411,8 @@
       recordLiveNotifyDiag({
         lastStatus: "sent",
         lastDetail: "",
-        emailDelivery: cfg.emailEnabled ? fmtDelivery(emailR) : "off",
-        smsDelivery: cfg.phoneEnabled ? fmtDelivery(smsR) : "off",
-        smtpConfigured: emailR?.skipped ? emailR.reason !== "nodemailer-missing" && emailR.reason !== "no-smtp" : !!emailR?.ok,
-        smsruConfigured: smsR?.skipped ? smsR.reason !== "no-smsru-api" : !!smsR?.ok
+        emailDelivery: fmtDelivery(emailR),
+        smtpConfigured: emailR?.skipped ? emailR.reason !== "nodemailer-missing" && emailR.reason !== "no-smtp" : !!emailR?.ok
       });
     }).catch((err) => {
       recordLiveNotifyDiag({
@@ -2372,32 +2422,30 @@
     });
   }
 
-  function notifyLiveGoalAchieved(ann, targetPct) {
-    if (wasLiveNotifySent("goal_achieved")) return;
-    markLiveNotifySent("goal_achieved");
-    const annTxt = Number.isFinite(ann) ? fmtPct(ann) : "—";
-    const tgtTxt = Number.isFinite(targetPct) ? fmtPct(targetPct) : "—";
-    sendLiveNotify(
-      "goal_achieved",
-      "MultiLogic: цель достигнута",
-      `Цель достигнута: ${annTxt} годовых (цель ${tgtTxt}). Торговля остановлена.`
-    );
+  function notifyLiveGoalAchieved(_ann, _targetPct) {
+    /* цель — без e-mail; только остановка торговли */
   }
 
   function checkLiveGoalExpiredNotify() {
-    if (!liveGoalEnabled() || !isLiveMode()) return;
-    if (state.live.goalAchieved) return;
-    const end = $("live-goal-end-date")?.value || "";
-    if (!isLiveGoalEndDateExpired(end)) return;
-    const key = `goal_expired:${end}`;
-    if (wasLiveNotifySent(key)) return;
-    markLiveNotifySent(key);
-    const dateRu = formatLiveGoalDateRu(end);
-    sendLiveNotify(
-      "goal_expired",
-      "MultiLogic: истёк срок цели",
-      `Истёк срок торговли по цели (до ${dateRu}). Торговля не останавливается автоматически.`
-    );
+    /* срок цели — без e-mail */
+  }
+
+  function notifyLiveTradingToggle(active) {
+    if (!isLiveMode()) return;
+    const sandbox = isLiveSandbox() ? " · песочница" : "";
+    if (active) {
+      sendLiveNotify(
+        "trading_start",
+        "MultiLogic: торговля запущена",
+        `Робот начал торговлю${sandbox}.`
+      );
+    } else {
+      sendLiveNotify(
+        "trading_stop",
+        "MultiLogic: торговля остановлена",
+        `Торговля остановлена кнопкой «Остановить торговлю»${sandbox}.`
+      );
+    }
   }
 
   function notifyLiveSandboxModeSwitch(sandboxOn) {
@@ -2417,6 +2465,87 @@
     }
   }
 
+  function checkPositionSlTpNotify(result) {
+    if (!isLiveMode() || !state.live.active) return;
+    for (const p of result?.perSec || []) {
+      const last = p.rows?.at(-1);
+      if (!last) continue;
+      const ps = last.posStop;
+      if (ps !== "sl" && ps !== "tp") continue;
+      const barTime = last.time || state.live.lastCandleBarTime || "";
+      const key = `pos-sltp:${p.sec}:${ps}:${barTime}`;
+      if (wasLiveNotifySent(key)) continue;
+      markLiveNotifySent(key);
+      const eventId = ps === "sl" ? "position_sl" : "position_tp";
+      sendLiveNotify(
+        eventId,
+        `MultiLogic: позиционный ${ps === "sl" ? "stop-loss" : "take-profit"} · ${p.sec}`,
+        `${p.sec}: ${ps === "sl" ? "Stop-loss" : "Take-profit"} на баре ${barTime}. Close=${fmt(last.close, 2)}.`
+      );
+    }
+  }
+
+  let liveNotifyFormParamsSnapshot = "";
+  let liveNotifyFormParamsTimer = null;
+
+  function liveNotifyFormParamsSnapshotText() {
+    return JSON.stringify({
+      reverse: !!$("param-reverse")?.checked,
+      reverseSignals: !!$("param-reverse-signals")?.checked,
+      autoReverses: !!$("param-auto-reverses")?.checked,
+      autoLookback: String($("param-auto-reverses-lookback")?.value || ""),
+      autoStep: String($("param-auto-reverses-step")?.value || ""),
+      orderType: String($("live-order-type")?.value || ""),
+      manualOrderType: String($("live-manual-order-type")?.value || ""),
+      sl: String($("param-sl")?.value || ""),
+      tp: String($("param-tp")?.value || ""),
+      stopperSl: String($("stopper-sl-mult")?.value || ""),
+      stopperTp: String($("stopper-tp-mult")?.value || "")
+    });
+  }
+
+  function formatLiveNotifyFormParamsSummary(parsed) {
+    try {
+      const o = typeof parsed === "string" ? JSON.parse(parsed) : parsed;
+      const parts = [];
+      if (o.reverse != null) parts.push(`ReverseSides=${o.reverse ? "on" : "off"}`);
+      if (o.reverseSignals != null) parts.push(`ReverseSignals=${o.reverseSignals ? "on" : "off"}`);
+      if (o.autoReverses != null) parts.push(`AutoReverses=${o.autoReverses ? "on" : "off"}`);
+      if (o.autoLookback) parts.push(`lookback=${o.autoLookback}`);
+      if (o.autoStep) parts.push(`step=${o.autoStep}`);
+      if (o.orderType) parts.push(`авто-заявка=${o.orderType}`);
+      if (o.manualOrderType) parts.push(`ручная=${o.manualOrderType}`);
+      if (o.sl) parts.push(`@SL=${o.sl}`);
+      if (o.tp) parts.push(`@TP=${o.tp}`);
+      if (o.stopperSl) parts.push(`@@SL=${o.stopperSl}`);
+      if (o.stopperTp) parts.push(`@@TP=${o.stopperTp}`);
+      return parts.join(", ") || "параметры формы";
+    } catch (_) {
+      return "параметры формы";
+    }
+  }
+
+  function onLiveConfigSavedForNotify() {
+    if (state.restoringConfig || !isLiveMode()) return;
+    const snap = liveNotifyFormParamsSnapshotText();
+    if (!liveNotifyFormParamsSnapshot) {
+      liveNotifyFormParamsSnapshot = snap;
+      return;
+    }
+    if (snap === liveNotifyFormParamsSnapshot) return;
+    const prev = liveNotifyFormParamsSnapshot;
+    liveNotifyFormParamsSnapshot = snap;
+    clearTimeout(liveNotifyFormParamsTimer);
+    liveNotifyFormParamsTimer = setTimeout(() => {
+      sendLiveNotify(
+        "form_params",
+        "MultiLogic: параметры формы",
+        `Изменены параметры: ${formatLiveNotifyFormParamsSummary(snap)}`
+        + `\nБыло: ${formatLiveNotifyFormParamsSummary(prev)}`
+      );
+    }, 1200);
+  }
+
   function bindLiveNotifyUi() {
     if (bindLiveNotifyUi._done) return;
     bindLiveNotifyUi._done = true;
@@ -2426,15 +2555,16 @@
       updateTechInfo("live-notify-config");
     };
     $("live-notify-email")?.addEventListener("change", onChange);
-    $("live-notify-phone")?.addEventListener("change", onChange);
     $("live-notify-email-enabled")?.addEventListener("change", onChange);
-    $("live-notify-phone-enabled")?.addEventListener("change", onChange);
     $("live-notify-email")?.addEventListener("input", () => { syncLiveNotifyHint(); });
-    $("live-notify-phone")?.addEventListener("input", () => { syncLiveNotifyHint(); });
+    for (const id of Object.values(LIVE_NOTIFY_EVENT_DOM)) {
+      $(id)?.addEventListener("change", onChange);
+    }
   }
 
   function initLiveNotify() {
     bindLiveNotifyUi();
+    liveNotifyFormParamsSnapshot = liveNotifyFormParamsSnapshotText();
     syncLiveNotifyHint();
     void probeLiveNotifySink();
     checkLiveGoalExpiredNotify();
@@ -6633,6 +6763,7 @@ ${referenceBlock}
       `mode=${result.finrespMode || "tail"} instruments=${result.perSec.length} withPos=${withPos} opSignals=${withOp} skipped=${state.live.lastFinrespDiag.skippedCount}`,
       ""
     );
+    checkPositionSlTpNotify(result);
   }
 
   /** Почему reconcile не выставил заявку. */
@@ -7218,6 +7349,7 @@ ${referenceBlock}
       state.live.lastError = "";
       resetLiveTradingBusyFlags();
       syncLiveTradingUi();
+      notifyLiveTradingToggle(false);
       updateTechInfo("live-trading-stopped");
       return;
     }
@@ -7261,6 +7393,7 @@ ${referenceBlock}
       resetLiveFinrespBaselinesForTrading();
       state.live.lastError = "";
       syncLiveTradingUi();
+      notifyLiveTradingToggle(true);
       if (!state.live.pollTimer) startLiveModePoll();
       const sb = ensureSandboxState();
       void (async () => {
@@ -7294,6 +7427,7 @@ ${referenceBlock}
     resetLiveFinrespBaselinesForTrading();
     state.live.lastError = "";
     syncLiveTradingUi();
+    notifyLiveTradingToggle(true);
     if (!state.live.pollTimer) startLiveModePoll();
     void (async () => {
       try {
@@ -7883,6 +8017,7 @@ ${referenceBlock}
       checkLiveTradingGoal,
       initLiveNotify,
       bindLiveNotifyUi,
+      onLiveConfigSavedForNotify,
       unstickLiveUi,
       refreshLiveChartsUi,
       refreshLiveEquityChartsUi,
