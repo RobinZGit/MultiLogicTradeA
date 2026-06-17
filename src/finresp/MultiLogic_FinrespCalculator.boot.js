@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-trading-periods-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-tot-ctg-stoch-indicators-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -1044,15 +1044,20 @@
   calcState = state;
   const INDICATOR_OPTIONS = E.INDICATOR_OPTIONS || [
     { key: "sma", label: "SMA" },
+    { key: "cma", label: "CMA" },
     { key: "atr", label: "ATR" },
     { key: "stoch", label: "Stoch" },
+    { key: "totstoch", label: "TotStoch" },
+    { key: "ctgstoch", label: "CtgStoch" },
     { key: "linreg", label: "LinReg" },
     { key: "macd", label: "MACD" },
     { key: "cci", label: "CCI" },
     { key: "bollinger", label: "Bollinger" },
     { key: "momentum", label: "Momentum" },
-    { key: "vwap", label: "VWAP" }
+    { key: "vwap", label: "VWAP" },
+    { key: "rand", label: "Rand" }
   ];
+  const INDICATOR_KEYS_DEFAULT_ON = new Set(["totstoch", "ctgstoch"]);
   const INDICATOR_LABELS = Object.fromEntries(INDICATOR_OPTIONS.map((x) => [x.key, x.label]));
   const OPT_BTN_ICON = "⚡";
   const OPT_BUTTONS = [
@@ -1283,7 +1288,7 @@
       logicLines: visibleLogicLinesConfig(),
       logicLineKeys: state.logicLineKeys.filter((k) => !hiddenLogicKeySet().has(k)),
       hiddenLogicKeys: (state.hiddenLogicKeys || []).slice(),
-      logicCatalogVersion: 4,
+      logicCatalogVersion: 5,
       logicLabels: { ...state.logicLabels },
       randomPriceShift: !!$("random-price-shift")?.checked,
       tradingPeriods: readTradingPeriodsConfigFromDom(),
@@ -1511,6 +1516,7 @@
         setValueIfExists("prefix-futures", cfg.prefixes.futures);
       }
       if (Array.isArray(cfg.indicators)) applyIndicatorSelection(cfg.indicators);
+      else applyIndicatorSelection(null);
       if (Array.isArray(cfg.hiddenLogicKeys)) {
         state.hiddenLogicKeys = cfg.hiddenLogicKeys.filter(Boolean);
       } else if (!Array.isArray(state.hiddenLogicKeys)) {
@@ -2252,9 +2258,25 @@
 
   /** Применение настроек/результата: `applyIndicatorSelection`. */
   function applyIndicatorSelection(value) {
-    const keys = new Set(normalizeIndicatorCandidate(value));
-    document.querySelectorAll("#indicator-toggles input[type=checkbox]").forEach((el) => {
-      el.checked = keys.has(el.value);
+    const boxes = Array.from(document.querySelectorAll("#indicator-toggles input[type=checkbox]"));
+    if (!boxes.length) return;
+    if (value == null) {
+      boxes.forEach((el) => { el.checked = true; });
+      return;
+    }
+    const enabled = new Set(normalizeIndicatorCandidate(value));
+    const savedList = Array.isArray(value)
+      ? value.map((v) => String(v || "").toLowerCase())
+      : null;
+    boxes.forEach((el) => {
+      const k = el.value;
+      if (enabled.has(k)) {
+        el.checked = true;
+      } else if (savedList && INDICATOR_KEYS_DEFAULT_ON.has(k) && !savedList.includes(k)) {
+        el.checked = true;
+      } else {
+        el.checked = false;
+      }
     });
   }
 
@@ -3704,6 +3726,16 @@
       }
       if (line && /\bSMA\s*\(\s*3\s*[;)]/i.test(line) && E.DEFAULT_LOGIC_LINES[k]) {
         state.customLines[k] = E.DEFAULT_LOGIC_LINES[k];
+      }
+    }
+    for (const k of ["FTS", "FTT", "FTS_S", "FTT_S"]) {
+      if (hidden.has(k)) continue;
+      const line = state.customLines[k];
+      const def = E.DEFAULT_LOGIC_LINES[k];
+      if (!line || !def) continue;
+      if (/TotStoch/i.test(line) && /CtgStoch/i.test(line)) continue;
+      if (/CtgStoch/i.test(line) || /TotStoch/i.test(line)) {
+        state.customLines[k] = def;
       }
     }
   }

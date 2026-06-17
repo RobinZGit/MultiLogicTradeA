@@ -1,15 +1,15 @@
 /*
- * FTT — фьючерсы: CtgStoch + Stoch, лонг-only, трендовая схема 80↔20.
+ * FTT — фьючерсы: TotStoch + CtgStoch + Stoch, лонг-only, тренд 80↔20.
  */
 (function (root) {
   "use strict";
   const F = root.MultiLogicFinrespLogics.fragment;
   root.MultiLogicFinrespLogics.register({
     id: "FTT",
-    name: "Фьючерс: CtgStoch+Stoch (лонг), тренд 80↔20",
+    name: "Фьючерс: TotStoch+CtgStoch+Stoch (лонг), тренд 80↔20",
     defaultLine:
-      "Op(Long(CtgStoch(14-3-3)(K>=80) AND Stoch(14-3-3)(K>=80))) "
-      + "Cl(Long(CtgStoch(14-3-3)(K<=20) AND Stoch(14-3-3)(K<=20))) "
-      + F("SLTP") + "Note(futures-ctg-stoch-trend)"
+      "Op(Long(TotStoch(14-3-3)(K>=80) AND CtgStoch(14-3-3)(K>=80) AND Stoch(14-3-3)(K>=80))) "
+      + "Cl(Long(TotStoch(14-3-3)(K<=20) AND CtgStoch(14-3-3)(K<=20) AND Stoch(14-3-3)(K<=20))) "
+      + F("SLTP") + "Note(futures-tot-ctg-stoch-trend)"
   });
 })(typeof window !== "undefined" ? window : globalThis);

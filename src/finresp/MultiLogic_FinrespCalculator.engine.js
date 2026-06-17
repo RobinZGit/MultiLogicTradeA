@@ -694,6 +694,15 @@
     return false;
   }
 
+  /** Подпрограмма `parsedUsesTotStoch`. */
+  function parsedUsesTotStoch(parsed) {
+    if (!parsed) return false;
+    for (const a of [...(parsed.opAtoms || []), ...(parsed.clAtoms || [])]) {
+      if (indicatorKey(a?.kind) === "totstoch") return true;
+    }
+    return false;
+  }
+
   /** Подпрограмма `specUsesCtgStoch`. */
   function specUsesCtgStoch(spec) {
     if (!spec || spec.disabled) return false;
@@ -715,9 +724,15 @@
 
   /** Подпрограмма `indicatorCacheExtrasForParsed`. */
   function indicatorCacheExtrasForParsed(signalCandles, parsed, opts) {
-    if (!parsedUsesCtgStoch(parsed)) return null;
-    const sec = opts?.sec || signalCandles?.[0]?.sec || "?";
-    return { ctgCandles: resolveCtgCandles(signalCandles, opts?.ctgSpotPacks, sec) };
+    const extras = {};
+    if (parsedUsesCtgStoch(parsed)) {
+      const sec = opts?.sec || signalCandles?.[0]?.sec || "?";
+      extras.ctgCandles = resolveCtgCandles(signalCandles, opts?.ctgSpotPacks, sec);
+    }
+    if (parsedUsesTotStoch(parsed)) {
+      extras.totCandles = opts?.totCandles || signalCandles;
+    }
+    return Object.keys(extras).length ? extras : null;
   }
 
   /** Подпрограмма `createLogicIndicatorCache`. */
@@ -730,11 +745,16 @@
   /** Подпрограмма `createStackIndicatorCache`. */
   function createStackIndicatorCache(signalCandles, parsedList, opts) {
     if (opts?.indicatorCache) return opts.indicatorCache;
-    if (!(parsedList || []).some(parsedUsesCtgStoch)) return new IndicatorCache(signalCandles);
-    const sec = opts?.sec || signalCandles?.[0]?.sec || "?";
-    return new IndicatorCache(signalCandles, {
-      ctgCandles: resolveCtgCandles(signalCandles, opts?.ctgSpotPacks, sec)
-    });
+    const list = parsedList || [];
+    const extras = {};
+    if (list.some(parsedUsesCtgStoch)) {
+      const sec = opts?.sec || signalCandles?.[0]?.sec || "?";
+      extras.ctgCandles = resolveCtgCandles(signalCandles, opts?.ctgSpotPacks, sec);
+    }
+    if (list.some(parsedUsesTotStoch)) {
+      extras.totCandles = opts?.totCandles || signalCandles;
+    }
+    return Object.keys(extras).length ? new IndicatorCache(signalCandles, extras) : new IndicatorCache(signalCandles);
   }
 
   /** Разбор строки Op/Cl в AST/spec для симуляции одной логики. */

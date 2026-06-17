@@ -30,10 +30,19 @@ describe("buildContangoCandles", () => {
 });
 
 describe("CtgStoch in FTS", () => {
+  it("FTS default line includes TotStoch and CtgStoch", () => {
+    const line = E.DEFAULT_LOGIC_LINES.FTS || "";
+    assert.match(line, /TotStoch/i);
+    assert.match(line, /CtgStoch/i);
+    assert.match(line, /Stoch\(14-3-3\)/i);
+  });
+
   it("runOnCandles с spot даёт конечный finresp", () => {
     const fut = makeCandles("GZH5", 260, { startPrice: 200, drift: 0.05, market: "futures" });
     const spot = makeCandles("GAZP", 260, { startPrice: 190, drift: 0.02, market: "shares" });
-    const spec = E.resolveLogicSpec("FTS", {}, E.DEFAULT_PARAMS, { stoch: true, ctgstoch: true });
+    const spec = E.resolveLogicSpec("FTS", {}, E.DEFAULT_PARAMS, {
+      stoch: true, ctgstoch: true, totstoch: true
+    });
     const a = 120;
     const b = fut.length - 1;
     const vol = { deposit: 100000, maxPositions: 5, volume: 10 };
@@ -43,5 +52,13 @@ describe("CtgStoch in FTS", () => {
     });
     assert.ok(Number.isFinite(r.finresp));
     assert.ok(r.rows?.length > 0);
+  });
+
+  it("disabled indicator atoms are removed from Op/Cl", () => {
+    const line = E.DEFAULT_LOGIC_LINES.FTS;
+    const allOn = E.parseLogicLine(line, E.DEFAULT_PARAMS, { stoch: true, ctgstoch: true, totstoch: true });
+    const noCtg = E.parseLogicLine(line, E.DEFAULT_PARAMS, { stoch: true, ctgstoch: false, totstoch: true });
+    assert.ok((allOn.opLongAtoms || []).some((a) => String(a?.kind).toLowerCase() === "ctgstoch"));
+    assert.equal((noCtg.opLongAtoms || []).some((a) => String(a?.kind).toLowerCase() === "ctgstoch"), false);
   });
 });
