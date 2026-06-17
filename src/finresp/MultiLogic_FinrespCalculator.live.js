@@ -2200,15 +2200,114 @@
     }
   }
 
-  function sendLiveNotify(eventId, subject, message) {
-    if (!LIVE_NOTIFY_HOST || !isLiveMode()) return;
+  function maskNotifyEmail(v) {
+    const s = String(v || "").trim();
+    if (!s) return "—";
+    const at = s.indexOf("@");
+    if (at <= 0) return `${s.slice(0, 2)}***`;
+    return `${s.slice(0, Math.min(2, at))}***${s.slice(at)}`;
+  }
+
+  function maskNotifyPhone(v) {
+    const d = String(v || "").replace(/\D/g, "");
+    if (!d) return "—";
+    return `***${d.slice(-4)}`;
+  }
+
+  function recordLiveNotifyDiag(patch) {
+    state.live.notifyDiag = {
+      ...(state.live.notifyDiag || {}),
+      ...patch,
+      updatedAt: new Date().toISOString()
+    };
+    syncLiveNotifyHint();
+    updateTechInfo("live-notify-diag");
+  }
+
+  function syncLiveNotifyHint() {
+    const hint = $("live-notify-hint");
+    if (!hint) return;
     const cfg = liveNotifyConfig();
-    if (!cfg.emailEnabled && !cfg.phoneEnabled) return;
+    const nd = state.live.notifyDiag || {};
+    const base = "События: цель, срок цели, песочница ↔ реал. Нужны галочки «Рассылать» + run-dev/run-prod (порт 4201) + SMTP/SMS.ru в окружении сервера.";
+    const parts = [base];
+    if (!LIVE_NOTIFY_HOST) parts.push("Сейчас: не localhost — рассылка отключена.");
+    else if (!cfg.emailEnabled && !cfg.phoneEnabled) {
+      parts.push("Сейчас: адреса без галочек «Рассылать» — уведомления не отправляются.");
+    } else if (nd.sinkReachable === false) {
+      parts.push(`Сейчас: сервер :4201 недоступен (${nd.sinkReason || "—"}). Перезапустите run-dev.bat.`);
+    } else if (nd.smtpConfigured === false && cfg.emailEnabled) {
+      parts.push("E-mail: сервер только пишет в logs/finresp-notify.log (нет ML_NOTIFY_SMTP_HOST).");
+    } else if (nd.smsruConfigured === false && cfg.phoneEnabled) {
+      parts.push("SMS: сервер только пишет в log (нет ML_NOTIFY_SMSRU_API_ID).");
+    }
+    if (nd.lastStatus && nd.lastEvent) {
+      parts.push(`Последнее: ${nd.lastEvent} → ${nd.lastStatus}${nd.lastDetail ? ` (${nd.lastDetail})` : ""}.`);
+    }
+    hint.textContent = parts.join(" ");
+  }
+
+  async function probeLiveNotifySink() {
+    if (!LIVE_NOTIFY_HOST) {
+      recordLiveNotifyDiag({ sinkReachable: false, sinkReason: "not-localhost", smtpConfigured: false, smsruConfigured: false });
+      return;
+    }
+    try {
+      const res = await fetch("http://127.0.0.1:4201/finresp-notify-health", { method: "GET" });
+      const data = await res.json().catch(() => ({}));
+      recordLiveNotifyDiag({
+        sinkReachable: !!res.ok,
+        sinkReason: res.ok ? "" : `http-${res.status}`,
+        smtpConfigured: !!data.smtp,
+        smsruConfigured: !!data.smsru
+      });
+    } catch (err) {
+      recordLiveNotifyDiag({
+        sinkReachable: false,
+        sinkReason: err?.message || String(err),
+        smtpConfigured: false,
+        smsruConfigured: false
+      });
+    }
+  }
+
+  function sendLiveNotify(eventId, subject, message) {
+    const cfg = liveNotifyConfig();
+    if (!LIVE_NOTIFY_HOST) {
+      recordLiveNotifyDiag({
+        lastEvent: eventId,
+        lastStatus: "skip-not-localhost",
+        lastDetail: location.hostname,
+        email: maskNotifyEmail(cfg.email),
+        phone: maskNotifyPhone(cfg.phone),
+        emailOn: cfg.emailEnabled,
+        phoneOn: cfg.phoneEnabled
+      });
+      return;
+    }
+    if (!isLiveMode()) {
+      recordLiveNotifyDiag({ lastEvent: eventId, lastStatus: "skip-not-live" });
+      return;
+    }
+    if (!cfg.emailEnabled && !cfg.phoneEnabled) {
+      recordLiveNotifyDiag({
+        lastEvent: eventId,
+        lastStatus: "skip-channels-off",
+        lastDetail: "включите галочки «Рассылать»",
+        email: maskNotifyEmail(cfg.email),
+        phone: maskNotifyPhone(cfg.phone),
+        emailOn: false,
+        phoneOn: false
+      });
+      return;
+    }
     if (cfg.emailEnabled && !isValidNotifyEmail(cfg.email)) {
+      recordLiveNotifyDiag({ lastEvent: eventId, lastStatus: "skip-email-invalid", email: maskNotifyEmail(cfg.email) });
       noteLiveTech("live-notify", "skip-email-invalid", eventId);
       return;
     }
     if (cfg.phoneEnabled && !normalizeRuPhoneForSms(cfg.phone)) {
+      recordLiveNotifyDiag({ lastEvent: eventId, lastStatus: "skip-phone-invalid", phone: maskNotifyPhone(cfg.phone) });
       noteLiveTech("live-notify", "skip-phone-invalid", eventId);
       return;
     }
@@ -2222,19 +2321,55 @@
       emailEnabled: !!cfg.emailEnabled,
       phoneEnabled: !!cfg.phoneEnabled
     });
+    recordLiveNotifyDiag({
+      lastEvent: eventId,
+      lastStatus: "sending",
+      email: maskNotifyEmail(cfg.email),
+      phone: maskNotifyPhone(cfg.phone),
+      emailOn: cfg.emailEnabled,
+      phoneOn: cfg.phoneEnabled
+    });
     noteLiveTech("live-notify", eventId, cfg.emailEnabled ? cfg.email : cfg.phone);
-    if (navigator.sendBeacon) {
-      try {
-        const blob = new Blob([payload], { type: "application/json" });
-        if (navigator.sendBeacon(LIVE_NOTIFY_URL, blob)) return;
-      } catch (_) { /* fetch fallback */ }
-    }
-    fetch(LIVE_NOTIFY_URL, {
+    void fetch(LIVE_NOTIFY_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload,
       keepalive: true
-    }).catch(() => { /* optional local sink */ });
+    }).then(async (res) => {
+      const text = await res.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch (_) { /* plain */ }
+      if (!res.ok) {
+        recordLiveNotifyDiag({
+          lastStatus: `http-${res.status}`,
+          lastDetail: String(data.error || text).slice(0, 240),
+          emailDelivery: "—",
+          smsDelivery: "—"
+        });
+        return;
+      }
+      const emailR = data.results?.email;
+      const smsR = data.results?.sms;
+      const fmtDelivery = (r) => {
+        if (!r) return "—";
+        if (r.skipped) return `skipped:${r.reason || "—"}`;
+        if (r.ok) return "ok";
+        return String(r.error || "fail");
+      };
+      recordLiveNotifyDiag({
+        lastStatus: "sent",
+        lastDetail: "",
+        emailDelivery: cfg.emailEnabled ? fmtDelivery(emailR) : "off",
+        smsDelivery: cfg.phoneEnabled ? fmtDelivery(smsR) : "off",
+        smtpConfigured: emailR?.skipped ? emailR.reason !== "nodemailer-missing" && emailR.reason !== "no-smtp" : !!emailR?.ok,
+        smsruConfigured: smsR?.skipped ? smsR.reason !== "no-smsru-api" : !!smsR?.ok
+      });
+    }).catch((err) => {
+      recordLiveNotifyDiag({
+        lastStatus: "fetch-error",
+        lastDetail: err?.message || String(err)
+      });
+    });
   }
 
   function notifyLiveGoalAchieved(ann, targetPct) {
@@ -2285,15 +2420,23 @@
   function bindLiveNotifyUi() {
     if (bindLiveNotifyUi._done) return;
     bindLiveNotifyUi._done = true;
-    const onChange = () => { saveConfig(); };
+    const onChange = () => {
+      saveConfig();
+      syncLiveNotifyHint();
+      updateTechInfo("live-notify-config");
+    };
     $("live-notify-email")?.addEventListener("change", onChange);
     $("live-notify-phone")?.addEventListener("change", onChange);
     $("live-notify-email-enabled")?.addEventListener("change", onChange);
     $("live-notify-phone-enabled")?.addEventListener("change", onChange);
+    $("live-notify-email")?.addEventListener("input", () => { syncLiveNotifyHint(); });
+    $("live-notify-phone")?.addEventListener("input", () => { syncLiveNotifyHint(); });
   }
 
   function initLiveNotify() {
     bindLiveNotifyUi();
+    syncLiveNotifyHint();
+    void probeLiveNotifySink();
     checkLiveGoalExpiredNotify();
   }
 

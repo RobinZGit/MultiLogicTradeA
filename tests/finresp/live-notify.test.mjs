@@ -40,6 +40,9 @@ test('live notify UI and client contracts', () => {
   assert.match(html, /id="live-notify-email-enabled"/);
   assert.match(html, /id="live-notify-phone-enabled"/);
   assert.match(liveSrc, /sendLiveNotify/);
+  assert.match(liveSrc, /recordLiveNotifyDiag/);
+  assert.match(liveSrc, /probeLiveNotifySink/);
+  assert.match(liveSrc, /skip-channels-off/);
   assert.match(liveSrc, /notifyLiveGoalAchieved/);
   assert.match(liveSrc, /checkLiveGoalExpiredNotify/);
   assert.match(liveSrc, /notifyLiveSandboxModeSwitch/);

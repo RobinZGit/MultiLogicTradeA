@@ -171,6 +171,17 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'GET' && req.url === '/finresp-notify-health') {
+    res.writeHead(200, { ...corsHeaders(origin), 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      ok: true,
+      smtp: !!process.env.ML_NOTIFY_SMTP_HOST,
+      smsru: !!process.env.ML_NOTIFY_SMSRU_API_ID,
+      logFile: NOTIFY_LOG_FILE
+    }));
+    return;
+  }
+
   if (req.method === 'POST' && req.url === '/finresp-tech-log') {
     try {
       const raw = await readBody(req);

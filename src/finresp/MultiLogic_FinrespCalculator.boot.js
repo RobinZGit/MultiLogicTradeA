@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-live-unstick-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-live-notify-diag-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -534,6 +534,40 @@
           `livePositionsMtm=${Number.isFinite(lv.positionsMtmRub) ? lv.positionsMtmRub : "—"}`,
           `liveCandleSource=${lv.candleSource || $("live-candle-source")?.value || "—"}`
         );
+        const nd = lv.notifyDiag;
+        const notifyEmail = String($("live-notify-email")?.value || "").trim();
+        const notifyPhone = String($("live-notify-phone")?.value || "").trim();
+        const maskEmail = (v) => {
+          const s = String(v || "").trim();
+          if (!s) return "—";
+          const at = s.indexOf("@");
+          if (at <= 0) return `${s.slice(0, 2)}***`;
+          return `${s.slice(0, Math.min(2, at))}***${s.slice(at)}`;
+        };
+        const maskPhone = (v) => {
+          const d = String(v || "").replace(/\D/g, "");
+          if (!d) return "—";
+          return `***${d.slice(-4)}`;
+        };
+        lines.push(
+          `liveNotifyLocalHost=${typeof location !== "undefined" && (location.hostname === "127.0.0.1" || location.hostname === "localhost")}`,
+          `liveNotifyEmailSet=${!!notifyEmail}`,
+          `liveNotifyEmailOn=${!!$("live-notify-email-enabled")?.checked}`,
+          `liveNotifyEmailMasked=${maskEmail(notifyEmail)}`,
+          `liveNotifyPhoneSet=${!!notifyPhone}`,
+          `liveNotifyPhoneOn=${!!$("live-notify-phone-enabled")?.checked}`,
+          `liveNotifyPhoneMasked=${maskPhone(notifyPhone)}`,
+          `liveNotifySinkUrl=http://127.0.0.1:4201/finresp-notify`,
+          `liveNotifySinkReachable=${nd?.sinkReachable ?? "—"}`,
+          `liveNotifySmtpConfigured=${nd?.smtpConfigured ?? "—"}`,
+          `liveNotifySmsruConfigured=${nd?.smsruConfigured ?? "—"}`,
+          `liveNotifyLastEvent=${nd?.lastEvent || "—"}`,
+          `liveNotifyLastStatus=${nd?.lastStatus || "—"}`,
+          `liveNotifyLastDetail=${nd?.lastDetail || "—"}`,
+          `liveNotifyEmailDelivery=${nd?.emailDelivery || "—"}`,
+          `liveNotifySmsDelivery=${nd?.smsDelivery || "—"}`,
+          `liveNotifyUpdatedAt=${nd?.updatedAt || "—"}`
+        );
         const fd = lv.lastFinrespDiag;
         if (fd?.bySec) {
           const sample = Object.entries(fd.bySec).slice(0, 8)
@@ -882,6 +916,7 @@
       obTrendCache: new Map(),
       goalAchieved: false,
       notifySent: {},
+      notifyDiag: null,
       positionsMenuIdx: null,
       manualPriceSec: "",
       tradeHistory: [],
