@@ -62,6 +62,15 @@ test('run-dev and run-prod call ensure-notify-smtp', () => {
   assert.match(prod, /ensure-notify-smtp\.mjs/);
 });
 
+test('run-dev.ps1 mirrors dev launcher without cmd', () => {
+  const ps1 = fs.readFileSync(path.join(root, 'run-dev.ps1'), 'utf8');
+  assert.match(ps1, /ensure-notify-smtp\.mjs/);
+  assert.match(ps1, /finresp-tech-log-server\.mjs/);
+  assert.match(ps1, /Stop-ListenerOnPort/);
+  assert.doesNotMatch(ps1, /\bcmd\s+\/c\b/i);
+  assert.doesNotMatch(ps1, /\bcmd\s+\/k\b/i);
+});
+
 test('readSuggestedNotifyEmail finds email in project notify log', () => {
   const email = readSuggestedNotifyEmail();
   if (fs.existsSync(path.join(root, 'logs', 'finresp-notify.log'))) {
