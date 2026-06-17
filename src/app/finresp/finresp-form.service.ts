@@ -263,9 +263,17 @@ export class FinrespFormService implements OnDestroy {
   }
 
   private pushAccountModeToDom(): void {
-    this.setValue('account-mode', this.accountMode.value);
-    const modeEl = document.getElementById('account-mode');
-    modeEl?.dispatchEvent(new Event('change', { bubbles: true }));
+    const modeEl = document.getElementById('account-mode') as HTMLSelectElement | null;
+    if (!modeEl) {
+      return;
+    }
+    const next = this.accountMode.value;
+    if (modeEl.value === next) {
+      return;
+    }
+    modeEl.value = next;
+    modeEl.dispatchEvent(new Event('input', { bubbles: true }));
+    modeEl.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   private pushInstrumentsToDom(): void {

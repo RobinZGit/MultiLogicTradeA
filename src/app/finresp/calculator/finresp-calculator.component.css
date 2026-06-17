@@ -712,7 +712,7 @@ body.calc-running .live-trading-panel--active .live-trading-toolbar{
 .tech-info-title{font-size:.95rem;font-weight:600;color:#374151;}
 .tech-info-actions{display:flex;flex-wrap:wrap;gap:.4rem;margin:.55rem 0 .35rem;}
 .tech-info-pre{
-  margin:0;padding:.55rem .65rem;max-height:14rem;overflow:auto;
+  margin:0;padding:.55rem .65rem;max-height:min(40vh,22rem);overflow:auto;
   font-family:Consolas,monospace;font-size:.72rem;line-height:1.45;
   background:#fff;border:1px solid var(--border);border-radius:6px;white-space:pre-wrap;word-break:break-word;
 }
@@ -749,8 +749,9 @@ a{color:var(--accent);}
 body.calc-running{--bg:#e5edf9;--accent-soft:#dbeafe;}
 body.calc-running .help-hdr{background:linear-gradient(180deg,#eff6ff 0%,#dbeafe 100%);}
 body.calc-running .help-main{
-  opacity:.9;pointer-events:none;user-select:none;
-  filter:saturate(.92);transition:opacity .2s ease;
+  opacity:.98;
+  filter:saturate(.96);
+  transition:opacity .2s ease;
 }
 body.calc-running .live-trading-panel{
   pointer-events:auto;opacity:1;filter:none;user-select:auto;

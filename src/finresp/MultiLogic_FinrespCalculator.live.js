@@ -75,6 +75,7 @@
     const commissionPctValue = (...a) => d.commissionPctValue(...a);
     const noteLiveTech = (...a) => d.noteLiveTech(...a);
     const noteTechError = (...a) => d.noteTechError(...a);
+    const noteBrokerTech = (...a) => d.noteBrokerTech(...a);
     const updateTechInfo = (...a) => d.updateTechInfo(...a);
     const saveConfig = (...a) => d.saveConfig(...a);
     const selectedInstruments = (...a) => d.selectedInstruments(...a);
@@ -91,6 +92,7 @@
     const yieldToUi = (...a) => d.yieldToUi(...a);
     const syncChartBox = (...a) => d.syncChartBox(...a);
     const invalidateFinrespResult = (...a) => d.invalidateFinrespResult(...a);
+    const invalidateFormChange = (...a) => d.invalidateFormChange(...a);
     const syncLeverageDisplay = (...a) => d.syncLeverageDisplay(...a);
     const INDICATOR_OPTIONS = d.INDICATOR_OPTIONS;
     const MIN_WARMUP_BARS = d.MIN_WARMUP_BARS;
@@ -143,6 +145,54 @@
   /** Ленивый экземпляр брокерского коннектора (connectors/tbank.js | alor.js). */
   let brokerInst = null;
   let brokerInstId = "";
+  let lastBrokerProviderId = "";
+  let suppressBrokerProviderChange = false;
+  let connectBrokerInFlight = null;
+  let tbankUnlockInFlight = null;
+  let brokerUnlockPromptInFlight = null;
+  let brokerUnlockPromptBrokerId = "";
+  let brokerConnectDebounceTimer = null;
+  let brokerOpsGeneration = 0;
+  const CONNECT_BROKER_TIMEOUT_MS = 45000;
+
+  function isStaleBrokerOps(gen) {
+    return gen !== brokerOpsGeneration;
+  }
+
+  function resetBrokerOpsInFlight(reason) {
+    brokerOpsGeneration += 1;
+    connectBrokerInFlight = null;
+    tbankUnlockInFlight = null;
+    brokerUnlockPromptInFlight = null;
+    brokerUnlockPromptBrokerId = "";
+    cancelBrokerConnectDebounce();
+    closeTbankPassphraseModal("");
+    if (reason) noteBrokerTech("ops-reset", reason);
+  }
+
+  function cancelBrokerConnectDebounce() {
+    if (brokerConnectDebounceTimer) {
+      clearTimeout(brokerConnectDebounceTimer);
+      brokerConnectDebounceTimer = null;
+    }
+  }
+
+  function scheduleBrokerConnectDebounced(source, delayMs = 450) {
+    cancelBrokerConnectDebounce();
+    brokerConnectDebounceTimer = setTimeout(() => {
+      brokerConnectDebounceTimer = null;
+      void scheduleBrokerConnectIfReady(source);
+    }, delayMs);
+  }
+
+  let noteBrokerTechLast = { key: "", at: 0 };
+  function noteBrokerTechDeduped(action, detail) {
+    const key = `${action}|${detail || ""}`;
+    const now = Date.now();
+    if (noteBrokerTechLast.key === key && now - noteBrokerTechLast.at < 800) return;
+    noteBrokerTechLast = { key, at: now };
+    noteBrokerTech(action, detail);
+  }
 
   function readBrokerIdFromUi() {
     const v = String($("broker-provider")?.value || "tbank").toLowerCase();
@@ -151,6 +201,231 @@
 
   function activeBrokerState() {
     return readBrokerIdFromUi() === "alor" ? state.alor : state.tbank;
+  }
+
+  /** state.brokers[id] — слоты tbank / alor с depositRub и provisional. */
+  function brokerCred(brokerId) {
+    const id = brokerId || readBrokerIdFromUi();
+    return id === "alor" ? state.alor : state.tbank;
+  }
+
+  function createEmptySandbox() {
+    return {
+      startPortfolio: null,
+      cash: null,
+      cashDelta: 0,
+      commissionTotal: 0,
+      open: new Map(),
+      openLegs: new Map(),
+      nextLegId: 0,
+      ledger: [],
+      nextFillId: 0,
+      closed: [],
+      orders: []
+    };
+  }
+
+  function createEmptyRealRuntime() {
+    return {
+      orders: [],
+      openPositions: [],
+      portfolioPositions: [],
+      portfolioValue: null,
+      freeCashRub: null,
+      positionsMtmRub: null,
+      commissionPaid: null,
+      sandboxPositionsValue: null,
+      realPortfolioValue: null,
+      lastReconcile: null,
+      apiForbiddenInstruments: [],
+      brokerOperations: [],
+      brokerOperationsRaw: null,
+      instrumentCache: new Map(),
+      tradingStatusCache: new Map(),
+      obTrendCache: new Map()
+    };
+  }
+
+  function normalizeSandboxShape(sb) {
+    if (!(sb.open instanceof Map)) sb.open = new Map();
+    if (!(sb.openLegs instanceof Map)) sb.openLegs = new Map();
+    if (!Number.isFinite(sb.nextLegId)) sb.nextLegId = 0;
+    if (!Array.isArray(sb.ledger)) sb.ledger = [];
+    if (!Number.isFinite(sb.nextFillId)) sb.nextFillId = 0;
+    if (!Array.isArray(sb.closed)) sb.closed = [];
+    if (!Array.isArray(sb.orders)) sb.orders = [];
+    return sb;
+  }
+
+  function migrateLegacyRuntimeOnce() {
+    if (state.live._runtimeMigrated) return;
+    state.live._runtimeMigrated = true;
+    const legacy = state.live.sandbox;
+    if (!legacy) return;
+    const id = readBrokerIdFromUi();
+    if (!state.live.runtime) state.live.runtime = {};
+    if (!state.live.runtime[id]) {
+      state.live.runtime[id] = {
+        sandbox: createEmptySandbox(),
+        real: createEmptyRealRuntime()
+      };
+    }
+    const sb = state.live.runtime[id].sandbox;
+    if (legacy.startPortfolio != null) sb.startPortfolio = legacy.startPortfolio;
+    if (legacy.cash != null) sb.cash = legacy.cash;
+    sb.cashDelta = legacy.cashDelta || 0;
+    sb.commissionTotal = legacy.commissionTotal || 0;
+    if (legacy.open instanceof Map) sb.open = legacy.open;
+    if (legacy.openLegs instanceof Map) sb.openLegs = legacy.openLegs;
+    if (Array.isArray(legacy.ledger)) sb.ledger = legacy.ledger;
+    if (Array.isArray(legacy.closed)) sb.closed = legacy.closed;
+    if (Array.isArray(legacy.orders)) sb.orders = legacy.orders;
+    if (Number.isFinite(legacy.nextLegId)) sb.nextLegId = legacy.nextLegId;
+    if (Number.isFinite(legacy.nextFillId)) sb.nextFillId = legacy.nextFillId;
+    delete state.live.sandbox;
+  }
+
+  function ensureLiveRuntime(brokerId) {
+    migrateLegacyRuntimeOnce();
+    const id = brokerId || readBrokerIdFromUi();
+    if (!state.live.runtime) state.live.runtime = {};
+    if (!state.live.runtime[id]) {
+      state.live.runtime[id] = {
+        sandbox: createEmptySandbox(),
+        real: createEmptyRealRuntime()
+      };
+    }
+    normalizeSandboxShape(state.live.runtime[id].sandbox);
+    return state.live.runtime[id];
+  }
+
+  function brokerSandboxState(brokerId) {
+    return normalizeSandboxShape(ensureLiveRuntime(brokerId).sandbox);
+  }
+
+  function persistBrokerDepositFromDom(brokerId) {
+    const b = brokerCred(brokerId);
+    const dom = +($("vol-deposit")?.value || 0);
+    if (!(dom > 0)) return;
+    b.depositRub = dom;
+    b.depositProvisional = $("vol-deposit")?.dataset?.provisional === "1";
+  }
+
+  function syncVolDepositDomFromBroker(brokerId) {
+    const b = brokerCred(brokerId);
+    const dep = $("vol-deposit");
+    if (!dep) return;
+    const rub = Number.isFinite(b.depositRub) ? b.depositRub : defaultProvisionalDepositRub();
+    dep.value = String(Math.round(rub));
+    if (b.depositProvisional || !b.depositLoaded) dep.dataset.provisional = "1";
+    else delete dep.dataset.provisional;
+    try { dep.dispatchEvent(new Event("input", { bubbles: true })); } catch (_) { /* ignore */ }
+  }
+
+  function activeBrokerDepositRub() {
+    const b = activeBrokerState();
+    if (b.depositLoaded && Number.isFinite(b.depositRub) && !b.depositProvisional) return b.depositRub;
+    const dom = +($("vol-deposit")?.value || 0);
+    if (dom > 0) return dom;
+    return Number.isFinite(b.depositRub) ? b.depositRub : defaultProvisionalDepositRub();
+  }
+
+  function persistLiveUiToRuntime(brokerId) {
+    const id = brokerId || readBrokerIdFromUi();
+    if (isLiveSandbox()) return;
+    const r = ensureLiveRuntime(id).real;
+    r.orders = (state.live.orders || []).slice();
+    r.openPositions = (state.live.openPositions || []).slice();
+    r.portfolioPositions = (state.live.portfolioPositions || []).slice();
+    r.portfolioValue = state.live.portfolioValue;
+    r.freeCashRub = state.live.freeCashRub;
+    r.positionsMtmRub = state.live.positionsMtmRub;
+    r.commissionPaid = state.live.commissionPaid;
+    r.realPortfolioValue = state.live.realPortfolioValue;
+    r.sandboxPositionsValue = state.live.sandboxPositionsValue;
+    r.lastReconcile = state.live.lastReconcile;
+    r.apiForbiddenInstruments = (state.live.apiForbiddenInstruments || []).slice();
+    r.brokerOperations = (state.live.brokerOperations || []).slice();
+    r.brokerOperationsRaw = state.live.brokerOperationsRaw;
+    r.instrumentCache = state.live.instrumentCache || r.instrumentCache;
+    r.tradingStatusCache = state.live.tradingStatusCache || r.tradingStatusCache;
+    r.obTrendCache = state.live.obTrendCache || r.obTrendCache;
+  }
+
+  function hydrateLiveUiFromRuntime(brokerId) {
+    const id = brokerId || readBrokerIdFromUi();
+    if (isLiveSandbox()) {
+      void updateSandboxPortfolioDisplay();
+      return;
+    }
+    const r = ensureLiveRuntime(id).real;
+    state.live.orders = r.orders || [];
+    state.live.openPositions = r.openPositions || [];
+    state.live.portfolioPositions = r.portfolioPositions || [];
+    state.live.portfolioValue = r.portfolioValue;
+    state.live.freeCashRub = r.freeCashRub;
+    state.live.positionsMtmRub = r.positionsMtmRub;
+    state.live.commissionPaid = r.commissionPaid;
+    state.live.realPortfolioValue = r.realPortfolioValue;
+    state.live.sandboxPositionsValue = r.sandboxPositionsValue;
+    state.live.lastReconcile = r.lastReconcile;
+    state.live.apiForbiddenInstruments = r.apiForbiddenInstruments || [];
+    state.live.brokerOperations = r.brokerOperations || [];
+    state.live.brokerOperationsRaw = r.brokerOperationsRaw;
+    state.live.instrumentCache = r.instrumentCache || new Map();
+    state.live.tradingStatusCache = r.tradingStatusCache || new Map();
+    state.live.obTrendCache = r.obTrendCache || new Map();
+  }
+
+  function clearLiveRuntimeBroker(brokerId) {
+    const id = brokerId || readBrokerIdFromUi();
+    state.live.runtime[id] = {
+      sandbox: createEmptySandbox(),
+      real: createEmptyRealRuntime()
+    };
+    if (id === readBrokerIdFromUi()) {
+      state.live.orders = [];
+      state.live.openPositions = [];
+      state.live.portfolioPositions = [];
+      state.live.portfolioValue = null;
+      state.live.freeCashRub = null;
+      state.live.positionsMtmRub = null;
+      state.live.commissionPaid = null;
+      state.live.realPortfolioValue = null;
+      state.live.sandboxPositionsValue = null;
+      state.live.lastReconcile = null;
+      state.live.apiForbiddenInstruments = [];
+      state.live.brokerOperations = [];
+      state.live.brokerOperationsRaw = null;
+      state.live.instrumentCache = new Map();
+      state.live.tradingStatusCache = new Map();
+      state.live.obTrendCache = new Map();
+      state.live.reconcileBusy = false;
+    }
+  }
+
+  /** Активный брокер + песочница/реал: единая точка чтения метрик портфеля для UI. */
+  function activeView() {
+    const brokerId = readBrokerIdFromUi();
+    const rt = ensureLiveRuntime(brokerId);
+    if (isLiveSandbox()) {
+      const sb = rt.sandbox;
+      const mtm = state.live.sandboxPositionsValue;
+      const cash = Number.isFinite(sb.cash) ? sb.cash : sb.startPortfolio;
+      const pv = state.live.portfolioValue ?? (Number.isFinite(cash) && Number.isFinite(mtm) ? cash + mtm : cash);
+      return { brokerId, sandbox: true, portfolioValue: pv, freeCashRub: cash, commissionPaid: sb.commissionTotal ?? state.live.commissionPaid, positionsMtmRub: mtm, orders: sb.orders, openPositions: state.live.openPositions };
+    }
+    const r = rt.real;
+    return {
+      brokerId,
+      sandbox: false,
+      portfolioValue: r.portfolioValue ?? state.live.portfolioValue,
+      freeCashRub: r.freeCashRub ?? state.live.freeCashRub,
+      commissionPaid: r.commissionPaid ?? state.live.commissionPaid,
+      positionsMtmRub: r.positionsMtmRub ?? state.live.positionsMtmRub,
+      orders: r.orders?.length ? r.orders : state.live.orders,
+      openPositions: r.openPositions?.length ? r.openPositions : state.live.openPositions
+    };
   }
 
   function brokerTokenStoreKey() {
@@ -266,6 +541,346 @@
     return buildTbankPositionRows(portData, posData, options);
   }
 
+  function clearBrokerSessionTokens(reason) {
+    state.tbank.token = null;
+    state.alor.token = null;
+    state.alor.accessToken = null;
+    state.alor.accessTokenExpiresAt = 0;
+    resetBrokerInst();
+    resetBrokerOpsInFlight(reason || "session-lock");
+  }
+
+  /** Полный сброс сессии брокера (включая флаги депозита). */
+  function lockBrokerSession(reason) {
+    state.tbank.depositLoaded = false;
+    state.alor.depositLoaded = false;
+    clearBrokerSessionTokens(reason);
+  }
+
+  function defaultProvisionalDepositRub() {
+    return +(E?.DEFAULT_VOLUME?.deposit ?? 1000000);
+  }
+
+  /** Сброс поля депозита до условного значения по умолчанию (не сумма прошлого брокера). */
+  function resetDepositToDefaultProvisional() {
+    if (!isTbankBackedMode()) return;
+    const dep = $("vol-deposit");
+    if (!dep) return;
+    const b = activeBrokerState();
+    b.depositLoaded = false;
+    b.depositRub = defaultProvisionalDepositRub();
+    b.depositProvisional = true;
+    dep.value = String(Math.round(b.depositRub));
+    dep.dataset.provisional = "1";
+    try { dep.dispatchEvent(new Event("input", { bubbles: true })); } catch (_) { /* ignore */ }
+  }
+
+  /** Условный депозит до успешной загрузки с брокера (не пустое поле). */
+  function applyProvisionalDeposit() {
+    if (!isTbankBackedMode()) return;
+    if (activeBrokerState().depositLoaded) return;
+    resetDepositToDefaultProvisional();
+  }
+
+  function markBrokerDepositLoaded(amount) {
+    const dep = $("vol-deposit");
+    const rub = Math.round(amount);
+    const b = activeBrokerState();
+    b.depositRub = rub;
+    b.depositProvisional = false;
+    if (dep) {
+      dep.value = String(rub);
+      delete dep.dataset.provisional;
+    }
+    b.depositLoaded = true;
+    void resyncLiveSandboxStartFromDeposit();
+    invalidateFormChange();
+  }
+
+  /** Песочница: подтянуть стартовый портфель из загруженного депозита (не оставлять 1M). */
+  async function resetSandboxLedgerToBaseline(dep) {
+    const amount = Math.max(0, +dep || 0);
+    const sb = ensureSandboxState();
+    sb.startPortfolio = amount;
+    sb.cash = amount;
+    sb.cashDelta = 0;
+    sb.commissionTotal = 0;
+    sb.open.clear();
+    ensureSandboxOpenLegs(sb);
+    sb.openLegs.clear();
+    sb.nextLegId = 0;
+    ensureSandboxLedger(sb);
+    sb.ledger.length = 0;
+    sb.nextFillId = 0;
+    sb.closed.length = 0;
+    sb.orders.length = 0;
+    purgeSandboxTradeHistory();
+    state.live.sandboxPositionsValue = 0;
+    state.live.portfolioValue = amount;
+    state.live.realPortfolioValue = amount;
+    state.live.freeCashRub = amount;
+    state.live.commissionPaid = 0;
+    if (state.live.chartSession) {
+      state.live.chartSession.portfolioBaseline = amount;
+      resetSandboxStopperWatch();
+    }
+  }
+
+  function sandboxBaselineMismatch(dep) {
+    const sb = ensureSandboxState();
+    const defaultRub = defaultProvisionalDepositRub();
+    if (!(dep > 0)) return false;
+    if (!Number.isFinite(sb.startPortfolio)) return true;
+    if (sb.startPortfolio === defaultRub) return true;
+    return Math.abs(sb.startPortfolio - dep) > Math.max(1, dep * 0.01);
+  }
+
+  /** Перед стартом торговли в песочнице: депозит = vol-deposit, без «хвоста» от 1M. */
+  async function prepareSandboxTradingSession() {
+    if (!isLiveSandbox()) return;
+    const dep = +( $("vol-deposit")?.value || 0);
+    if (!(dep > 0) || $("vol-deposit")?.dataset?.provisional === "1") return;
+    const sb = ensureSandboxState();
+    if (sandboxBaselineMismatch(dep)) {
+      await resetSandboxLedgerToBaseline(dep);
+      noteLiveTech("live-sandbox", "trading-baseline-reset", `start=${dep}`);
+    } else if ((sb.ledger?.length || 0) > 0) {
+      await updateSandboxPortfolioDisplay();
+    }
+    await resyncLiveSandboxStartFromDeposit();
+  }
+
+  async function resyncLiveSandboxStartFromDeposit() {
+    if (!isLiveSandbox()) return;
+    const depEl = $("vol-deposit");
+    const dep = +(depEl?.value || 0);
+    if (!(dep > 0) || depEl?.dataset?.provisional === "1") return;
+    const sb = ensureSandboxState();
+    if (!sandboxBaselineMismatch(dep)) return;
+    const hasFakeActivity = sb.orders.length > 0 || sb.open.size > 0 || (sb.ledger?.length || 0) > 0;
+    if (hasFakeActivity) {
+      if (state.live.active) return;
+      await resetSandboxLedgerToBaseline(dep);
+      noteLiveTech("live-sandbox", "ledger-reset", `start=${dep}`);
+    } else {
+      sb.startPortfolio = dep;
+      sb.cash = dep;
+      sb.cashDelta = 0;
+      state.live.portfolioValue = dep;
+      state.live.realPortfolioValue = dep;
+      if (state.live.chartSession) {
+        state.live.chartSession.portfolioBaseline = dep;
+        resetSandboxStopperWatch();
+      }
+    }
+    await updateSandboxPortfolioDisplay();
+    syncLiveTradingUi();
+    noteLiveTech("live-sandbox", "baseline-from-deposit", `start=${dep}`);
+  }
+
+  function brokerUnlockErrorMessage(err) {
+    const name = String(err?.name || "");
+    const msg = String(err?.message || err || "");
+    if (name === "OperationError" || /operationerror|decrypt|authentication|tag/i.test(msg)) {
+      return "Неверный пароль шифрования.";
+    }
+    return `Не удалось расшифровать токен: ${msg}`;
+  }
+
+  function brokerDepositLoadErrorMessage(err) {
+    const bl = brokerLabel();
+    const name = String(err?.name || "");
+    const msg = String(err?.message || err || "");
+    if (name === "AbortError" || /таймаут|timeout/i.test(msg)) {
+      return `${bl} не ответил вовремя при запросе депозита.`;
+    }
+    if (/401|403|unauthorized|forbidden/i.test(msg) || /oauth|access token|refresh token/i.test(msg)) {
+      return `Неверный или просроченный токен ${bl}. ${msg}`;
+    }
+    if (/не вернул|положительную оценку|portfolioEvaluation/i.test(msg)) {
+      return `${bl} не вернул сумму депозита. ${msg}`;
+    }
+    if (err instanceof TypeError || /failed to fetch|network|подключ/i.test(msg)) {
+      return `${bl} недоступен: ${msg}`;
+    }
+    return `Не удалось загрузить депозит ${bl}: ${msg}`;
+  }
+
+  function syncAlorPortfolioFromUi() {
+    const pf = $("alor-portfolio-id")?.value?.trim();
+    if (!pf) return "";
+    state.alor.portfolioId = pf;
+    safeStorageSet(ALOR_PORTFOLIO_STORE_KEY, pf);
+    return pf;
+  }
+
+  function brokerDepositAccountReady() {
+    const cred = activeBrokerState();
+    if (readBrokerIdFromUi() === "alor") {
+      return !!(cred.selectedAccountId || cred.portfolioId || syncAlorPortfolioFromUi());
+    }
+    return !!cred.selectedAccountId;
+  }
+
+  function setBrokerProviderUi(id, opts) {
+    const options = opts || {};
+    const bp = $("broker-provider");
+    if (!bp) return;
+    const next = id === "alor" ? "alor" : "tbank";
+    if (bp.value === next) {
+      lastBrokerProviderId = next;
+      return;
+    }
+    suppressBrokerProviderChange = true;
+    bp.value = next;
+    suppressBrokerProviderChange = false;
+    if (!options.silent) onBrokerProviderChange();
+    else {
+      lastBrokerProviderId = next;
+      syncBrokerSettingsPanels();
+    }
+  }
+
+  function brokerConnectTimeout(promise, label) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        setTimeout(
+          () => reject(new Error(`${label}: таймаут ${CONNECT_BROKER_TIMEOUT_MS / 1000} с`)),
+          CONNECT_BROKER_TIMEOUT_MS
+        );
+      })
+    ]);
+  }
+
+  function scheduleBrokerConnectAfterSave() {
+    if (!isTbankBackedMode()) return;
+    void brokerConnectTimeout(
+      connectTbankAndLoadDeposit({ interactive: false, openUi: false }),
+      brokerLabel()
+    ).catch((err) => {
+      setBrokerConnectionStatus(`Подключение: ${err.message}`, true);
+      noteTechError(`${readBrokerIdFromUi()}-connect-after-save: ${err.message}`);
+    });
+  }
+
+  function scheduleBrokerConnectIfReady(source) {
+    if (!isTbankBackedMode() || !safeStorageGet(brokerTokenStoreKey())) return Promise.resolve();
+    const connectGen = brokerOpsGeneration;
+    const brokerAtStart = readBrokerIdFromUi();
+    const hasPass = !!getBrokerPassphrase();
+    if (!hasPass) {
+      const hint = `Брокер ${brokerLabel()}: введите пароль в блоке настроек и нажмите «Расшифровать и подключить».`;
+      setBrokerConnectionStatus(hint, true);
+      openBrokerPassphraseUi(hint, { focus: false });
+      noteBrokerTechDeduped("unlock-needed", source || "no-passphrase");
+      return scheduleBrokerUnlockPrompt(source, connectGen);
+    }
+    return brokerConnectTimeout(
+      (async () => {
+        await yieldToUi();
+        if (isStaleBrokerOps(connectGen) || readBrokerIdFromUi() !== brokerAtStart) return;
+        await connectTbankAndLoadDeposit({
+          interactive: true,
+          openUi: false,
+          useModal: IS_FILE_PROTOCOL
+        });
+      })(),
+      brokerLabel()
+    ).catch((err) => {
+      setBrokerConnectionStatus(`Подключение: ${err.message}`, true);
+      noteBrokerTech("connect-fail", err.message);
+    });
+  }
+
+  /** При входе на страницу: расшифровка сохранённого токена и загрузка депозита активного брокера. */
+  async function bootstrapBrokerOnPageInit() {
+    if (!isTbankBackedMode()) return;
+    const cred = activeBrokerState();
+    if (!cred.token) {
+      cred.depositLoaded = false;
+      if (!isLiveSandbox()) applyProvisionalDeposit();
+    }
+    if (!safeStorageGet(brokerTokenStoreKey())) return;
+    noteBrokerTechDeduped("bootstrap-start", readBrokerIdFromUi());
+    try {
+      await scheduleBrokerConnectIfReady("page-init");
+    } catch (err) {
+      noteTechError(`broker-bootstrap: ${err?.message || err}`);
+    }
+  }
+
+  /** Модальное окно пароля после смены брокера/режима (не только раскрытие панели). */
+  function scheduleBrokerUnlockPrompt(source, opsGen) {
+    const brokerAtStart = readBrokerIdFromUi();
+    if (brokerUnlockPromptInFlight && brokerUnlockPromptBrokerId === brokerAtStart) {
+      return brokerUnlockPromptInFlight;
+    }
+    if (brokerUnlockPromptInFlight) {
+      closeTbankPassphraseModal("");
+      brokerUnlockPromptInFlight = null;
+      brokerUnlockPromptBrokerId = "";
+    }
+    const connectGen = opsGen ?? brokerOpsGeneration;
+    brokerUnlockPromptBrokerId = brokerAtStart;
+    brokerUnlockPromptInFlight = (async () => {
+      try {
+        await yieldToUi();
+        if (isStaleBrokerOps(connectGen) || readBrokerIdFromUi() !== brokerAtStart) return false;
+        if (!safeStorageGet(brokerTokenStoreKey())) return false;
+        if (activeBrokerState().token) {
+          if (!activeBrokerState().depositLoaded) await ensureBrokerDepositLoaded();
+          return true;
+        }
+        if (getBrokerPassphrase()) {
+          await connectTbankAndLoadDeposit({ interactive: false, openUi: false });
+          return !!activeBrokerState().token;
+        }
+        noteBrokerTechDeduped("unlock-prompt", source || "interactive");
+        const unlocked = await ensureTbankTokenUnlocked({
+          interactive: true,
+          openUi: true,
+          useModal: true
+        });
+        if (!unlocked) return false;
+        if (isStaleBrokerOps(connectGen) || readBrokerIdFromUi() !== brokerAtStart) return false;
+        if (!activeBrokerState().depositLoaded) await ensureBrokerDepositLoaded();
+        if (isLiveMode() && !isLiveSandbox()) await connectTbankForLive();
+        return true;
+      } finally {
+        if (brokerUnlockPromptBrokerId === brokerAtStart) brokerUnlockPromptBrokerId = "";
+        if (brokerUnlockPromptInFlight) brokerUnlockPromptInFlight = null;
+      }
+    })();
+    return brokerUnlockPromptInFlight;
+  }
+
+  function onBrokerProviderChange() {
+    if (suppressBrokerProviderChange) return;
+    const to = readBrokerIdFromUi();
+    const from = lastBrokerProviderId || to;
+    if (from !== to) {
+      resetBrokerOpsInFlight(`broker-change ${from} → ${to}`);
+      persistBrokerDepositFromDom(from);
+      persistLiveUiToRuntime(from);
+      noteBrokerTech("broker-change", `${from} → ${to}`);
+      clearLiveRuntimeBroker(from);
+      clearBrokerSessionTokens(`broker-change ${from} → ${to}`);
+    }
+    lastBrokerProviderId = to;
+    const b = activeBrokerState();
+    if (b.depositLoaded && Number.isFinite(b.depositRub)) {
+      syncVolDepositDomFromBroker(to);
+    } else {
+      resetDepositToDefaultProvisional();
+    }
+    hydrateLiveUiFromRuntime(to);
+    saveConfig();
+    syncBrokerSettingsPanels();
+    syncAccountModeUi();
+    scheduleBrokerConnectDebounced(`after-change ${from} → ${to}`);
+  }
+
   function syncBrokerSettingsPanels() {
     const id = readBrokerIdFromUi();
     const tbankPanel = $("tbank-settings");
@@ -305,23 +920,21 @@
 
   // === HTML ↔ live: функции ниже экспортируются из install() для вызова из HTML ===
   function liveFreeCashRub() {
-    if (isLiveSandbox()) {
-      const sb = ensureSandboxState();
-      ensureSandboxCash(sb);
-      if (Number.isFinite(sb.cash)) return sb.cash;
-      if (Number.isFinite(sb.startPortfolio)) return sb.startPortfolio;
-      const dep = +($("vol-deposit")?.value || 0);
+    const view = activeView();
+    if (Number.isFinite(view.freeCashRub)) return view.freeCashRub;
+    if (view.sandbox) {
+      const dep = activeBrokerDepositRub();
       return dep > 0 ? dep : NaN;
     }
-    return state.live.freeCashRub;
+    return NaN;
   }
 
   /** Live-торговля: `livePositionsMtmRub`. */
   function livePositionsMtmRub() {
-    if (isLiveSandbox()) return state.live.sandboxPositionsValue;
-    if (Number.isFinite(state.live.positionsMtmRub)) return state.live.positionsMtmRub;
-    const pv = state.live.portfolioValue;
-    const cash = state.live.freeCashRub;
+    const view = activeView();
+    if (Number.isFinite(view.positionsMtmRub)) return view.positionsMtmRub;
+    const pv = view.portfolioValue;
+    const cash = view.freeCashRub;
     if (Number.isFinite(pv) && Number.isFinite(cash)) return pv - cash;
     return NaN;
   }
@@ -330,10 +943,11 @@
   function syncLiveStatsHint() {
     const el = $("live-trading-stats-hint");
     if (!el || !isLiveMode()) return;
+    const view = activeView();
     const cash = liveFreeCashRub();
     const mtm = livePositionsMtmRub();
-    const pv = state.live.portfolioValue;
-    const comm = state.live.commissionPaid;
+    const pv = view.portfolioValue;
+    const comm = view.commissionPaid;
     const fin = liveFinResultRub();
     const modelFin = state.live.modelFinresp;
     if (Number.isFinite(cash) && Number.isFinite(mtm) && Number.isFinite(pv)) {
@@ -811,6 +1425,11 @@
 
   /** T-Bank REST API: `tbankOpTradeSide`. */
   function tbankOpTradeSide(op) {
+    if (!op) return null;
+    if (op._broker === "alor") {
+      const s = String(op.side || "").toLowerCase();
+      if (s === "buy" || s === "sell") return s;
+    }
     const raw = op?.operationType ?? op?.operation_type ?? op?.type;
     const n = typeof raw === "number" ? raw : Number.parseInt(String(raw || "").replace(/\D/g, ""), 10);
     if (n === 22 || n === 29 || n === 18) return "sell";
@@ -832,6 +1451,13 @@
     return NaN;
   }
 
+  /** Число или MoneyValue T-Bank / Алор → ₽. */
+  function brokerMoneyRub(value) {
+    if (value == null || value === "") return NaN;
+    if (typeof value === "number") return Number.isFinite(value) ? value : NaN;
+    return moneyValueRub(value) || moneyValueToNumber(value);
+  }
+
   /** Отдельная fee-операция T-Bank (не buy/sell). */
   function tbankOpIsFeeOp(op) {
     if (!op) return false;
@@ -848,10 +1474,10 @@
   function tbankOpCommissionRub(op) {
     if (!op) return 0;
     if (tbankOpIsFeeOp(op)) {
-      const pay = moneyValueRub(op.payment);
+      const pay = brokerMoneyRub(op.payment);
       return Number.isFinite(pay) ? Math.abs(pay) : 0;
     }
-    const fee = moneyValueRub(op.commission);
+    const fee = brokerMoneyRub(op.commission);
     return Number.isFinite(fee) && fee !== 0 ? Math.abs(fee) : 0;
   }
 
@@ -983,7 +1609,7 @@
       const ticker = op._histTicker || String(op.ticker || op.figi || "").toUpperCase();
       const price = Number.isFinite(op._histPrice)
         ? op._histPrice
-        : (moneyValueRub(op.price) || moneyValueToNumber(op.price));
+        : brokerMoneyRub(op.price);
       if (!Number.isFinite(price) || price <= 0) continue;
       const fee = tbankOpTradeTotalCommissionRub(op, feeByParent);
       const brokerYield = tbankOpYieldRub(op);
@@ -1082,8 +1708,8 @@
     if (!side) return;
     const pieces = Math.abs(Math.trunc(+op.quantity || 0));
     if (!pieces) return;
-    const price = Number.isFinite(op._histPrice) ? op._histPrice : (moneyValueRub(op.price) || moneyValueToNumber(op.price));
-    const payment = moneyValueRub(op.payment);
+    const price = Number.isFinite(op._histPrice) ? op._histPrice : brokerMoneyRub(op.price);
+    const payment = brokerMoneyRub(op.payment);
     const commission = tbankOpTradeTotalCommissionRub(op, brokerOpCommissionByParentMap());
     const brokerYield = tbankOpYieldRub(op);
     const ticker = op._histTicker || String(op.ticker || op.figi || "—").toUpperCase();
@@ -1128,7 +1754,7 @@
       let meta = uid ? instCache.get(uid) : null;
       if (uid && !meta) {
         try {
-          meta = await tbankGetInstrumentById(uid);
+          meta = await getBroker().getInstrumentById(uid);
           if (meta) instCache.set(uid, meta);
         } catch (_) { /* optional */ }
       }
@@ -1138,8 +1764,8 @@
       op._histSide = side;
       op._histTicker = ticker;
       op._histLot = lot;
-      op._histLots = isFuture ? pieces : Math.max(1, piecesToLots(pieces, lot) || 1);
-      op._histPrice = moneyValueRub(op.price) || moneyValueToNumber(op.price);
+      op._histLots = op._alorLots ?? (isFuture ? pieces : Math.max(1, piecesToLots(pieces, lot) || 1));
+      op._histPrice = brokerMoneyRub(op.price);
       op._histDate = op.date;
       out.push(op);
     }
@@ -1151,12 +1777,8 @@
     if (isLiveSandbox() || !activeBrokerState().token || !activeBrokerState().selectedAccountId) return;
     const from = liveBrokerOpsPeriodFrom();
     try {
-      const data = await tbankRequest("OperationsService/GetOperations", {
-        accountId: activeBrokerState().selectedAccountId,
-        from,
-        to: new Date().toISOString(),
-        state: "OPERATION_STATE_EXECUTED"
-      });
+      const broker = getBroker();
+      const data = await broker.getOperations(from, new Date().toISOString());
       storeBrokerOperationsRaw(data.operations || []);
       const enriched = await enrichBrokerOperationsForHistory(state.live.brokerOperationsRaw);
       state.live.brokerOperations = enriched;
@@ -1758,7 +2380,7 @@
       const ticker = op._histTicker || String(op.ticker || op.figi || "").toUpperCase();
       const price = Number.isFinite(op._histPrice)
         ? op._histPrice
-        : (moneyValueRub(op.price) || moneyValueToNumber(op.price));
+        : brokerMoneyRub(op.price);
       if (!Number.isFinite(price) || price <= 0) continue;
       const posMeta = {
         ticker,
@@ -2280,7 +2902,10 @@
 
   /** Сброс зависших busy-флагов live (аварийное восстановление UI). */
   function unstickLiveUi(reason) {
+    resetBrokerOpsInFlight(reason || "unstick");
     state.live.sandboxToggleBusy = false;
+    state.live.candleRefreshBusy = false;
+    state.live.candleRefreshInFlight = false;
     state.live.candleRefreshBusy = false;
     state.live.tradingActionBusy = false;
     state.live.reconcileBusy = false;
@@ -4130,31 +4755,9 @@
     return isLiveMode() && !!$("live-sandbox-mode")?.checked;
   }
 
-  /** Функция: объект state.live.sandbox (Map открытых, массивы closed/orders, ledger). */
+  /** Функция: объект sandbox ledger активного брокера (runtime[broker].sandbox). */
   function ensureSandboxState() {
-    if (!state.live.sandbox) {
-      state.live.sandbox = {
-        startPortfolio: null,
-        cash: null,
-        cashDelta: 0,
-        commissionTotal: 0,
-        open: new Map(),
-        openLegs: new Map(),
-        nextLegId: 0,
-        ledger: [],
-        nextFillId: 0,
-        closed: [],
-        orders: []
-      };
-    }
-    if (!(state.live.sandbox.open instanceof Map)) state.live.sandbox.open = new Map();
-    if (!(state.live.sandbox.openLegs instanceof Map)) state.live.sandbox.openLegs = new Map();
-    if (!Number.isFinite(state.live.sandbox.nextLegId)) state.live.sandbox.nextLegId = 0;
-    if (!Array.isArray(state.live.sandbox.ledger)) state.live.sandbox.ledger = [];
-    if (!Number.isFinite(state.live.sandbox.nextFillId)) state.live.sandbox.nextFillId = 0;
-    if (!Array.isArray(state.live.sandbox.closed)) state.live.sandbox.closed = [];
-    if (!Array.isArray(state.live.sandbox.orders)) state.live.sandbox.orders = [];
-    return state.live.sandbox;
+    return brokerSandboxState(readBrokerIdFromUi());
   }
 
   /** Ленивая инициализация/проверка: `ensureSandboxLedger`. */
@@ -5379,16 +5982,29 @@
 
   /** Процедура (async): включить песочницу — зафиксировать startPortfolio, очистить фейк-состояние. */
   async function enableLiveSandbox() {
-    await yieldToUi();
-    const depositFallback = (+$("vol-deposit")?.value || 0);
-    // Песочница не ждёт сеть T-Bank: стартовый портфель = депозит или уже известное значение UI.
-    const cachedPv = state.live.portfolioValue ?? state.live.realPortfolioValue;
-    state.live.realPortfolioValue = Number.isFinite(cachedPv) && cachedPv > 0
-      ? cachedPv
-      : (depositFallback > 0 ? depositFallback : 0);
-    await yieldToUi();
     const sb = ensureSandboxState();
-    sb.startPortfolio = state.live.realPortfolioValue ?? 0;
+    const depEl = $("vol-deposit");
+    const depositFallback = +(depEl?.value || 0);
+    const provisional = depEl?.dataset?.provisional === "1";
+    const defaultRub = defaultProvisionalDepositRub();
+    const targetStart = depositFallback > 0 && !provisional
+      ? depositFallback
+      : (depositFallback > 0 ? depositFallback : defaultRub);
+
+    if (isLiveSandbox() && Number.isFinite(sb.startPortfolio) && sb.startPortfolio > 0) {
+      if (!provisional && depositFallback > 0 && sb.startPortfolio !== depositFallback) {
+        await resyncLiveSandboxStartFromDeposit();
+      }
+      return;
+    }
+    await yieldToUi();
+    // Песочница: старт = реальный депозит брокера, если уже загружен; иначе поле или 1M.
+    const cachedPv = state.live.portfolioValue ?? state.live.realPortfolioValue;
+    state.live.realPortfolioValue = !provisional && depositFallback > 0
+      ? depositFallback
+      : (Number.isFinite(cachedPv) && cachedPv > 0 ? cachedPv : targetStart);
+    await yieldToUi();
+    sb.startPortfolio = state.live.realPortfolioValue ?? targetStart;
     sb.cash = sb.startPortfolio;
     sb.cashDelta = 0;
     sb.commissionTotal = 0;
@@ -5525,6 +6141,7 @@
         }
         await disableLiveSandbox();
         notifyLiveSandboxModeSwitch(false);
+        if (!activeBrokerState().depositLoaded) await ensureBrokerDepositLoaded();
         if (state.live.active) {
           if (!activeBrokerState().selectedAccountId) await loadTbankAccounts();
           await resetLiveSessionPositionBaseline();
@@ -5762,22 +6379,23 @@
 
   /** Отрисовка элемента live-панели: `renderLivePortfolioStats`. */
   function renderLivePortfolioStats() {
+    const view = activeView();
     const pv = $("live-portfolio-value");
     const cp = $("live-commission-paid");
     const pvDec = 2;
     if (pv) {
-      pv.textContent = Number.isFinite(state.live.portfolioValue)
-        ? fmt(state.live.portfolioValue, pvDec)
+      pv.textContent = Number.isFinite(view.portfolioValue)
+        ? fmt(view.portfolioValue, pvDec)
         : "—";
     }
     renderLiveFreeCashStat();
     renderLiveFinResultStat();
     syncLiveStatsHint();
     if (cp) {
-      if (!Number.isFinite(state.live.commissionPaid) || state.live.commissionPaid <= 0) {
+      if (!Number.isFinite(view.commissionPaid) || view.commissionPaid <= 0) {
         cp.textContent = "0";
       } else {
-        cp.textContent = `−${fmt(state.live.commissionPaid, 2)}`;
+        cp.textContent = `−${fmt(view.commissionPaid, 2)}`;
       }
       cp.style.color = "#b91c1c";
     }
@@ -5798,6 +6416,13 @@
       state.live.realPortfolioValue = typeof broker.portfolioValueRub === "function"
         ? broker.portfolioValueRub(snap.portfolio)
         : moneyValueRub(snap.portfolio.totalAmountPortfolio);
+      if (
+        Number.isFinite(state.live.realPortfolioValue) &&
+        state.live.realPortfolioValue > 0 &&
+        !activeBrokerState().depositLoaded
+      ) {
+        markBrokerDepositLoaded(state.live.realPortfolioValue);
+      }
       state.live.freeCashRub = typeof broker.freeCashRub === "function"
         ? broker.freeCashRub(snap.positions)
         : rubFreeCashFromTbankPositions(snap.positions);
@@ -5821,6 +6446,7 @@
       snapshotLiveSessionPortfolioBaseline();
       await refreshLiveOpenPositions();
       renderLiveOrdersPanel();
+      persistLiveUiToRuntime();
       renderLivePortfolioStats();
     } catch (err) {
       noteLiveTech("live-portfolio", err.message, `account=${activeBrokerState().selectedAccountId || "—"}`);
@@ -5840,6 +6466,7 @@
       const data = await getBroker().getOrders();
       state.live.orders = data.orders || [];
       state.live.lastError = "";
+      persistLiveUiToRuntime();
       await refreshLivePortfolioStats();
       renderLiveOrdersPanel();
     } catch (err) {
@@ -7160,7 +7787,7 @@ ${referenceBlock}
       return { ok: false, error: "выберите логику" };
     }
     if (!requireTbankDepositForRun()) {
-      return { ok: false, error: "загрузите депозит T-Bank" };
+      return { ok: false, error: "загрузите депозит брокера" };
     }
     const vol = volConfig();
     if (!(vol.deposit > 0)) {
@@ -7171,6 +7798,38 @@ ${referenceBlock}
     }
     if (!(vol.maxPositions > 0)) {
       return { ok: false, error: "Max positions должен быть > 0" };
+    }
+    if (!state.lastResult?.perSec?.length) {
+      return { ok: false, error: "сначала нажмите «Рассчитать»" };
+    }
+    const meta = state.lastResultMeta;
+    const brokerId = readBrokerIdFromUi();
+    if (meta?.brokerId && meta.brokerId !== brokerId) {
+      return {
+        ok: false,
+        error: `FINRESP рассчитан для ${meta.brokerId === "alor" ? "Алор" : "T-Bank"}, активен ${brokerId === "alor" ? "Алор" : "T-Bank"} — пересчитайте`
+      };
+    }
+    if (meta?.sandbox != null && meta.sandbox !== isLiveSandbox()) {
+      return {
+        ok: false,
+        error: meta.sandbox
+          ? "FINRESP для песочницы — включите «Песочница (фейк)» или пересчитайте"
+          : "FINRESP для реальной торговли — выключите «Песочница (фейк)» или пересчитайте"
+      };
+    }
+    const metaDep = meta?.deposit;
+    if (metaDep != null && Math.abs(metaDep - vol.deposit) > Math.max(1, vol.deposit * 0.01)) {
+      return {
+        ok: false,
+        error: `депозит изменился (${fmt(metaDep, 0)} → ${fmt(vol.deposit, 0)} ₽) — пересчитайте FINRESP`
+      };
+    }
+    if (isLiveSandbox() && sandboxBaselineMismatch(vol.deposit)) {
+      return {
+        ok: false,
+        error: `песочница: стартовый портфель не совпадает с депозитом ${fmt(vol.deposit, 0)} ₽ — выключите и снова включите «Песочница»`
+      };
     }
     return { ok: true, instruments, spec, vol };
   }
@@ -7468,9 +8127,8 @@ ${referenceBlock}
       syncLiveTradingUi();
       return;
     }
-    if (!(await ensureTbankTokenUnlocked({ interactive: true, openUi: true }))) return;
-    if (!activeBrokerState().accounts.length) await loadTbankAccounts();
-    else if (!activeBrokerState().depositLoaded) await loadTbankDeposit();
+    if (!(await ensureTbankTokenUnlocked({ interactive: true, openUi: true, useModal: true }))) return;
+    await ensureBrokerDepositLoaded();
     await refreshLiveOrders();
     await refreshLivePortfolioStats();
     startLiveStatsPoll();
@@ -7528,6 +8186,7 @@ ${referenceBlock}
 
     ensureLiveChartSession();
     if (sandbox) {
+      await prepareSandboxTradingSession();
       state.live.sessionPositionBaseline = sandboxPositionsByTicker();
       state.live.active = true;
       state.live.tradingStartedAt = new Date().toISOString();
@@ -7762,8 +8421,11 @@ ${referenceBlock}
     const deposit = $("vol-deposit");
     if (deposit) {
       deposit.readOnly = isTbankBacked;
+      const prov = isTbankBacked && !activeBrokerState().depositLoaded;
       deposit.title = isTbankBacked
-        ? `В режиме ${bl} депозит берётся из выбранного торгового счёта.`
+        ? (prov
+          ? `Условный депозит до подключения счёта ${bl} (введите пароль).`
+          : `Депозит загружен со счёта ${bl}.`)
         : "";
     }
     if (isLive) {
@@ -7778,7 +8440,7 @@ ${referenceBlock}
         setBrokerConnectionStatus(
           activeBrokerState().depositLoaded
             ? `Режим реальной торговли (${bl}). Счёт подключён, депозит: ${fmt(+deposit.value || 0, 0)} ₽.`
-            : `Режим реальной торговли (${bl}). Введите пароль — калькулятор расшифрует токен и подключит счёт.`
+            : `Режим реальной торговли (${bl}). Условный депозит ${fmt(+deposit.value || 0, 0)} ₽ — введите пароль для загрузки со счёта.`
         );
       }
     } else if (isTbank) {
@@ -7792,7 +8454,7 @@ ${referenceBlock}
         setBrokerConnectionStatus(
           activeBrokerState().depositLoaded
             ? `Режим ${bl} активен. Депозит взят со счёта: ${fmt(+deposit.value || 0, 0)} ₽.`
-            : `Режим ${bl} активен. Введите пароль: калькулятор расшифрует токен, загрузит счёт и возьмёт депозит.`
+            : `Режим ${bl} активен. Условный депозит ${fmt(+deposit.value || 0, 0)} ₽ — введите пароль для загрузки со счёта.`
         );
       }
     } else {
@@ -7842,35 +8504,51 @@ ${referenceBlock}
 
   /** Сохранение: `saveTbankToken`. */
   async function saveTbankToken() {
+    if (saveTbankToken._busy) return;
+    saveTbankToken._busy = true;
+    closeTbankPassphraseModal("");
     const token = $("tbank-token").value.trim();
     const passphrase = $("tbank-passphrase").value;
-    if (!token) { setTbankStatus("Введите токен T-Bank Invest.", true); return; }
-    if (passphrase.length < 8) { setTbankStatus("Пароль шифрования должен быть не короче 8 символов.", true); return; }
+    if (!token) { setTbankStatus("Введите токен T-Bank Invest.", true); saveTbankToken._busy = false; return; }
+    if (passphrase.length < 8) { setTbankStatus("Пароль шифрования должен быть не короче 8 символов.", true); saveTbankToken._busy = false; return; }
     try {
+      setTbankStatus("Шифрование токена…");
+      await yieldToUi();
       const encrypted = await encryptTbankToken(token, passphrase);
       if (!safeStorageSet(TBANK_TOKEN_STORE_KEY, encrypted)) throw new Error("localStorage недоступен.");
+      setBrokerProviderUi("tbank", { silent: true });
       state.tbank.token = token;
       state.tbank.depositLoaded = false;
       $("tbank-token").value = "";
-      setTbankStatus("Токен зашифрован и сохранён локально. При выборе T-Bank калькулятор сам загрузит счёт и депозит.");
+      setTbankStatus("Токен зашифрован и сохранён. Подключаю счёт…");
+      noteBrokerTech("token-register", "tbank encrypted saved");
       syncTbankSettingsState();
-      if (isTbankBackedMode() && readBrokerIdFromUi() === "tbank") connectTbankAndLoadDeposit();
+      resetBrokerInst();
+      scheduleBrokerConnectAfterSave();
     } catch (err) {
       setTbankStatus(`Ошибка сохранения токена: ${err.message}`, true);
       noteTechError(`tbank-save-token: ${err.message}`);
+    } finally {
+      saveTbankToken._busy = false;
     }
   }
 
   async function saveAlorToken() {
+    if (saveAlorToken._busy) return;
+    saveAlorToken._busy = true;
+    closeTbankPassphraseModal("");
     const token = $("alor-refresh-token")?.value?.trim();
     const passphrase = $("alor-passphrase")?.value || "";
     const portfolio = $("alor-portfolio-id")?.value?.trim();
-    if (!token) { setAlorStatus("Введите refresh token Алор.", true); return; }
-    if (!portfolio) { setAlorStatus("Укажите код портфеля (например D12345).", true); return; }
-    if (passphrase.length < 8) { setAlorStatus("Пароль шифрования должен быть не короче 8 символов.", true); return; }
+    if (!token) { setAlorStatus("Введите refresh token Алор.", true); saveAlorToken._busy = false; return; }
+    if (!portfolio) { setAlorStatus("Укажите код портфеля (например D12345).", true); saveAlorToken._busy = false; return; }
+    if (passphrase.length < 8) { setAlorStatus("Пароль шифрования должен быть не короче 8 символов.", true); saveAlorToken._busy = false; return; }
     try {
+      setAlorStatus("Шифрование токена…");
+      await yieldToUi();
       const encrypted = await encryptTbankToken(token, passphrase);
       if (!safeStorageSet(ALOR_TOKEN_STORE_KEY, encrypted)) throw new Error("localStorage недоступен.");
+      setBrokerProviderUi("alor", { silent: true });
       state.alor.token = token;
       state.alor.portfolioId = portfolio;
       state.alor.exchange = $("alor-exchange")?.value?.trim() || "MOEX";
@@ -7879,13 +8557,16 @@ ${referenceBlock}
       safeStorageSet(ALOR_PORTFOLIO_STORE_KEY, portfolio);
       safeStorageSet(ALOR_EXCHANGE_STORE_KEY, state.alor.exchange);
       $("alor-refresh-token").value = "";
-      setAlorStatus("Refresh token зашифрован и сохранён. Выберите режим счёта сверху.");
+      setAlorStatus("Токен зашифрован. Подключаю счёт…");
+      noteBrokerTech("token-register", `alor portfolio=${portfolio || "—"} encrypted saved`);
       syncAlorSettingsState();
       resetBrokerInst();
-      if (isTbankBackedMode() && readBrokerIdFromUi() === "alor") connectTbankAndLoadDeposit();
+      scheduleBrokerConnectAfterSave();
     } catch (err) {
       setAlorStatus(`Ошибка сохранения: ${err.message}`, true);
       noteTechError(`alor-save-token: ${err.message}`);
+    } finally {
+      saveAlorToken._busy = false;
     }
   }
 
@@ -7904,7 +8585,6 @@ ${referenceBlock}
 
   let tbankPassphraseModalResolve = null;
   let tbankPassphraseModalPromise = null;
-  let tbankUnlockInFlight = null;
   let liveSandboxToggleInFlight = null;
 
   /** Закрытие позиции/заявки: `closeTbankPassphraseModal`. */
@@ -7940,25 +8620,34 @@ ${referenceBlock}
       };
       modal.hidden = false;
       input.value = "";
+      try { $("alor-passphrase")?.blur(); } catch (_) { /* ignore */ }
+      try { $("tbank-passphrase")?.blur(); } catch (_) { /* ignore */ }
       setTimeout(() => { try { input.focus(); } catch (_) { /* ignore */ } }, 0);
     });
     return tbankPassphraseModalPromise;
   }
 
-  /** Запрос пароля: поле на странице → модальное окно (file://) → window.prompt. */
+  /** Запрос пароля: поле на странице → модальное окно → window.prompt. */
   async function requestTbankPassphrase(opts) {
     const options = opts || {};
     let passphrase = getTbankPassphrase();
-    if (passphrase) return passphrase;
+    if (passphrase) {
+      closeTbankPassphraseModal();
+      return passphrase;
+    }
     if (!options.allowPrompt) return "";
     const promptTitle = readBrokerIdFromUi() === "alor"
       ? "Введите пароль для расшифровки refresh token Алор"
       : "Введите пароль для расшифровки локального токена T-Bank";
-    if (IS_FILE_PROTOCOL || options.useModal) {
+    const modal = document.getElementById("tbank-passphrase-modal");
+    if (modal && (IS_FILE_PROTOCOL || options.useModal)) {
       passphrase = await showTbankPassphraseModal(promptTitle);
+    } else if (options.allowPrompt && !IS_FILE_PROTOCOL) {
+      passphrase = "";
     } else {
       passphrase = window.prompt(promptTitle) || "";
     }
+    closeTbankPassphraseModal();
     if (passphrase) {
       if (readBrokerIdFromUi() === "alor" && $("alor-passphrase")) $("alor-passphrase").value = passphrase;
       else if ($("tbank-passphrase")) $("tbank-passphrase").value = passphrase;
@@ -7966,28 +8655,36 @@ ${referenceBlock}
     return passphrase;
   }
 
-  function openBrokerPassphraseUi(hint) {
+  function openBrokerPassphraseUi(hint, uiOpts) {
+    const focusField = !uiOpts || uiOpts.focus !== false;
     if (readBrokerIdFromUi() === "alor") {
       const details = $("alor-settings");
-      if (details) details.open = true;
+      if (details) {
+        details.hidden = false;
+        details.open = true;
+        if (focusField) {
+          try { details.scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch (_) { /* ignore */ }
+        }
+      }
       syncCollapsibleToggleLabel("alor-settings", "alor-settings-toggle");
       const pp = $("alor-passphrase");
-      if (pp) {
+      if (pp && focusField) {
         try { pp.focus({ preventScroll: false }); } catch (_) { pp.focus(); }
       }
       if (hint) setAlorStatus(hint, true);
       return;
     }
-    openTbankPassphraseUi(hint);
+    openTbankPassphraseUi(hint, uiOpts);
   }
 
   /** Подпрограмма `openTbankPassphraseUi`. */
-  function openTbankPassphraseUi(hint) {
+  function openTbankPassphraseUi(hint, uiOpts) {
+    const focusField = !uiOpts || uiOpts.focus !== false;
     const details = $("tbank-settings");
     if (details) details.open = true;
     syncCollapsibleToggleLabel("tbank-settings", "tbank-settings-toggle");
     const pp = $("tbank-passphrase");
-    if (pp) {
+    if (pp && focusField) {
       try { pp.focus({ preventScroll: false }); } catch (_) { pp.focus(); }
     }
     if (hint) setTbankStatus(hint, true);
@@ -7996,10 +8693,17 @@ ${referenceBlock}
   /** Ленивая инициализация/проверка: `ensureTbankTokenUnlocked`. */
   async function ensureTbankTokenUnlocked(opts) {
     const options = opts || {};
+    const opsGen = brokerOpsGeneration;
+    const brokerAtStart = readBrokerIdFromUi();
     if (activeBrokerState().token) return true;
-    if (tbankUnlockInFlight) return tbankUnlockInFlight;
+    if (tbankUnlockInFlight) {
+      const ok = await tbankUnlockInFlight;
+      if (isStaleBrokerOps(opsGen) || readBrokerIdFromUi() !== brokerAtStart) return false;
+      return !!ok;
+    }
 
     const task = (async () => {
+      if (isStaleBrokerOps(opsGen) || readBrokerIdFromUi() !== brokerAtStart) return false;
       const payload = safeStorageGet(brokerTokenStoreKey());
       if (!payload) {
         const blk = readBrokerIdFromUi() === "alor" ? "«Реальный счёт Алор»" : "«Реальный счёт T-Bank»";
@@ -8007,35 +8711,56 @@ ${referenceBlock}
         if (options.openUi !== false) openBrokerPassphraseUi();
         return false;
       }
+      noteBrokerTech("unlock-start", brokerLabel());
       const passphrase = await requestTbankPassphrase({
         allowPrompt: !!options.interactive,
-        useModal: !!options.interactive || IS_FILE_PROTOCOL
+        useModal: !!options.useModal || !!options.interactive || IS_FILE_PROTOCOL
       });
       closeTbankPassphraseModal();
+      if (isStaleBrokerOps(opsGen) || readBrokerIdFromUi() !== brokerAtStart) {
+        noteBrokerTech("unlock-stale", "broker switched during passphrase");
+        return false;
+      }
       if (!passphrase) {
+        resetDepositToDefaultProvisional();
+        noteBrokerTech("unlock-cancel", "no passphrase");
         const hint = options.interactive
           ? "Введите пароль в поле ниже или отмените запрос в диалоге."
           : "Токен сохранён локально — введите пароль и нажмите «Расшифровать и подключить».";
         setBrokerConnectionStatus(hint, true);
+        setCalcStatus(`Депозит ${brokerLabel()}: ${hint}`);
         if (options.openUi !== false) openBrokerPassphraseUi(hint);
         return false;
       }
       try {
         const cred = activeBrokerState();
         cred.token = await decryptTbankToken(payload, passphrase);
+        if (isStaleBrokerOps(opsGen) || readBrokerIdFromUi() !== brokerAtStart) {
+          cred.token = null;
+          noteBrokerTech("unlock-stale", "broker switched after decrypt");
+          return false;
+        }
         cred.depositLoaded = false;
         if (readBrokerIdFromUi() === "alor") {
           cred.accessToken = null;
           cred.accessTokenExpiresAt = 0;
         }
-        setBrokerConnectionStatus("Токен расшифрован на текущую сессию. Загружаю счёт и депозит…");
+        setBrokerConnectionStatus("Токен расшифрован. Загружаю депозит…");
+        noteBrokerTech("unlock-ok", brokerLabel());
         syncTbankSettingsState();
         syncAlorSettingsState();
         resetBrokerInst();
+        if (options.loadDeposit !== false && isTbankBackedMode()) {
+          await ensureBrokerDepositLoaded();
+        }
         return true;
       } catch (err) {
         activeBrokerState().token = null;
-        setBrokerConnectionStatus(`Не удалось расшифровать токен: ${err.message}`, true);
+        resetDepositToDefaultProvisional();
+        const unlockMsg = brokerUnlockErrorMessage(err);
+        setBrokerConnectionStatus(unlockMsg, true);
+        setCalcStatus(unlockMsg);
+        noteBrokerTech("unlock-fail", unlockMsg);
         noteTechError(`${readBrokerIdFromUi()}-unlock-token: ${err.message}`);
         if (options.openUi !== false) openBrokerPassphraseUi();
         return false;
@@ -8052,9 +8777,9 @@ ${referenceBlock}
 
   async function unlockAlorTokenInteractive() {
     openBrokerPassphraseUi();
-    const ok = await ensureTbankTokenUnlocked({ interactive: true, openUi: true });
+    const ok = await ensureTbankTokenUnlocked({ interactive: true, openUi: true, useModal: true });
     if (!ok) return false;
-    await connectTbankAndLoadDeposit({ interactive: true });
+    await connectTbankAndLoadDeposit({ interactive: false, openUi: false });
     if (isLiveMode()) await connectTbankForLive();
     return true;
   }
@@ -8071,51 +8796,124 @@ ${referenceBlock}
 
   async function loadTbankAccounts() {
     try {
+      if (readBrokerIdFromUi() === "alor") syncAlorPortfolioFromUi();
       setBrokerConnectionStatus(`Загрузка счёта ${brokerLabel()}…`);
       await getBroker().loadAccounts();
       fillTbankAccounts();
       const acc = activeBrokerState().accounts.find((a) => a.id === activeBrokerState().selectedAccountId) || activeBrokerState().accounts[0];
       setBrokerConnectionStatus(`Счёт ${brokerLabel()} загружен: ${accountLabel(acc)}. Загружаю депозит…`);
-      if (isTbankBackedMode() && activeBrokerState().selectedAccountId) await loadTbankDeposit();
+      if (isTbankBackedMode() && brokerDepositAccountReady()) await loadTbankDeposit();
     } catch (err) {
-      setBrokerConnectionStatus(`Ошибка загрузки счетов: ${err.message}`, true);
+      activeBrokerState().depositLoaded = false;
+      resetDepositToDefaultProvisional();
+      const userMsg = brokerDepositLoadErrorMessage(err);
+      setBrokerConnectionStatus(userMsg, true);
+      setCalcStatus(userMsg);
       noteTechError(`${readBrokerIdFromUi()}-load-accounts: ${err.message}`);
+      noteBrokerTech("deposit-fail", `${brokerLabel()} accounts ${err.message}`);
     }
   }
 
   async function loadTbankDeposit() {
     try {
-      if (!activeBrokerState().selectedAccountId) throw new Error(`Счёт ${brokerLabel()} не загружен.`);
+      if (readBrokerIdFromUi() === "alor") syncAlorPortfolioFromUi();
+      if (!brokerDepositAccountReady()) throw new Error(`Счёт ${brokerLabel()} не загружен.`);
       setBrokerConnectionStatus(`Загрузка портфеля ${brokerLabel()}…`);
       const amount = await getBroker().loadDepositAmount();
-      $("vol-deposit").value = String(Math.round(amount));
+      markBrokerDepositLoaded(amount);
+      noteBrokerTech("deposit-loaded", `${brokerLabel()} ${Math.round(amount)} RUB`);
       syncLeverageDisplay();
       syncAccountModeUi();
-      setBrokerConnectionStatus(`Депозит загружен из ${brokerLabel()}: ${fmt(amount, 2)} ₽.`);
+      const okMsg = `Депозит загружен из ${brokerLabel()}: ${fmt(amount, 2)} ₽.`;
+      setBrokerConnectionStatus(okMsg);
+      invalidateFormChange({ message: `${okMsg} Нажмите «Рассчитать» для пересчёта FINRESP.` });
       saveConfig();
-      if (state.packs.length) invalidateFinrespResult();
     } catch (err) {
       activeBrokerState().depositLoaded = false;
-      setBrokerConnectionStatus(`Ошибка загрузки депозита: ${err.message}`, true);
+      resetDepositToDefaultProvisional();
+      const userMsg = brokerDepositLoadErrorMessage(err);
+      setBrokerConnectionStatus(userMsg, true);
+      setCalcStatus(userMsg);
+      noteBrokerTech("deposit-fail", `${brokerLabel()} ${err.message}`);
       noteTechError(`${readBrokerIdFromUi()}-load-deposit: ${err.message}`);
     }
   }
 
-  /** Подпрограмма `connectTbankAndLoadDeposit`. */
-  async function connectTbankAndLoadDeposit(opts) {
-    const options = opts && typeof opts === "object" ? opts : { interactive: !!opts };
-    if (!isTbankBackedMode()) return;
-    const unlocked = await ensureTbankTokenUnlocked({
-      interactive: !!options.interactive,
-      openUi: options.openUi !== false
-    });
-    if (!unlocked) return;
+  async function ensureBrokerDepositLoaded() {
+    const opsGen = brokerOpsGeneration;
+    const brokerAtStart = readBrokerIdFromUi();
+    if (!isTbankBackedMode() || !activeBrokerState().token) return;
+    if (activeBrokerState().depositLoaded) return;
+    noteBrokerTech("deposit-start", brokerLabel());
+    if (readBrokerIdFromUi() === "alor") syncAlorPortfolioFromUi();
     if (!activeBrokerState().accounts.length) {
       await loadTbankAccounts();
+      if (isStaleBrokerOps(opsGen) || readBrokerIdFromUi() !== brokerAtStart) return;
       return;
     }
-    if (activeBrokerState().selectedAccountId) await loadTbankDeposit();
-    if (isLiveMode()) await refreshLiveOrders();
+    fillTbankAccounts();
+    if (!activeBrokerState().selectedAccountId && activeBrokerState().accounts.length) {
+      activeBrokerState().selectedAccountId = activeBrokerState().accounts[0].id;
+      safeStorageSet(brokerAccountStoreKey(), activeBrokerState().selectedAccountId);
+      if (readBrokerIdFromUi() === "alor") {
+        state.alor.portfolioId = activeBrokerState().selectedAccountId;
+        safeStorageSet(ALOR_PORTFOLIO_STORE_KEY, activeBrokerState().selectedAccountId);
+      }
+    }
+    if (isStaleBrokerOps(opsGen) || readBrokerIdFromUi() !== brokerAtStart) return;
+    if (brokerDepositAccountReady()) await loadTbankDeposit();
+  }
+
+  /** Подпрограмма `connectTbankAndLoadDeposit`. */
+  async function connectTbankAndLoadDeposit(opts) {
+    const opsGen = brokerOpsGeneration;
+    const brokerAtStart = readBrokerIdFromUi();
+    if (connectBrokerInFlight) {
+      try { await connectBrokerInFlight; } catch (_) { /* ignore */ }
+      if (
+        !isStaleBrokerOps(opsGen) &&
+        readBrokerIdFromUi() === brokerAtStart &&
+        connectBrokerInFlight
+      ) {
+        return connectBrokerInFlight;
+      }
+    }
+    const task = (async () => {
+      try {
+        const options = opts && typeof opts === "object" ? opts : { interactive: !!opts };
+        if (!isTbankBackedMode()) return;
+        if (isStaleBrokerOps(opsGen) || readBrokerIdFromUi() !== brokerAtStart) {
+          noteBrokerTechDeduped("connect-stale", "skipped before start");
+          return;
+        }
+        noteBrokerTechDeduped("connect-start", brokerLabel());
+        if (!isLiveSandbox() && !activeBrokerState().depositLoaded) applyProvisionalDeposit();
+        const stored = !!safeStorageGet(brokerTokenStoreKey());
+        const wantInteractive = options.interactive === true
+          || (options.interactive !== false && stored && !activeBrokerState().token);
+        const unlocked = await ensureTbankTokenUnlocked({
+          interactive: wantInteractive,
+          openUi: options.openUi !== false,
+          useModal: !!options.useModal || IS_FILE_PROTOCOL,
+          loadDeposit: false
+        });
+        if (isStaleBrokerOps(opsGen) || readBrokerIdFromUi() !== brokerAtStart) return;
+        if (!unlocked) {
+          if (!isLiveSandbox() && !activeBrokerState().depositLoaded) {
+            resetDepositToDefaultProvisional();
+          }
+          return;
+        }
+        if (!activeBrokerState().depositLoaded) await ensureBrokerDepositLoaded();
+        if (isStaleBrokerOps(opsGen) || readBrokerIdFromUi() !== brokerAtStart) return;
+        if (isLiveMode() && !isLiveSandbox()) await refreshLiveOrders();
+        noteBrokerTechDeduped("connect-done", `${brokerLabel()} depositLoaded=${!!activeBrokerState().depositLoaded}`);
+      } finally {
+        if (connectBrokerInFlight === task) connectBrokerInFlight = null;
+      }
+    })();
+    connectBrokerInFlight = task;
+    return task;
   }
 
   /** Подпрограмма `initAccountMode`. */
@@ -8130,6 +8928,7 @@ ${referenceBlock}
     if ($("alor-portfolio-id") && state.alor.portfolioId) $("alor-portfolio-id").value = state.alor.portfolioId;
     if ($("alor-exchange") && state.alor.exchange) $("alor-exchange").value = state.alor.exchange;
     fillTbankAccounts();
+    lastBrokerProviderId = readBrokerIdFromUi();
     syncBrokerSettingsPanels();
     syncAccountModeUi();
   }
@@ -8148,25 +8947,46 @@ ${referenceBlock}
       return false;
     }
     if (activeBrokerState().depositLoaded && deposit > 0) return true;
-    const msg = "В режиме T-Bank сначала загрузите депозит из выбранного счёта.";
+    const bl = brokerLabel();
+    const msg = `В режиме ${bl} сначала загрузите депозит: выберите брокера «${bl}», расшифруйте токен и подключите счёт.`;
     setCalcStatus(msg);
-    setTbankStatus(msg, true);
-    $("tbank-settings").open = true;
-    syncCollapsibleToggleLabel("tbank-settings", "tbank-settings-toggle");
+    setBrokerConnectionStatus(msg, true);
+    openBrokerPassphraseUi();
     return false;
   }
   /** Подпрограмма `handleAccountModeUserChange`. */
   async function handleAccountModeUserChange() {
     if ($("account-mode")?.value !== "live" && state.live.active) stopLiveTradingOnModeChange();
+    const prevMode = state.accountMode || readAccountModeFromUi();
     state.accountMode = readAccountModeFromUi();
+    if (prevMode !== state.accountMode) {
+      noteBrokerTech("account-mode", `${prevMode} → ${state.accountMode}`);
+    }
     saveConfig();
     if (state.accountMode === "tbank" || state.accountMode === "live") {
       const sandbox = state.accountMode === "live" && !!$("live-sandbox-mode")?.checked;
-      await connectTbankAndLoadDeposit({
-        interactive: !sandbox,
-        openUi: !sandbox
-      });
-      if (state.accountMode === "live") await connectTbankForLive();
+      if (!sandbox && !activeBrokerState().depositLoaded) {
+        applyProvisionalDeposit();
+      }
+      const storedToken = !!safeStorageGet(brokerTokenStoreKey());
+      const needUnlock = !activeBrokerState().token && storedToken;
+      if (needUnlock) {
+        if (!sandbox) resetDepositToDefaultProvisional();
+        openBrokerPassphraseUi(`Брокер ${brokerLabel()}: введите пароль и нажмите «Расшифровать и подключить».`, { focus: false });
+        setBrokerConnectionStatus(`Токен сохранён — введите пароль для ${brokerLabel()}.`, true);
+        noteBrokerTechDeduped("unlock-needed", "account-mode");
+        scheduleBrokerUnlockPrompt("account-mode");
+      } else {
+        await connectTbankAndLoadDeposit({
+          interactive: false,
+          openUi: false,
+          useModal: false
+        });
+      }
+      if (state.accountMode === "live" && !sandbox) await connectTbankForLive();
+    } else {
+      const dep = $("vol-deposit");
+      if (dep) delete dep.dataset.provisional;
     }
     syncAccountModeUi();
     if (state.accountMode !== "tbank" && state.accountMode !== "live") {
@@ -8182,11 +9002,17 @@ ${referenceBlock}
       const id = ev.target?.id;
       if (id === "tbank-passphrase-modal-ok") {
         ev.preventDefault();
+        ev.stopPropagation();
         closeTbankPassphraseModal(document.getElementById("tbank-passphrase-modal-input")?.value || "");
-      } else if (id === "tbank-passphrase-modal-cancel") {
+        return;
+      }
+      if (id === "tbank-passphrase-modal-cancel") {
         ev.preventDefault();
+        ev.stopPropagation();
         closeTbankPassphraseModal("");
-      } else if (id === "tbank-passphrase-modal") {
+        return;
+      }
+      if (id === "tbank-passphrase-modal") {
         closeTbankPassphraseModal("");
       }
     });
@@ -8229,12 +9055,23 @@ ${referenceBlock}
       unlockAlorTokenInteractive,
       syncBrokerSettingsPanels,
       readBrokerIdFromUi,
+      activeBrokerState,
+      brokerTokenStoreKey,
+      persistBrokerDepositFromDom,
+      syncVolDepositDomFromBroker,
+      activeView,
+      clearLiveRuntimeBroker,
+      onBrokerProviderChange,
       resetBrokerInst,
       setAlorStatus,
       ensureTbankTokenUnlocked,
       loadTbankAccounts,
       loadTbankDeposit,
       fillTbankAccounts,
+      openBrokerPassphraseUi,
+      scheduleBrokerUnlockPrompt,
+      bootstrapBrokerOnPageInit,
+      closeTbankPassphraseModal,
       toggleLiveTrading,
       sellAllMarketLive,
       liveTradingReconcile,

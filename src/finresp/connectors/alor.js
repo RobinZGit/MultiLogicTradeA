@@ -6,6 +6,7 @@
   "use strict";
 
   const REG = root.MultiLogicFinrespConnectors = root.MultiLogicFinrespConnectors || {};
+  const BOPS = root.MultiLogicFinrespBrokerOps || {};
   const factories = REG._factories = REG._factories || new Map();
   if (typeof REG.register !== "function") {
     REG.register = (id, factory) => {
@@ -112,6 +113,24 @@
       };
     }
 
+    const ALOR_FETCH_TIMEOUT_MS = 45000;
+
+    async function fetchWithTimeout(url, init, label) {
+      const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), ALOR_FETCH_TIMEOUT_MS) : null;
+      try {
+        const res = await fetch(url, ctrl ? { ...init, signal: ctrl.signal } : init);
+        return res;
+      } catch (err) {
+        if (ctrl?.signal?.aborted) {
+          throw new Error(`${label || "Алор API"}: таймаут ${ALOR_FETCH_TIMEOUT_MS / 1000} с`);
+        }
+        throw err;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+
     async function ensureAccessToken() {
       const now = Date.now();
       if (alor().accessToken && (alor().accessTokenExpiresAt || 0) > now + 60_000) {
@@ -119,11 +138,11 @@
       }
       const refresh = alor().token;
       if (!refresh) throw new Error("Refresh token Алор не задан.");
-      const res = await fetch(`${OAUTH_BASE}/refresh`, {
+      const res = await fetchWithTimeout(`${OAUTH_BASE}/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: refresh })
-      });
+      }, "Алор OAuth");
       const text = await res.text();
       let data = {};
       if (text) {
@@ -140,7 +159,15 @@
       return access;
     }
 
-    async function apiRequest(method, path, { query, body, auth = true } = {}) {
+    function alorReqId() {
+      const pf = portfolioId() || "pf";
+      const uid = (typeof crypto !== "undefined" && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : `ml-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      return `${pf};${uid}`;
+    }
+
+    async function apiRequest(method, path, { query, body, auth = true, reqId } = {}) {
       const url = new URL(`${API_BASE}${path}`);
       const q = { ...(query || {}), format: query?.format || "Simple" };
       for (const [k, v] of Object.entries(q)) {
@@ -148,15 +175,16 @@
       }
       const headers = { Accept: "application/json" };
       if (body != null) headers["Content-Type"] = "application/json";
+      if (reqId) headers["X-ALOR-REQID"] = reqId;
       if (auth) {
         const token = await ensureAccessToken();
         headers.Authorization = `Bearer ${token}`;
       }
-      const res = await fetch(url.toString(), {
+      const res = await fetchWithTimeout(url.toString(), {
         method: method || "GET",
         headers,
         body: body != null ? JSON.stringify(body) : undefined
-      });
+      }, `Алор ${path}`);
       const text = await res.text();
       let data = null;
       if (text) {
@@ -354,33 +382,84 @@
       return { securities, futures: [], money };
     }
 
+    function normalizeTrade(trade) {
+      const fn = BOPS.normalizeAlorTradeToBrokerOp || ((t) => t);
+      return fn(trade, (sym, market, board) => makeInstrumentId(sym, market, board), exchange());
+    }
+
     async function getOrders() {
       const pf = portfolioId();
       const data = await apiRequest("GET", `/md/v2/Clients/${exchange()}/${encodeURIComponent(pf)}/orders`);
       const list = Array.isArray(data) ? data : (data?.orders || []);
+      const statusMap = BOPS.alorOrderStatusToTbank || ((s) => String(s || "working"));
       return {
-        orders: list.map((o) => ({
-          orderId: String(o.id ?? o.orderId ?? ""),
-          figi: makeInstrumentId(o.symbol, "shares", o.board),
-          direction: String(o.side || "").toLowerCase().includes("sell") ? "ORDER_DIRECTION_SELL" : "ORDER_DIRECTION_BUY",
-          lotsRequested: String(o.qty ?? o.quantity ?? 0),
-          lotsExecuted: String(o.filledQty ?? o.filled ?? 0),
-          orderType: String(o.type || "").toLowerCase().includes("limit") ? "ORDER_TYPE_LIMIT" : "ORDER_TYPE_MARKET",
-          orderState: String(o.status || "ACTIVE"),
-          initialSecurityPrice: quotationFromNumber(+(o.price ?? 0)),
-          _alor: o
-        }))
+        orders: list.map((o) => {
+          const symbol = String(o.symbol || "").toUpperCase();
+          const board = o.board || "";
+          const market = (BOPS.alorBoardIsFutures && BOPS.alorBoardIsFutures(board)) ? "futures" : "shares";
+          const lotsReq = Math.max(0, Math.floor(+(o.qty ?? o.quantity ?? 0)));
+          const lotsExec = Math.max(0, Math.floor(+(o.filled ?? o.filledQtyBatch ?? o.filledQty ?? 0)));
+          const orderTypeRaw = String(o.type || o.orderType || "").toLowerCase();
+          return {
+            orderId: String(o.id ?? o.orderId ?? o.orderno ?? ""),
+            figi: makeInstrumentId(symbol, market, board),
+            direction: String(o.side || "").toLowerCase().includes("sell") ? "ORDER_DIRECTION_SELL" : "ORDER_DIRECTION_BUY",
+            lotsRequested: String(lotsReq),
+            lotsExecuted: String(lotsExec),
+            orderType: orderTypeRaw.includes("limit") ? "ORDER_TYPE_LIMIT" : "ORDER_TYPE_MARKET",
+            orderState: statusMap(o.status),
+            executionReportStatus: statusMap(o.status),
+            initialSecurityPrice: quotationFromNumber(+(o.price ?? 0)),
+            _alor: o
+          };
+        })
       };
     }
 
     async function getOperations(from, to) {
-      return { operations: [] };
+      const pf = portfolioId();
+      if (!pf) return { operations: [] };
+      const fromIso = from || new Date(Date.now() - 30 * 86400000).toISOString();
+      const toIso = to || new Date().toISOString();
+      const fromMs = Date.parse(fromIso) || 0;
+      const toMs = Date.parse(toIso) || Date.now();
+      const dateFrom = String(fromIso).slice(0, 10);
+      const ex = exchange();
+      const encPf = encodeURIComponent(pf);
+      const [sessionRaw, historyRaw] = await Promise.all([
+        apiRequest("GET", `/md/v2/Clients/${ex}/${encPf}/trades`).catch(() => []),
+        apiRequest("GET", `/md/v2/Stats/${ex}/${encPf}/history/trades`, {
+          query: { dateFrom, limit: 1000, orderByTradeDate: true }
+        }).catch(() => [])
+      ]);
+      const sessionList = Array.isArray(sessionRaw) ? sessionRaw : (sessionRaw?.trades || []);
+      const historyList = Array.isArray(historyRaw) ? historyRaw : (historyRaw?.trades || []);
+      const byId = new Map();
+      for (const t of historyList) {
+        const id = String(t?.id ?? "");
+        if (id) byId.set(id, t);
+      }
+      for (const t of sessionList) {
+        const id = String(t?.id ?? "");
+        if (id) byId.set(id, t);
+      }
+      const operations = [];
+      for (const trade of byId.values()) {
+        const op = normalizeTrade(trade);
+        if (!op) continue;
+        const tms = Date.parse(op.date || 0) || 0;
+        if (tms && (tms < fromMs - 60000 || tms > toMs + 60000)) continue;
+        operations.push(op);
+      }
+      operations.sort((a, b) => (Date.parse(a.date || 0) || 0) - (Date.parse(b.date || 0) || 0));
+      return { operations };
     }
 
     async function cancelOrder(orderId) {
       const pf = portfolioId();
       await apiRequest("DELETE", `/commandapi/warptrans/TRADE/v2/client/orders/${encodeURIComponent(orderId)}`, {
-        query: { portfolio: pf, exchange: exchange() }
+        query: { portfolio: pf, exchange: exchange(), stop: false },
+        reqId: alorReqId()
       });
       return { ok: true };
     }
@@ -546,7 +625,10 @@
       if (!Number.isFinite(mpi) || mpi <= 0) return price;
       return Math.round(price / mpi) * mpi;
     }
-    function postOrderRejected() { return false; }
+    function postOrderRejected(data) {
+      if (typeof BOPS.alorPostOrderRejected === "function") return BOPS.alorPostOrderRejected(data);
+      return false;
+    }
 
     async function postOrder(instrumentId, direction, lots, secForPrice, options) {
       const opts = options || {};
@@ -572,8 +654,8 @@
         : "/commandapi/warptrans/TRADE/v2/client/orders/actions/market";
       const body = {
         side,
-        type: orderType,
         quantity: qty,
+        allowMargin: true,
         instrument: {
           symbol: meta.symbol,
           exchange: exchange(),
@@ -585,7 +667,10 @@
       if (orderType === "limit") body.price = price;
       const reqSummary = `alor ${orderType} ${side} qty=${qty} ${meta.symbol}@${exchange()}`;
       noteLiveTech("live-alor-post-req", secForPrice || meta.symbol, reqSummary);
-      const data = await apiRequest("POST", path, { body });
+      const raw = await apiRequest("POST", path, { body, reqId: alorReqId() });
+      const data = typeof BOPS.mapAlorPostOrderResponse === "function"
+        ? BOPS.mapAlorPostOrderResponse(raw, qty)
+        : raw;
       live.lastPostOrder = {
         at: new Date().toISOString(),
         sec: secForPrice || meta.symbol,
@@ -594,11 +679,19 @@
         lots: qty,
         orderType,
         market: opts.market,
-        status: data?.status || "OK",
-        orderId: String(data?.orderId ?? data?.id ?? ""),
-        ok: true
+        status: data?.executionReportStatus || raw?.message || "OK",
+        message: data?.message || raw?.message || "",
+        orderId: data?.orderId || String(raw?.orderNumber ?? raw?.orderId ?? ""),
+        lotsExecuted: data?.lotsExecuted,
+        ok: !postOrderRejected(data)
       };
-      noteLiveTech("live-alor-post-ok", secForPrice || meta.symbol, reqSummary);
+      if (postOrderRejected(data)) {
+        const msg = data?.message || data?.executionReportStatus || "Заявка отклонена";
+        noteLiveTech("live-alor-post-reject", secForPrice || meta.symbol, `${msg} | ${reqSummary}`);
+        throw new Error(msg);
+      }
+      noteLiveTech("live-alor-post-ok", secForPrice || meta.symbol,
+        `status=${data?.executionReportStatus || "—"} exec=${data?.lotsExecuted ?? "—"} | ${reqSummary}`);
       return data;
     }
 

@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-alor-broker-connector-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-broker-switch-debounce-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -27,16 +27,22 @@
   const $ = (id) => document.getElementById(id);
   const IS_FILE_PROTOCOL = location.protocol === "file:";
   const TECH_LOG_MAX_ERRORS = 128;
+  const TECH_LOG_MAX_BROKER_EVENTS = 48;
   const TECH_LOG_FILE_HOST = (() => {
     try {
-      const h = location.hostname;
-      return h === "127.0.0.1" || h === "localhost";
+      const h = String(location.hostname || "").toLowerCase();
+      const p = String(location.port || "");
+      return h === "127.0.0.1" || h === "localhost" || h === "::1"
+        || p === "4200" || p === "4201" || p === "5173";
     } catch (_) {
       return false;
     }
   })();
   const TECH_LOG_FILE_URL = "http://127.0.0.1:4201/finresp-tech-log";
   const TECH_LOG_FILE_REL = "logs/finresp-tech-log.txt";
+  const BROKER_TRACE_FILE_URL = "http://127.0.0.1:4201/finresp-broker-trace";
+  const BROKER_TRACE_FILE_REL = "logs/finresp-broker-trace.txt";
+  const BROKER_TRACE_LS_KEY = "mlFinrespBrokerTrace";
   const LIVE_NOTIFY_FILE_URL = "http://127.0.0.1:4201/finresp-notify";
   const LIVE_NOTIFY_FILE_REL = "logs/finresp-notify.log";
   let techLogFileTimer = null;
@@ -249,8 +255,69 @@
   const techLog = {
     startedAt: new Date().toISOString(),
     errors: [],
-    lastEvent: "boot"
+    brokerEvents: [],
+    lastEvent: "boot",
+    lastBrokerEvent: "—"
   };
+
+  /** События брокера/пароля/режима счёта — в тех. инфо и logs/finresp-broker-trace.txt (localhost). */
+  function noteBrokerTech(action, detail) {
+    const at = new Date().toISOString();
+    const broker = $("broker-provider")?.value || "tbank";
+    const mode = $("account-mode")?.value || calcState?.accountMode || "paper";
+    const dep = $("vol-deposit")?.value || "—";
+    const prov = $("vol-deposit")?.dataset?.provisional === "1";
+    const tDep = !!calcState.tbank?.depositLoaded;
+    const aDep = !!calcState.alor?.depositLoaded;
+    const line = detail ? `${action}: ${detail}` : String(action || "—");
+    const entry = `${at} broker=${broker} mode=${mode} vol=${dep} provisional=${prov} tbankLoaded=${tDep} alorLoaded=${aDep} ${line}`;
+    techLog.brokerEvents.push(entry);
+    while (techLog.brokerEvents.length > TECH_LOG_MAX_BROKER_EVENTS) techLog.brokerEvents.shift();
+    techLog.lastBrokerEvent = line;
+    techLog.lastEvent = `broker:${action || "event"}`;
+    appendBrokerTraceLine(entry);
+    updateTechInfo();
+  }
+
+  function appendBrokerTraceLine(line) {
+    if (!line) return;
+    try {
+      const prev = localStorage.getItem(BROKER_TRACE_LS_KEY) || "";
+      const next = `${prev}${line}\n`;
+      localStorage.setItem(BROKER_TRACE_LS_KEY, next.slice(-120000));
+    } catch (_) { /* ignore */ }
+    if (!TECH_LOG_FILE_HOST) {
+      scheduleTechInfoFileSink();
+      return;
+    }
+    const payload = JSON.stringify({ line, at: new Date().toISOString() });
+    if (navigator.sendBeacon) {
+      try {
+        const blob = new Blob([payload], { type: "application/json" });
+        if (navigator.sendBeacon(BROKER_TRACE_FILE_URL, blob)) {
+          scheduleTechInfoFileSink();
+          return;
+        }
+      } catch (_) { /* fetch fallback */ }
+    }
+    fetch(BROKER_TRACE_FILE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload,
+      keepalive: true
+    }).catch(() => { /* optional local sink */ });
+    scheduleTechInfoFileSink();
+  }
+
+  function readBrokerTraceTail(maxLines) {
+    try {
+      const raw = localStorage.getItem(BROKER_TRACE_LS_KEY) || "";
+      const lines = raw.trim().split("\n").filter(Boolean);
+      return lines.slice(-(maxLines || 12));
+    } catch (_) {
+      return [];
+    }
+  }
 
   /** Подпрограмма `pushTechLogLine`. */
   function pushTechLogLine(line) {
@@ -445,6 +512,7 @@
       `fileProtocol=${IS_FILE_PROTOCOL}`,
       `moexCorsBlocked=${IS_FILE_PROTOCOL}`,
       `techLogFileSink=${TECH_LOG_FILE_HOST ? `local:${TECH_LOG_FILE_REL}` : "off"}`,
+      `brokerTraceSink=${TECH_LOG_FILE_HOST ? `local:${BROKER_TRACE_FILE_REL}` : "off"}`,
       `liveNotifySink=${TECH_LOG_FILE_HOST ? `local:${LIVE_NOTIFY_FILE_REL}` : "off"}`,
       `online=${navigator.onLine}`,
       `engineLoaded=${!!E}`,
@@ -489,6 +557,10 @@
         `indicators=${typeof selectedIndicatorKeys === "function" ? selectedIndicatorKeys().join(",") : "—"}`,
         `accountMode=${calcState.accountMode || "paper"}`,
         `brokerProvider=${$("broker-provider")?.value || "tbank"}`,
+        `activeBroker=${$("broker-provider")?.value || "tbank"}`,
+        `volDeposit=${$("vol-deposit")?.value || "—"}`,
+        `volDepositProvisional=${$("vol-deposit")?.dataset?.provisional === "1"}`,
+        `brokerLastEvent=${techLog.lastBrokerEvent || "—"}`,
         `tbankTokenStored=${(() => { try { return !!localStorage.getItem("multilogic.finresp.tbank.token.v1"); } catch (_) { return false; } })()}`,
         `alorTokenStored=${(() => { try { return !!localStorage.getItem("multilogic.finresp.alor.token.v1"); } catch (_) { return false; } })()}`,
         `alorPortfolio=${$("alor-portfolio-id")?.value || calcState.alor?.portfolioId || "—"}`,
@@ -497,6 +569,9 @@
         `tbankAccounts=${calcState.tbank?.accounts?.length ?? 0}`,
         `tbankAccountSelected=${calcState.tbank?.selectedAccountId ? "yes" : "no"}`,
         `tbankDepositLoaded=${!!calcState.tbank?.depositLoaded}`,
+        `alorTokenUnlocked=${!!calcState.alor?.token}`,
+        `alorDepositLoaded=${!!calcState.alor?.depositLoaded}`,
+        `alorAccountSelected=${calcState.alor?.selectedAccountId ? "yes" : "no"}`,
         `tbankApiHost=${(() => { try { return localStorage.getItem("multilogic.finresp.tbank.host.v1") || "tinkoff"; } catch (_) { return "tinkoff"; } })()}`,
         `prefixStocksLen=${($("prefix-stocks")?.value || "").length}`,
         `prefixFuturesLen=${($("prefix-futures")?.value || "").length}`
@@ -674,6 +749,15 @@
       }
     }
     lines.push(`userAgent=${navigator.userAgent}`);
+    if (techLog.brokerEvents.length) {
+      lines.push("brokerEvents:");
+      lines.push(...techLog.brokerEvents.map((e) => `  ${e}`));
+    }
+    const brokerTraceLocal = readBrokerTraceTail(16);
+    if (brokerTraceLocal.length) {
+      lines.push("brokerTraceLocal (localStorage, F12 → Application):");
+      lines.push(...brokerTraceLocal.map((e) => `  ${e}`));
+    }
     if (techLog.errors.length) {
       lines.push("errors:");
       lines.push(...techLog.errors.map((e) => `  ${e}`));
@@ -837,6 +921,7 @@
     lastInstruments: [],
     lastLoadMeta: null,
     lastResult: null,
+    lastResultMeta: null,
     lastProtocol: null,
     loadedProtocol: null,
     equityConfigMarkers: [],
@@ -861,7 +946,9 @@
       token: null,
       accounts: [],
       selectedAccountId: "",
-      depositLoaded: false
+      depositLoaded: false,
+      depositRub: null,
+      depositProvisional: true
     },
     alor: {
       token: null,
@@ -871,7 +958,9 @@
       exchange: "MOEX",
       accounts: [],
       selectedAccountId: "",
-      depositLoaded: false
+      depositLoaded: false,
+      depositRub: null,
+      depositProvisional: true
     },
     live: {
       active: false,
@@ -900,15 +989,7 @@
       positionsMtmRub: null,
       portfolioPositions: [],
       commissionPaid: null,
-      sandbox: {
-        startPortfolio: null,
-        cash: null,
-        cashDelta: 0,
-        commissionTotal: 0,
-        open: new Map(),
-        closed: [],
-        orders: []
-      },
+      runtime: {},
       sessionStartedAt: null,
       sessionPositionBaseline: null,
       chartSession: null,
@@ -1101,6 +1182,18 @@
       logic: (formSnap?.logicIds?.[0]) || primaryLogicId(),
       logics: formSnap?.logicIds?.length ? formSnap.logicIds.slice() : selectedLogicIds(),
       selectedInstruments: selectedInstruments(),
+      brokers: {
+        tbank: {
+          deposit: state.tbank.depositRub != null ? String(Math.round(state.tbank.depositRub)) : "",
+          depositProvisional: !!state.tbank.depositProvisional,
+          depositLoaded: !!state.tbank.depositLoaded
+        },
+        alor: {
+          deposit: state.alor.depositRub != null ? String(Math.round(state.alor.depositRub)) : "",
+          depositProvisional: !!state.alor.depositProvisional,
+          depositLoaded: !!state.alor.depositLoaded
+        }
+      },
       volume: {
         type: $("vol-type")?.value || "Deposit percent",
         value: $("vol-value")?.value || "",
@@ -1186,6 +1279,7 @@
   function saveConfig() {
     if (state.restoringConfig) return;
     try {
+      persistBrokerDepositFromDom?.();
       safeStorageSet(CONFIG_STORE_KEY, JSON.stringify(collectConfig()));
       syncNotifyEmailCacheToServer();
       onLiveConfigSavedForNotify?.();
@@ -1267,7 +1361,21 @@
       state.logicSelectionCleared = Array.isArray(cfg.logics) && cfg.logics.length === 0;
       setValueIfExists("vol-type", cfg.volume?.type);
       setValueIfExists("vol-value", cfg.volume?.value);
-      setValueIfExists("vol-deposit", cfg.volume?.deposit);
+      const restoreBrokerDeposit = (cred, snap) => {
+        if (!snap) return;
+        if (snap.deposit != null && snap.deposit !== "") cred.depositRub = +snap.deposit || null;
+        if (snap.depositProvisional != null) cred.depositProvisional = !!snap.depositProvisional;
+        if (snap.depositLoaded != null) cred.depositLoaded = !!snap.depositLoaded;
+        else if (cred.depositRub > 0 && !cred.depositProvisional) cred.depositLoaded = true;
+      };
+      restoreBrokerDeposit(state.tbank, cfg.brokers?.tbank);
+      restoreBrokerDeposit(state.alor, cfg.brokers?.alor);
+      if (!cfg.brokers && cfg.volume?.deposit != null) {
+        const cred = cfg.brokerProvider === "alor" ? state.alor : state.tbank;
+        cred.depositRub = +cfg.volume.deposit || null;
+        cred.depositProvisional = true;
+        cred.depositLoaded = false;
+      }
       setValueIfExists("vol-maxpos", cfg.volume?.maxPositions);
       if (cfg.volume?.commissionPct != null) {
         setValueIfExists("commission-pct", cfg.volume.commissionPct);
@@ -1407,6 +1515,9 @@
       fillLogicSelect();
       state.restoredSelectedInstruments = Array.isArray(cfg.selectedInstruments) ? cfg.selectedInstruments : [];
       syncObTrendConfirmUi();
+      if (!state.tbank.token) state.tbank.depositLoaded = false;
+      if (!state.alor.token) state.alor.depositLoaded = false;
+      syncVolDepositDomFromBroker?.();
       return true;
     } finally {
       state.restoringConfig = false;
@@ -1685,10 +1796,22 @@
     return maxPos * volumePct / 100;
   }
 
+  /** Покупательная способность (₽) = депозит × плечо. */
+  function calcLeverageBuyingPowerRub() {
+    const mult = calcLeverageAmount();
+    const deposit = +( $("vol-deposit")?.value || 0);
+    if (!(deposit > 0) || !(mult > 0)) return NaN;
+    return deposit * mult;
+  }
+
   /** Синхронизация UI/state: `syncLeverageDisplay`. */
   function syncLeverageDisplay() {
-    const amount = calcLeverageAmount();
-    const text = Number.isFinite(amount) && amount > 0 ? fmt(amount, 2) : "—";
+    const mult = calcLeverageAmount();
+    const multText = Number.isFinite(mult) && mult > 0 ? fmt(mult, 2) : "—";
+    const cap = calcLeverageBuyingPowerRub();
+    const text = Number.isFinite(cap) && cap > 0
+      ? `${multText} (≈${fmt(cap, 0)} ₽)`
+      : multText;
     const volEl = $("vol-leverage-value");
     const liveEl = $("live-leverage-value");
     if (volEl) volEl.textContent = text;
@@ -1870,10 +1993,16 @@
 
   /** Подпрограмма `volConfig`. */
   function volConfig() {
+    const brokerId = String($("broker-provider")?.value || "tbank").toLowerCase();
+    const cred = brokerId === "alor" ? state.alor : state.tbank;
+    const domDep = +($("vol-deposit")?.value || 0);
+    const deposit = (cred.depositLoaded && Number.isFinite(cred.depositRub) && !cred.depositProvisional)
+      ? cred.depositRub
+      : (domDep || cred.depositRub || E.DEFAULT_VOLUME.deposit);
     return {
       volumeType: $("vol-type").value,
       volume: +$("vol-value").value || E.DEFAULT_VOLUME.volume,
-      deposit: +$("vol-deposit").value || E.DEFAULT_VOLUME.deposit,
+      deposit,
       maxPositions: Math.max(0, +$("vol-maxpos").value ?? E.DEFAULT_VOLUME.maxPositions),
       commission: commissionConfig()
     };
@@ -1895,7 +2024,7 @@
     get volConfig() { return volConfig; },
     get stopperConfig() { return stopperConfig; },
     get commissionPctValue() { return commissionPctValue; },
-    noteLiveTech, noteTechError, updateTechInfo, saveConfig,
+    noteLiveTech, noteTechError, noteBrokerTech, updateTechInfo, saveConfig,
     get selectedInstruments() { return selectedInstruments; },
     get selectedInstrumentCount() { return selectedInstrumentCount; },
     get instrumentKey() { return instrumentKey; },
@@ -1910,6 +2039,7 @@
     get yieldToUi() { return yieldToUi; },
     get syncChartBox() { return syncChartBox; },
     get invalidateFinrespResult() { return invalidateFinrespResult; },
+    get invalidateFormChange() { return invalidateFormChange; },
     get syncLeverageDisplay() { return syncLeverageDisplay; },
     INDICATOR_OPTIONS, MIN_WARMUP_BARS, MOEX_MINUTES_PER_SESSION,
     get applyEditorParams() { return applyEditorParams; },
@@ -1961,8 +2091,11 @@
     snapshotLiveSessionPortfolioBaseline, liveFreeCashRub, liveFinResultRub,
     requireTbankDepositForRun, initAccountMode, connectTbankAndLoadDeposit,
     connectTbankForLive, saveTbankToken, saveAlorToken, unlockTbankTokenInteractive, unlockAlorTokenInteractive,
-    syncBrokerSettingsPanels, readBrokerIdFromUi, resetBrokerInst, setAlorStatus,
+    syncBrokerSettingsPanels, readBrokerIdFromUi, activeBrokerState, brokerTokenStoreKey,
+    onBrokerProviderChange, resetBrokerInst, setAlorStatus,
+    persistBrokerDepositFromDom, syncVolDepositDomFromBroker, activeView, clearLiveRuntimeBroker,
     ensureTbankTokenUnlocked, loadTbankAccounts, loadTbankDeposit, fillTbankAccounts,
+    openBrokerPassphraseUi, scheduleBrokerUnlockPrompt, bootstrapBrokerOnPageInit, closeTbankPassphraseModal,
     toggleLiveTrading, sellAllMarketLive, liveTradingReconcile, refreshLiveCandleStream,
     refreshLiveManualLimitPrice, refreshLiveChartsUi, refreshLiveEquityChartsUi,
     renderLiveOrdersPanel, renderLivePositionsPanel, syncLiveManualOrderUi,
@@ -2576,6 +2709,7 @@
       if (annHint) annHint.textContent = "";
     }
     state.lastResult = null;
+    state.lastResultMeta = null;
     state.windowSkipped = [];
     applyUiLocks();
   }
@@ -6851,6 +6985,12 @@ ${referenceBlock}
     }
     if (!opts.optimTrial) state.lastResult = result;
     if (!opts.optimTrial && !liveSession) {
+      state.lastResultMeta = {
+        deposit: volConfig().deposit,
+        brokerId: readBrokerIdFromUi(),
+        sandbox: isLiveSandbox(),
+        at: new Date().toISOString()
+      };
       state.lastProtocol = buildCalcTradeProtocol(result);
       syncProtocolUi();
     }
@@ -7364,14 +7504,26 @@ ${referenceBlock}
     hideLivePositionsMenu();
   });
   document.addEventListener("scroll", () => hideLivePositionsMenu(), true);
-  $("tbank-save-token").addEventListener("click", () => { saveConfig(); saveTbankToken(); });
+  $("tbank-save-token").addEventListener("click", () => {
+    saveConfig();
+    void saveTbankToken().catch((err) => {
+      setTbankStatus(`Ошибка: ${err.message}`, true);
+      noteTechError(`tbank-save-token: ${err.message}`);
+    });
+  });
   $("tbank-unlock-token")?.addEventListener("click", () => {
     unlockTbankTokenInteractive().catch((err) => {
       setTbankStatus(`Ошибка подключения: ${err.message}`, true);
       noteTechError(`tbank-unlock: ${err.message}`);
     });
   });
-  $("alor-save-token")?.addEventListener("click", () => { saveConfig(); saveAlorToken(); });
+  $("alor-save-token")?.addEventListener("click", () => {
+    saveConfig();
+    void saveAlorToken().catch((err) => {
+      setAlorStatus(`Ошибка: ${err.message}`, true);
+      noteTechError(`alor-save-token: ${err.message}`);
+    });
+  });
   $("alor-unlock-token")?.addEventListener("click", () => {
     unlockAlorTokenInteractive().catch((err) => {
       setAlorStatus(`Ошибка подключения: ${err.message}`, true);
@@ -7379,13 +7531,7 @@ ${referenceBlock}
     });
   });
   $("broker-provider")?.addEventListener("change", () => {
-    resetBrokerInst?.();
-    saveConfig();
-    syncBrokerSettingsPanels();
-    syncAccountModeUi();
-    if (isTbankBackedMode()) {
-      void connectTbankAndLoadDeposit({ interactive: false, openUi: false }).catch(() => {});
-    }
+    onBrokerProviderChange?.();
   });
   ["alor-portfolio-id", "alor-exchange"].forEach((id) => {
     $(id)?.addEventListener("change", () => { saveConfig(); });
@@ -7696,30 +7842,27 @@ ${referenceBlock}
     applyUiLocks();
     syncAccountModeUi();
     const runLiveInit = async () => {
+      state._initOk = true;
+      syncPageVersionBadge();
+      syncProtocolUi();
       const sandboxLive = isLiveMode() && !!$("live-sandbox-mode")?.checked;
+      if (isTbankBackedMode()) {
+        await bootstrapBrokerOnPageInit();
+      }
       if (sandboxLive) {
         await yieldToUi();
         await enableLiveSandbox().catch((err) => {
           noteLiveTech("live-sandbox-init", err.message);
         });
         syncLiveTradingUi();
-        if (isTbankBackedMode()) {
-          void connectTbankAndLoadDeposit({ interactive: false, openUi: false }).catch(() => {});
-        }
-      } else if (isTbankBackedMode()) {
-        const stored = !!safeStorageGet(TBANK_TOKEN_STORE_KEY);
-        await connectTbankAndLoadDeposit({
-          interactive: stored && !state.tbank.token,
-          openUi: true
+      } else if (isLiveMode()) {
+        void connectTbankForLive().catch((err) => {
+          noteLiveTech("live-init-for-live", err.message);
         });
-        if (isLiveMode()) await connectTbankForLive();
       }
       if (isLiveMode()) {
-        await refreshLiveManualLimitPrice({ force: true }).catch(() => {});
+        void refreshLiveManualLimitPrice({ force: true }).catch(() => {});
       }
-      state._initOk = true;
-      syncPageVersionBadge();
-      syncProtocolUi();
       updateTechInfo("init-ok");
     };
     runLiveInit().catch((err) => {
@@ -7748,6 +7891,11 @@ ${referenceBlock}
   window.__mlFinresp.unstickUi = (reason) => {
     if (typeof unstickLiveUi === "function") unstickLiveUi(reason);
     if (state.uiBusy) setBusy(false);
+    if (typeof closeTbankPassphraseModal === "function") closeTbankPassphraseModal("");
+    else {
+      const modal = document.getElementById("tbank-passphrase-modal");
+      if (modal) modal.hidden = true;
+    }
     updateTechInfo("manual-unstick");
   };
   finalizeAngularFormFromConfig();

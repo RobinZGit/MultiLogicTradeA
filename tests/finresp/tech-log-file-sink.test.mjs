@@ -38,7 +38,11 @@ test('boot.js mirrors tech info to local file sink on localhost', () => {
   assert.match(src, /127\.0\.0\.1:4201\/finresp-tech-log/);
   assert.match(src, /finresp-notify/);
   assert.match(src, /liveNotifySink=/);
-  assert.match(src, /liveNotifyLastStatus/);
+  assert.match(src, /brokerEvents:/);
+  assert.match(src, /noteBrokerTech/);
+  assert.match(src, /brokerLastEvent=/);
+  assert.match(src, /finresp-broker-trace/);
+  assert.match(src, /brokerTraceSink=/);
 });
 
 test('local tech log server accepts POST and writes logs/finresp-tech-log.txt', async () => {

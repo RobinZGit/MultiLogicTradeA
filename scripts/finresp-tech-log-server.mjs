@@ -4,6 +4,7 @@
  *
  * Endpoints:
  *   POST /finresp-tech-log  — mirror «Тех. информация»
+ *   POST /finresp-broker-trace — append broker/deposit events (logs/finresp-broker-trace.txt)
  *   POST /finresp-notify    — email/SMS alerts (also logs to logs/finresp-notify.log)
  *
  * Optional env for real delivery:
@@ -27,6 +28,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const LOG_DIR = path.join(ROOT, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'finresp-tech-log.txt');
+const BROKER_TRACE_FILE = path.join(LOG_DIR, 'finresp-broker-trace.txt');
 const NOTIFY_LOG_FILE = path.join(LOG_DIR, 'finresp-notify.log');
 
 function ensureLogDir() {
@@ -231,6 +233,27 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'POST' && req.url === '/finresp-broker-trace') {
+    try {
+      const raw = await readBody(req);
+      const data = JSON.parse(raw.toString('utf8'));
+      const line = String(data.line || '').replace(/\r?\n/g, ' ').slice(0, 4000);
+      if (!line) {
+        res.writeHead(400, { ...corsHeaders(origin), 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('empty line');
+        return;
+      }
+      ensureLogDir();
+      fs.appendFileSync(BROKER_TRACE_FILE, `${line}\n`, 'utf8');
+      res.writeHead(200, { ...corsHeaders(origin), 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('ok');
+    } catch (err) {
+      res.writeHead(400, { ...corsHeaders(origin), 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(String(err?.message || err));
+    }
+    return;
+  }
+
   if (req.method === 'POST' && req.url === '/finresp-notify') {
     try {
       const raw = await readBody(req);
@@ -253,6 +276,7 @@ server.listen(PORT, HOST, () => {
   ensureLogDir();
   console.log(`FINRESP local server: http://${HOST}:${PORT}`);
   console.log(`  tech log → ${LOG_FILE}`);
+  console.log(`  broker   → ${BROKER_TRACE_FILE}`);
   console.log(`  notify   → ${NOTIFY_LOG_FILE}`);
   if (process.env.ML_NOTIFY_SMSRU_API_ID) console.log('  SMS.ru: configured');
   if (process.env.ML_NOTIFY_SMTP_HOST) console.log('  SMTP: configured');
