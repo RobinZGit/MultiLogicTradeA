@@ -70,6 +70,7 @@ test('live goal panel: enabled header shows target date and percent', () => {
   assert.match(html, /id="live-goal-summary-title"/);
   assert.match(html, /id="live-goal-enabled"/);
   assert.match(html, /id="live-goal-banner-badge"/);
+  assert.match(html, /id="live-notify-panel"/);
   assert.match(liveSrc, /liveGoalSummaryTitle/);
   assert.match(liveSrc, /syncLiveGoalBanner/);
   assert.match(liveSrc, /live-goal-banner-badge--active/);

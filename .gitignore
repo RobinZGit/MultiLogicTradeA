@@ -43,3 +43,4 @@ Thumbs.db
 
 # Local FINRESP tech log (written by scripts/finresp-tech-log-server.mjs)
 /logs/finresp-tech-log.txt
+/logs/finresp-notify.log

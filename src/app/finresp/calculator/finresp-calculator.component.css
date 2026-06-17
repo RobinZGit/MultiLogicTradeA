@@ -692,6 +692,15 @@ body.calc-running .live-trading-panel--active .live-trading-toolbar{
 .live-goal-status{margin:.2rem 0 .55rem;font-size:1rem;font-weight:800;line-height:1.35;}
 .live-goal-status--achieved{color:#b45309;}
 .live-goal-status--expired{color:#7f1d1d;}
+.live-notify-panel{margin:.75rem 0 0;border:1px solid #d1d5db;border-radius:8px;background:#fafafa;}
+.live-notify-body{padding:0 .7rem .7rem;}
+.live-notify-grid{display:grid;grid-template-columns:1fr auto;gap:.45rem .65rem;align-items:end;margin:.35rem 0 .45rem;}
+@media (max-width:520px){.live-notify-grid{grid-template-columns:1fr;}}
+.live-notify-field{display:flex;flex-direction:column;gap:.2rem;font-size:.78rem;font-weight:600;color:#374151;}
+.live-notify-field input{padding:.42rem .5rem;border:1px solid #d1d5db;border-radius:7px;background:#fff;color:#374151;font-size:.88rem;font-weight:600;}
+.live-notify-phone-hint{font-weight:500;color:var(--muted);font-size:.72rem;}
+.live-notify-send-label{display:inline-flex;align-items:center;gap:.4rem;font-size:.82rem;font-weight:700;color:#374151;cursor:pointer;user-select:none;white-space:nowrap;padding-bottom:.35rem;}
+.live-notify-send-label input{width:1rem;height:1rem;cursor:pointer;}
 .tech-info-card{border:1px dashed var(--border);border-radius:10px;padding:.5rem .85rem;margin:1.25rem 0 0;background:#fafbfc;}
 .tech-info-card[open]{background:#fff;border-color:#c7d2fe;box-shadow:0 1px 6px rgba(37,99,235,.08);}
 .tech-info-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem 1rem;padding:.55rem .15rem .7rem;margin:-.5rem -.85rem .35rem;border-bottom:2px solid var(--border);cursor:pointer;list-style:none;}

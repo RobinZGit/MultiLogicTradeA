@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-live-goal-banner-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-live-notify-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -37,6 +37,8 @@
   })();
   const TECH_LOG_FILE_URL = "http://127.0.0.1:4201/finresp-tech-log";
   const TECH_LOG_FILE_REL = "logs/finresp-tech-log.txt";
+  const LIVE_NOTIFY_FILE_URL = "http://127.0.0.1:4201/finresp-notify";
+  const LIVE_NOTIFY_FILE_REL = "logs/finresp-notify.log";
   let techLogFileTimer = null;
 
   /** Локальный dev: снимок тех. информации в файл репозитория (через scripts/finresp-tech-log-server.mjs). */
@@ -426,6 +428,7 @@
     bindCollapsibleToggle("live-positions-panel", "live-positions-toggle");
     bindCollapsibleToggle("live-trade-history-panel", "live-trade-history-toggle");
     bindCollapsibleToggle("live-goal-panel", "live-goal-toggle");
+    bindCollapsibleToggle("live-notify-panel", "live-notify-toggle");
   }
 
   /** Построение структуры данных: `buildTechInfoText`. */
@@ -441,6 +444,7 @@
       `fileProtocol=${IS_FILE_PROTOCOL}`,
       `moexCorsBlocked=${IS_FILE_PROTOCOL}`,
       `techLogFileSink=${TECH_LOG_FILE_HOST ? `local:${TECH_LOG_FILE_REL}` : "off"}`,
+      `liveNotifySink=${TECH_LOG_FILE_HOST ? `local:${LIVE_NOTIFY_FILE_REL}` : "off"}`,
       `online=${navigator.onLine}`,
       `engineLoaded=${!!E}`,
       `createCandleCache=${!!E?.createCandleCache}`,
@@ -877,6 +881,7 @@
       obTrendConfirm: false,
       obTrendCache: new Map(),
       goalAchieved: false,
+      notifySent: {},
       positionsMenuIdx: null,
       manualPriceSec: "",
       tradeHistory: [],
@@ -1068,6 +1073,12 @@
           enabled: !!$("live-goal-enabled")?.checked,
           endDate: $("live-goal-end-date")?.value || "",
           annPct: $("live-goal-ann-pct")?.value || ""
+        },
+        notify: {
+          email: $("live-notify-email")?.value || "",
+          emailEnabled: !!$("live-notify-email-enabled")?.checked,
+          phone: $("live-notify-phone")?.value || "",
+          phoneEnabled: !!$("live-notify-phone-enabled")?.checked
         }
       },
       params: {
@@ -1189,6 +1200,16 @@
         if ($("live-goal-enabled")) $("live-goal-enabled").checked = !!cfg.live.goal.enabled;
         setValueIfExists("live-goal-end-date", cfg.live.goal.endDate);
         setValueIfExists("live-goal-ann-pct", cfg.live.goal.annPct);
+      }
+      if (cfg.live?.notify) {
+        setValueIfExists("live-notify-email", cfg.live.notify.email);
+        if ($("live-notify-email-enabled")) {
+          $("live-notify-email-enabled").checked = !!cfg.live.notify.emailEnabled;
+        }
+        setValueIfExists("live-notify-phone", cfg.live.notify.phone);
+        if ($("live-notify-phone-enabled")) {
+          $("live-notify-phone-enabled").checked = !!cfg.live.notify.phoneEnabled;
+        }
       }
       if ($("live-sandbox-match-mode")) {
         const mm = cfg.params?.sandboxMatchMode || cfg.live?.sandboxMatchMode;
@@ -1831,6 +1852,7 @@
     handleAccountModeUserChange, checkSandboxPortfolioStopperNotify,
     ensureSandboxStopperWatch, resetSandboxStopperWatch, syncTradeHistoryFromSources,
     initLiveGoal, bindLiveGoalUi, syncLiveTradingGoalUi, checkLiveTradingGoal,
+    initLiveNotify, bindLiveNotifyUi,
     noteLiveFinrespSkipped, tryLiveFinrespCalc, startLiveModePoll, stopLiveModePoll,
     queueLiveCandleRefreshIfNeeded,
     startLiveStatsPoll, stopLiveStatsPoll, startLiveOrderBookPoll, stopLiveOrderBookPoll,
@@ -7507,6 +7529,7 @@ ${referenceBlock}
     initDates();
     applySavedConfig();
     initLiveGoal();
+    initLiveNotify();
     fillLogicSelect();
     updatePositionSlHint();
     updateAtParamsSummary();

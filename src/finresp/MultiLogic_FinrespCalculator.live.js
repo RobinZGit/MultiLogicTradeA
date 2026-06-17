@@ -2038,6 +2038,7 @@
       }
     }
     syncLiveGoalBanner();
+    checkLiveGoalExpiredNotify();
   }
 
   function stopLiveTradingByGoal(ann, targetPct) {
@@ -2057,6 +2058,7 @@
     }
     syncLiveTradingGoalUi();
     syncLiveTradingUi({ skipGoalCheck: true });
+    notifyLiveGoalAchieved(ann, targetPct);
     updateTechInfo("live-goal-achieved");
   }
 
@@ -2076,6 +2078,7 @@
   function onLiveGoalEnabledChange() {
     if (!liveGoalEnabled()) {
       state.live.goalAchieved = false;
+      resetLiveGoalNotifyFlags();
       setLiveGoalDefaultFields();
     }
     saveConfig();
@@ -2109,6 +2112,163 @@
     }
     if (!hasPct && $("live-goal-ann-pct")) $("live-goal-ann-pct").value = "100";
     syncLiveTradingGoalUi();
+  }
+
+  const LIVE_NOTIFY_HOST = (() => {
+    try {
+      const h = location.hostname;
+      return h === "127.0.0.1" || h === "localhost";
+    } catch (_) {
+      return false;
+    }
+  })();
+  const LIVE_NOTIFY_URL = "http://127.0.0.1:4201/finresp-notify";
+
+  function liveNotifyConfig() {
+    return {
+      email: String($("live-notify-email")?.value || "").trim(),
+      emailEnabled: !!$("live-notify-email-enabled")?.checked,
+      phone: String($("live-notify-phone")?.value || "").trim(),
+      phoneEnabled: !!$("live-notify-phone-enabled")?.checked
+    };
+  }
+
+  function isLiveNotifyChannelActive() {
+    const cfg = liveNotifyConfig();
+    return (cfg.emailEnabled && !!cfg.email) || (cfg.phoneEnabled && !!cfg.phone);
+  }
+
+  function normalizeRuPhoneForSms(raw) {
+    const digits = String(raw || "").replace(/\D/g, "");
+    if (!digits) return null;
+    if (digits.length === 11 && digits.startsWith("8")) return `7${digits.slice(1)}`;
+    if (digits.length === 11 && digits.startsWith("7")) return digits;
+    if (digits.length === 10) return `7${digits}`;
+    return null;
+  }
+
+  function isValidNotifyEmail(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
+  }
+
+  function ensureLiveNotifySentMap() {
+    if (!state.live.notifySent || typeof state.live.notifySent !== "object") {
+      state.live.notifySent = {};
+    }
+    return state.live.notifySent;
+  }
+
+  function markLiveNotifySent(key) {
+    ensureLiveNotifySentMap()[key] = true;
+  }
+
+  function wasLiveNotifySent(key) {
+    return !!ensureLiveNotifySentMap()[key];
+  }
+
+  function resetLiveGoalNotifyFlags() {
+    const map = ensureLiveNotifySentMap();
+    delete map.goal_achieved;
+    for (const k of Object.keys(map)) {
+      if (k.startsWith("goal_expired:")) delete map[k];
+    }
+  }
+
+  function sendLiveNotify(eventId, subject, message) {
+    if (!LIVE_NOTIFY_HOST || !isLiveMode()) return;
+    const cfg = liveNotifyConfig();
+    if (!cfg.emailEnabled && !cfg.phoneEnabled) return;
+    if (cfg.emailEnabled && !isValidNotifyEmail(cfg.email)) {
+      noteLiveTech("live-notify", "skip-email-invalid", eventId);
+      return;
+    }
+    if (cfg.phoneEnabled && !normalizeRuPhoneForSms(cfg.phone)) {
+      noteLiveTech("live-notify", "skip-phone-invalid", eventId);
+      return;
+    }
+    const payload = JSON.stringify({
+      at: new Date().toISOString(),
+      event: eventId,
+      subject: String(subject || "").slice(0, 200),
+      message: String(message || "").slice(0, 4000),
+      email: cfg.emailEnabled ? cfg.email : "",
+      phone: cfg.phoneEnabled ? normalizeRuPhoneForSms(cfg.phone) : "",
+      emailEnabled: !!cfg.emailEnabled,
+      phoneEnabled: !!cfg.phoneEnabled
+    });
+    noteLiveTech("live-notify", eventId, cfg.emailEnabled ? cfg.email : cfg.phone);
+    if (navigator.sendBeacon) {
+      try {
+        const blob = new Blob([payload], { type: "application/json" });
+        if (navigator.sendBeacon(LIVE_NOTIFY_URL, blob)) return;
+      } catch (_) { /* fetch fallback */ }
+    }
+    fetch(LIVE_NOTIFY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload,
+      keepalive: true
+    }).catch(() => { /* optional local sink */ });
+  }
+
+  function notifyLiveGoalAchieved(ann, targetPct) {
+    if (wasLiveNotifySent("goal_achieved")) return;
+    markLiveNotifySent("goal_achieved");
+    const annTxt = Number.isFinite(ann) ? fmtPct(ann) : "—";
+    const tgtTxt = Number.isFinite(targetPct) ? fmtPct(targetPct) : "—";
+    sendLiveNotify(
+      "goal_achieved",
+      "MultiLogic: цель достигнута",
+      `Цель достигнута: ${annTxt} годовых (цель ${tgtTxt}). Торговля остановлена.`
+    );
+  }
+
+  function checkLiveGoalExpiredNotify() {
+    if (!liveGoalEnabled() || !isLiveMode()) return;
+    if (state.live.goalAchieved) return;
+    const end = $("live-goal-end-date")?.value || "";
+    if (!isLiveGoalEndDateExpired(end)) return;
+    const key = `goal_expired:${end}`;
+    if (wasLiveNotifySent(key)) return;
+    markLiveNotifySent(key);
+    const dateRu = formatLiveGoalDateRu(end);
+    sendLiveNotify(
+      "goal_expired",
+      "MultiLogic: истёк срок цели",
+      `Истёк срок торговли по цели (до ${dateRu}). Торговля не останавливается автоматически.`
+    );
+  }
+
+  function notifyLiveSandboxModeSwitch(sandboxOn) {
+    if (!isLiveMode()) return;
+    if (sandboxOn) {
+      sendLiveNotify(
+        "sandbox_on",
+        "MultiLogic: песочница",
+        "Включена песочница (фейк-брокер). Реальные заявки не отправляются."
+      );
+    } else {
+      sendLiveNotify(
+        "sandbox_off",
+        "MultiLogic: реальная торговля",
+        "Включена реальная торговля (T-Bank). Заявки уходят на биржу."
+      );
+    }
+  }
+
+  function bindLiveNotifyUi() {
+    if (bindLiveNotifyUi._done) return;
+    bindLiveNotifyUi._done = true;
+    const onChange = () => { saveConfig(); };
+    $("live-notify-email")?.addEventListener("change", onChange);
+    $("live-notify-phone")?.addEventListener("change", onChange);
+    $("live-notify-email-enabled")?.addEventListener("change", onChange);
+    $("live-notify-phone-enabled")?.addEventListener("change", onChange);
+  }
+
+  function initLiveNotify() {
+    bindLiveNotifyUi();
+    checkLiveGoalExpiredNotify();
   }
 
   /** Синхронизация всей live-панели: статус, кнопки, опросы, стакан. */
@@ -4889,6 +5049,7 @@
     if (state.live.active) recordLiveModeRegionSwitch();
     if (on) {
         await enableLiveSandbox();
+        notifyLiveSandboxModeSwitch(true);
         await yieldToUi();
         resetSandboxStopperWatch();
         state.live.lastError = "";
@@ -4914,6 +5075,7 @@
           }
         }
         await disableLiveSandbox();
+        notifyLiveSandboxModeSwitch(false);
         if (state.live.active) {
           if (!state.tbank.selectedAccountId) await loadTbankAccounts();
           await resetLiveSessionPositionBaseline();
@@ -6883,6 +7045,7 @@ ${referenceBlock}
     clearLiveManualFlatten();
     state.live.lastError = "";
     state.live.goalAchieved = false;
+    resetLiveGoalNotifyFlags();
     syncLiveTradingUi();
 
     const startCheck = validateLiveTradingStart();
@@ -7539,6 +7702,8 @@ ${referenceBlock}
       bindLiveGoalUi,
       syncLiveTradingGoalUi,
       checkLiveTradingGoal,
+      initLiveNotify,
+      bindLiveNotifyUi,
       refreshLiveChartsUi,
       refreshLiveEquityChartsUi,
       renderLiveOrdersPanel,
