@@ -620,10 +620,21 @@ body.calc-running .live-trading-panel--active .live-trading-toolbar{
   color:#eef2ff;
 }
 .live-goal-banner-badge--achieved{
-  background:linear-gradient(180deg,#fef3c7 0%,#fcd34d 100%);
+  background:linear-gradient(180deg,#fffbeb 0%,#fde68a 55%,#fcd34d 100%);
   border:2px solid #d97706;
   color:#92400e;
   font-size:.8rem;
+  box-shadow:0 2px 10px rgba(217,119,6,.28);
+}
+/* Не давать общим .live-trading-badge (красный/зелёный live) перекрашивать бейдж цели */
+.live-trading-panel--active .live-goal-banner-badge--achieved,
+.live-trading-panel--sandbox .live-goal-banner-badge--achieved,
+.live-trading-panel--sandbox.live-trading-panel--active .live-goal-banner-badge--achieved{
+  background:linear-gradient(180deg,#fffbeb 0%,#fde68a 55%,#fcd34d 100%) !important;
+  border:2px solid #d97706 !important;
+  color:#92400e !important;
+  box-shadow:0 2px 10px rgba(217,119,6,.28) !important;
+  animation:none !important;
 }
 .live-goal-banner-badge--expired{
   background:linear-gradient(180deg,#fef2f2 0%,#fecaca 100%);
@@ -690,7 +701,11 @@ body.calc-running .live-trading-panel--active .live-trading-toolbar{
 .live-goal-panel--active{border:2px solid #6366f1;background:linear-gradient(180deg,#eef2ff 0%,#e0e7ff 100%);box-shadow:0 0 0 1px rgba(99,102,241,.18);}
 .live-goal-panel--active .live-panel-summary-title{font-size:.96rem;font-weight:800;color:#3730a3;}
 .live-goal-panel--achieved{border:2px solid #d97706 !important;background:linear-gradient(180deg,#fffbeb 0%,#fde68a 55%,#fcd34d 100%) !important;box-shadow:0 2px 14px rgba(217,119,6,.28);}
-.live-goal-panel--achieved .live-panel-summary-title{font-size:1.14rem;font-weight:800;color:#92400e;letter-spacing:.01em;}
+.live-goal-panel--achieved .live-panel-summary-title{font-size:1.14rem;font-weight:800;color:#92400e !important;letter-spacing:.01em;}
+.live-goal-panel--achieved > .live-manual-order-summary{color:#92400e;}
+.live-goal-panel--achieved .live-goal-status--achieved{color:#b45309 !important;}
+.live-goal-panel--achieved .live-goal-hint,
+.live-goal-panel--achieved #live-goal-hint{color:#92400e;}
 .live-goal-panel--expired{border:2px solid #7f1d1d !important;background:linear-gradient(180deg,#fef2f2 0%,#fecaca 55%,#fca5a5 100%) !important;box-shadow:0 2px 14px rgba(127,29,29,.22);}
 .live-goal-panel--expired .live-panel-summary-title{font-size:1.08rem;font-weight:800;color:#7f1d1d;}
 .live-goal-body{padding:0 .7rem .7rem;}
