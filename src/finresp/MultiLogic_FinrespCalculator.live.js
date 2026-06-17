@@ -1967,6 +1967,9 @@
   let positionsRenderScheduled = false;
   let orderBookRefreshScheduled = false;
   let manualOrderSyncScheduled = false;
+  let journalBackgroundSyncScheduled = false;
+  let goalPanelSyncScheduled = false;
+  let notifyPanelSyncScheduled = false;
   let lastJournalSyncAt = 0;
   let lastJournalDomRenderAt = 0;
   let lastPositionsDomRenderAt = 0;
@@ -1974,6 +1977,7 @@
   const JOURNAL_SYNC_MIN_MS = 400;
   const JOURNAL_DOM_RENDER_MIN_MS = 500;
   const PANEL_DOM_RENDER_MIN_MS = 500;
+  const PANEL_RENDER_CHUNK_ROWS = 40;
 
   function isTradeHistoryPanelOpen() {
     return !!$("live-trade-history-panel")?.open;
@@ -1989,6 +1993,52 @@
 
   function isPositionsPanelOpen() {
     return !!$("live-positions-panel")?.open;
+  }
+
+  function isGoalPanelOpen() {
+    return !!$("live-goal-panel")?.open;
+  }
+
+  function isNotifyPanelOpen() {
+    return !!$("live-notify-panel")?.open;
+  }
+
+  function showLiveTradeHistoryLoading() {
+    if (!isTradeHistoryPanelOpen()) return;
+    const metaEl = $("live-trade-history-meta");
+    const el = $("live-trading-orders");
+    if (metaEl) metaEl.textContent = "загрузка журнала…";
+    if (el) {
+      el.innerHTML = '<div class="live-trading-orders-scroll"><p class="live-trading-orders-empty">загрузка журнала…</p></div>';
+    }
+  }
+
+  function showLivePositionsLoading() {
+    if (!isPositionsPanelOpen()) return;
+    const metaEl = $("live-positions-meta");
+    const tableEl = $("live-positions-table");
+    if (metaEl) metaEl.textContent = "загрузка позиций…";
+    if (tableEl) tableEl.innerHTML = '<p class="live-order-book-empty">загрузка позиций…</p>';
+  }
+
+  function showLiveGoalPanelLoading() {
+    if (!isGoalPanelOpen()) return;
+    const hintEl = $("live-goal-hint");
+    if (hintEl) hintEl.textContent = "обновление показателей цели…";
+  }
+
+  function showLiveNotifyPanelLoading() {
+    if (!isNotifyPanelOpen()) return;
+    const hint = $("live-notify-hint");
+    if (hint) hint.textContent = "загрузка: проверка сервера рассылки…";
+  }
+
+  function showLiveManualOrderLoading() {
+    if (!isManualOrderPanelOpen()) return;
+    const statusEl = $("live-manual-order-status");
+    if (statusEl && !String(statusEl.textContent || "").trim()) {
+      statusEl.textContent = "загрузка…";
+    }
   }
 
   /** «5 штук» / «2 штуки» / «1 штука». */
@@ -2071,6 +2121,38 @@
     return true;
   }
 
+  function scheduleBackgroundTradeHistorySync() {
+    if (!state.live.active && !isLiveSandbox()) return;
+    const now = Date.now();
+    if (now - lastJournalSyncAt < JOURNAL_SYNC_MIN_MS) return;
+    if (journalBackgroundSyncScheduled) return;
+    journalBackgroundSyncScheduled = true;
+    requestAnimationFrame(() => {
+      journalBackgroundSyncScheduled = false;
+      void syncTradeHistoryFromSourcesAsync({ force: false });
+    });
+  }
+
+  function scheduleSyncLiveGoalPanel(force) {
+    if (!isGoalPanelOpen() && !force) return;
+    if (goalPanelSyncScheduled && !force) return;
+    goalPanelSyncScheduled = true;
+    requestAnimationFrame(() => {
+      goalPanelSyncScheduled = false;
+      void syncLiveGoalPanelAsync();
+    });
+  }
+
+  function scheduleSyncLiveNotifyPanel(force) {
+    if (!isNotifyPanelOpen() && !force) return;
+    if (notifyPanelSyncScheduled && !force) return;
+    notifyPanelSyncScheduled = true;
+    requestAnimationFrame(() => {
+      notifyPanelSyncScheduled = false;
+      void syncLiveNotifyPanelAsync();
+    });
+  }
+
   function scheduleRenderLiveOrdersPanel(force) {
     renderLivePanelSummaryCounts();
     if (!isTradeHistoryPanelOpen()) return;
@@ -2131,7 +2213,26 @@
       hist.addEventListener("toggle", () => {
         if (hist.open) {
           lastJournalSyncAt = 0;
+          showLiveTradeHistoryLoading();
           scheduleRenderLiveOrdersPanel(true);
+        }
+      });
+    }
+    const goal = $("live-goal-panel");
+    if (goal) {
+      goal.addEventListener("toggle", () => {
+        if (goal.open) {
+          showLiveGoalPanelLoading();
+          scheduleSyncLiveGoalPanel(true);
+        }
+      });
+    }
+    const notify = $("live-notify-panel");
+    if (notify) {
+      notify.addEventListener("toggle", () => {
+        if (notify.open) {
+          showLiveNotifyPanelLoading();
+          scheduleSyncLiveNotifyPanel(true);
         }
       });
     }
@@ -2139,6 +2240,7 @@
     if (manual) {
       manual.addEventListener("toggle", () => {
         if (manual.open) {
+          showLiveManualOrderLoading();
           scheduleSyncLiveManualOrderPanel(true);
           void (async () => {
             await yieldToUi();
@@ -2162,6 +2264,7 @@
     if (pos) {
       pos.addEventListener("toggle", () => {
         if (pos.open) {
+          showLivePositionsLoading();
           scheduleRenderLivePositionsPanel(true);
           startLivePositionsPoll();
         } else {
@@ -2170,6 +2273,43 @@
         }
       });
     }
+  }
+
+  /** Синхронизация журнала в память (без DOM), с уступками UI при длинной истории. */
+  async function syncTradeHistoryFromSourcesAsync(opts) {
+    const options = opts || {};
+    const panelOpen = isTradeHistoryPanelOpen();
+    const trading = !!state.live.active;
+    if (!panelOpen && !trading && !options.force) return;
+    if (isLiveSandbox()) {
+      const sb = ensureSandboxState();
+      const now = Date.now();
+      if (options.force || trading || now - lastJournalSyncAt >= JOURNAL_SYNC_MIN_MS) {
+        await yieldToUi();
+        rebuildSandboxFromLedger(sb);
+        lastJournalSyncAt = now;
+      }
+      const ledger = sb.ledger || [];
+      for (let i = 0; i < ledger.length; i++) {
+        upsertTradeHistoryFromSandboxFill(ledger[i]);
+        if (i > 0 && i % 25 === 0) await yieldToUi();
+      }
+      return;
+    }
+    const brokerOps = state.live.brokerOperations || [];
+    for (let i = 0; i < brokerOps.length; i++) {
+      upsertTradeHistoryFromTbankOperation(brokerOps[i]);
+      if (i > 0 && i % 25 === 0) await yieldToUi();
+    }
+    await yieldToUi();
+    reconcileRealBrokerTradeFinresp(brokerOps);
+    const orders = state.live.orders || [];
+    for (let i = 0; i < orders.length; i++) {
+      const o = orders[i];
+      if (isLiveOrderActive(o)) upsertTradeHistoryFromOrder(o, "real");
+      if (i > 0 && i % 25 === 0) await yieldToUi();
+    }
+    lastJournalSyncAt = Date.now();
   }
 
   /** Синхронизация UI/state: `syncTradeHistoryFromSources`. */
@@ -2283,17 +2423,24 @@
   /** Отрисовка элемента live-панели: `renderLiveOrdersPanel`. */
   async function renderLiveOrdersPanelAsync() {
     if (!isTradeHistoryPanelOpen()) return;
-    await yieldToUi();
-    renderLiveOrdersPanel();
+    if (state.live.journalPanelBusy) return;
+    state.live.journalPanelBusy = true;
+    try {
+      await yieldToUi();
+      await syncTradeHistoryFromSourcesAsync({ force: true });
+      await yieldToUi();
+      await paintTradeHistoryPanelDom();
+    } finally {
+      state.live.journalPanelBusy = false;
+      state.live.lastJournalPanelRenderMs = Date.now();
+      updateTechInfo("live-journal-panel");
+    }
   }
 
-  function renderLiveOrdersPanel() {
-    renderLivePanelSummaryCounts();
-    const panelOpen = isTradeHistoryPanelOpen();
-    syncTradeHistoryFromSources({ force: panelOpen });
+  async function paintTradeHistoryPanelDom() {
+    if (!isTradeHistoryPanelOpen()) return;
     const el = $("live-trading-orders");
     const metaEl = $("live-trade-history-meta");
-    if (!panelOpen) return;
     lastJournalDomRenderAt = Date.now();
     const hist = ensureLiveTradeHistory().slice().sort((a, b) => {
       if (!!a.active !== !!b.active) return a.active ? -1 : 1;
@@ -2322,17 +2469,36 @@
         : "Сделок пока нет. После «Начать торговлю» здесь — заявки и исполнения.";
       contentHtml = `<div class="live-trading-orders-scroll"><p class="live-trading-orders-empty">${emptyMsg}</p></div>`;
     } else {
-      const activeBlock = active.length
-        ? `<tr class="live-trade-history-subhead"><td colspan="12">Текущие заявки (не исполнены полностью)</td></tr>${active.map(renderTradeHistoryRow).join("")}`
-        : "";
-      const doneBlock = done.length
-        ? `${active.length ? '<tr class="live-trade-history-subhead"><td colspan="12">Исполненные и завершённые</td></tr>' : ""}${done.map(renderTradeHistoryRow).join("")}`
-        : "";
+      let activeBlock = "";
+      if (active.length) {
+        activeBlock = '<tr class="live-trade-history-subhead"><td colspan="12">Текущие заявки (не исполнены полностью)</td></tr>';
+        for (let i = 0; i < active.length; i++) {
+          activeBlock += renderTradeHistoryRow(active[i]);
+          if (i > 0 && i % PANEL_RENDER_CHUNK_ROWS === 0) await yieldToUi();
+        }
+      }
+      let doneBlock = "";
+      if (done.length) {
+        if (active.length) doneBlock = '<tr class="live-trade-history-subhead"><td colspan="12">Исполненные и завершённые</td></tr>';
+        for (let i = 0; i < done.length; i++) {
+          doneBlock += renderTradeHistoryRow(done[i]);
+          if (i > 0 && i % PANEL_RENDER_CHUNK_ROWS === 0) await yieldToUi();
+        }
+      }
       const tableHtml = `<table><thead><tr><th></th><th>Тикер</th><th>Сторона</th><th>Тип / сумма</th><th>Лоты</th><th>Статус</th><th>FINRESPΔ</th><th>Комиссия buy</th><th>Комиссия sell</th><th>Источник</th><th>Режим</th><th>Время</th></tr></thead><tbody>${activeBlock}${doneBlock}</tbody></table>`;
       contentHtml = `<div class="live-trading-orders-scroll">${tableHtml}</div>`;
     }
     if (metaEl && isLiveMode()) metaEl.textContent = metaText;
     if (el) el.innerHTML = `${contentHtml}${totalsFooter}`;
+  }
+
+  function renderLiveOrdersPanel() {
+    renderLivePanelSummaryCounts();
+    if (isTradeHistoryPanelOpen()) {
+      scheduleRenderLiveOrdersPanel(false);
+      return;
+    }
+    scheduleBackgroundTradeHistorySync();
   }
 
   /** Карта legId → tradeId открывающей сделки + остатки открытых legs после replay. */
@@ -2912,6 +3078,10 @@
     state.live.reconcileBusy = false;
     state.live.chartsBootstrapBusy = false;
     state.live.finrespBootstrapProgress = null;
+    state.live.journalPanelBusy = false;
+    state.live.positionsPanelBusy = false;
+    state.live.goalPanelBusy = false;
+    state.live.notifyPanelBusy = false;
     resetLiveTradingBusyFlags();
     state.live.lastError = reason
       ? String(reason)
@@ -3058,6 +3228,43 @@
       parts.push(`Последнее: ${nd.lastEvent} → ${nd.lastStatus}${nd.lastDetail ? ` (${nd.lastDetail})` : ""}.`);
     }
     hint.textContent = parts.join(" ");
+  }
+
+  async function syncLiveGoalPanelAsync() {
+    if (!isGoalPanelOpen()) return;
+    if (state.live.goalPanelBusy) return;
+    state.live.goalPanelBusy = true;
+    try {
+      showLiveGoalPanelLoading();
+      await yieldToUi();
+      liveGoalUiLastSyncAt = 0;
+      syncLiveTradingGoalUi();
+      await yieldToUi();
+    } finally {
+      state.live.goalPanelBusy = false;
+      state.live.lastGoalPanelSyncMs = Date.now();
+      updateTechInfo("live-goal-panel");
+    }
+  }
+
+  async function syncLiveNotifyPanelAsync() {
+    if (!isNotifyPanelOpen()) return;
+    if (state.live.notifyPanelBusy) return;
+    state.live.notifyPanelBusy = true;
+    try {
+      showLiveNotifyPanelLoading();
+      await yieldToUi();
+      syncLiveNotifyHint();
+      await yieldToUi();
+      await probeLiveNotifySink();
+      await yieldToUi();
+      syncLiveNotifyHint();
+      checkLiveGoalExpiredNotify();
+    } finally {
+      state.live.notifyPanelBusy = false;
+      state.live.lastNotifyPanelSyncMs = Date.now();
+      updateTechInfo("live-notify-panel");
+    }
   }
 
   async function probeLiveNotifySink() {
@@ -3342,8 +3549,8 @@
     bindLiveNotifyUi();
     liveNotifyFormParamsSnapshot = liveNotifyFormParamsSnapshotText();
     syncLiveNotifyHint();
-    void probeLiveNotifySink();
-    checkLiveGoalExpiredNotify();
+    if (isNotifyPanelOpen()) scheduleSyncLiveNotifyPanel(true);
+    else checkLiveGoalExpiredNotify();
   }
 
   /** Строки FINRESP для reconcile: текущий расчёт или снимок до live-сессии. */
@@ -3965,8 +4172,17 @@
 
   async function renderLivePositionsPanelAsync() {
     if (!isPositionsPanelOpen()) return;
-    await yieldToUi();
-    renderLivePositionsPanel();
+    if (state.live.positionsPanelBusy) return;
+    state.live.positionsPanelBusy = true;
+    try {
+      await yieldToUi();
+      renderLivePositionsPanel();
+      await yieldToUi();
+    } finally {
+      state.live.positionsPanelBusy = false;
+      state.live.lastPositionsPanelRenderMs = Date.now();
+      updateTechInfo("live-positions-panel");
+    }
   }
 
   /** Отрисовка элемента live-панели: `renderLivePositionsPanel`. */
@@ -4320,7 +4536,9 @@
     stopLivePositionsPoll();
     const panel = $("live-positions-panel");
     if (!panel?.open || !isLiveMode()) return;
-    void refreshLiveOpenPositions({ force: true });
+    requestAnimationFrame(() => {
+      void refreshLiveOpenPositions({ force: true });
+    });
     state.live.positionsTimer = setInterval(() => {
       if (!isLiveMode() || !$("live-positions-panel")?.open) {
         stopLivePositionsPoll();

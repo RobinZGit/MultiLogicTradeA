@@ -32,7 +32,11 @@ test('tech info includes live busy flags for диагностики зависа
     'liveLastCandleRefreshMs',
     'liveFinrespBootstrap',
     'liveOrderBookBusy',
-    'liveLastOrderBookRefreshMs'
+    'liveLastOrderBookRefreshMs',
+    'liveJournalPanelBusy',
+    'livePositionsPanelBusy',
+    'liveGoalPanelBusy',
+    'liveNotifyPanelBusy'
   ]) {
     assert.match(src, new RegExp(key), `buildTechInfoText must include ${key}`);
   }
@@ -104,4 +108,20 @@ test('order book panel toggle does not double-schedule refresh on open', () => {
   assert.doesNotMatch(toggleBlock[0], /scheduleRefreshLiveOrderBook\(true\)[\s\S]*startLiveOrderBookPoll/);
   assert.match(toggleBlock[0], /showLiveOrderBookLoading/);
   assert.match(toggleBlock[0], /startLiveOrderBookPoll/);
+});
+
+test('live panels defer heavy work on expand (goal, notify, journal, positions)', () => {
+  const src = fs.readFileSync(livePath, 'utf8');
+  assert.match(src, /showLiveTradeHistoryLoading/);
+  assert.match(src, /showLivePositionsLoading/);
+  assert.match(src, /showLiveGoalPanelLoading/);
+  assert.match(src, /showLiveNotifyPanelLoading/);
+  assert.match(src, /scheduleSyncLiveNotifyPanel/);
+  assert.match(src, /scheduleSyncLiveGoalPanel/);
+  assert.match(src, /paintTradeHistoryPanelDom/);
+  assert.match(src, /syncTradeHistoryFromSourcesAsync/);
+  const notifyToggle = src.match(/live-notify-panel[\s\S]*?scheduleSyncLiveNotifyPanel\(true\)/);
+  assert.ok(notifyToggle, 'notify panel expand schedules async sync');
+  const goalToggle = src.match(/live-goal-panel[\s\S]*?scheduleSyncLiveGoalPanel\(true\)/);
+  assert.ok(goalToggle, 'goal panel expand schedules async sync');
 });
