@@ -1220,6 +1220,58 @@
     return !!$("live-positions-panel")?.open;
   }
 
+  /** «5 штук» / «2 штуки» / «1 штука». */
+  function pluralPiecesRu(n) {
+    const abs = Math.abs(Math.trunc(+n || 0)) % 100;
+    const n1 = abs % 10;
+    if (abs > 10 && abs < 20) return "штук";
+    if (n1 > 1 && n1 < 5) return "штуки";
+    if (n1 === 1) return "штука";
+    return "штук";
+  }
+
+  function formatLivePanelCountSuffix(n) {
+    const num = Math.max(0, Math.trunc(+n || 0));
+    return `  ·  ${num} ${pluralPiecesRu(num)}`;
+  }
+
+  function currentOpenPositionsCount() {
+    if (!isLiveMode()) return 0;
+    if (isLiveSandbox()) {
+      const sb = ensureSandboxState();
+      return filterLiveOpenPositionRows([...sb.open.values()]).length;
+    }
+    return filterLiveOpenPositionRows(state.live.openPositions || []).length;
+  }
+
+  /** Счётчики в заголовках «История сделок» и «Нереализованные позиции» (свёрнуто и развёрнуто). */
+  function renderLivePanelSummaryCounts() {
+    const tradeCountEl = $("live-trade-history-title-count");
+    const posCountEl = $("live-positions-title-count");
+    if (!tradeCountEl && !posCountEl) return;
+    if (!isLiveMode()) {
+      if (tradeCountEl) {
+        tradeCountEl.textContent = "";
+        tradeCountEl.removeAttribute("title");
+      }
+      if (posCountEl) {
+        posCountEl.textContent = "";
+        posCountEl.removeAttribute("title");
+      }
+      return;
+    }
+    if (tradeCountEl) {
+      const nTrades = ensureLiveTradeHistory().length;
+      tradeCountEl.textContent = formatLivePanelCountSuffix(nTrades);
+      tradeCountEl.title = `Сделок в журнале на текущий момент: ${nTrades}`;
+    }
+    if (posCountEl) {
+      const nPos = currentOpenPositionsCount();
+      posCountEl.textContent = formatLivePanelCountSuffix(nPos);
+      posCountEl.title = `Нереализованных (незакрытых) позиций: ${nPos}`;
+    }
+  }
+
   /** Кнопка «Начать» блокируется на время расчёта; «Остановить» — всегда в live. */
   function liveCriticalToggleDisabled(isLive) {
     if (!isLive) return true;
@@ -1248,6 +1300,7 @@
   }
 
   function scheduleRenderLiveOrdersPanel(force) {
+    renderLivePanelSummaryCounts();
     if (!isTradeHistoryPanelOpen()) return;
     const now = Date.now();
     if (!force && journalRenderScheduled) return;
@@ -1261,6 +1314,7 @@
   }
 
   function scheduleRenderLivePositionsPanel(force) {
+    renderLivePanelSummaryCounts();
     if (!isPositionsPanelOpen()) return;
     const now = Date.now();
     if (!force && positionsRenderScheduled) return;
@@ -1462,6 +1516,7 @@
   }
 
   function renderLiveOrdersPanel() {
+    renderLivePanelSummaryCounts();
     const panelOpen = isTradeHistoryPanelOpen();
     syncTradeHistoryFromSources({ force: panelOpen });
     const el = $("live-trading-orders");
@@ -1943,6 +1998,7 @@
     const sandboxCb = $("live-sandbox-mode");
     if (sandboxCb) sandboxCb.disabled = !!state.live.sandboxToggleBusy || state.uiBusy;
     renderLivePortfolioStats();
+    renderLivePanelSummaryCounts();
     syncLeverageDisplay();
     if (!options.skipPanels) {
       scheduleRenderLiveOrdersPanel();
@@ -2361,6 +2417,7 @@
 
   /** Отрисовка элемента live-панели: `renderLivePositionsPanel`. */
   function renderLivePositionsPanel() {
+    renderLivePanelSummaryCounts();
     hideLivePositionsMenu();
     if (!isPositionsPanelOpen()) return;
     const tableEl = $("live-positions-table");
@@ -2666,6 +2723,7 @@
     if (!isLiveMode()) {
       state.live.openPositions = [];
       state.live.positionsError = "";
+      renderLivePanelSummaryCounts();
       paintPositions();
       return;
     }
@@ -2701,6 +2759,7 @@
       noteLiveTech("live-positions", state.live.positionsError, `account=${state.tbank.selectedAccountId || "—"}`);
     } finally {
       state.live.positionsBusy = false;
+      renderLivePanelSummaryCounts();
       paintPositions();
     }
   }
@@ -4396,6 +4455,7 @@
     state.live.commissionPaid = sb.commissionTotal || 0;
     snapshotLiveSessionPortfolioBaseline();
     renderLivePortfolioStats();
+    renderLivePanelSummaryCounts();
     if (!options.skipCharts) queueLiveChartsRefresh();
   }
 
@@ -4933,7 +4993,8 @@
   /** Live-торговля: `liveObTrendGateRequired`. */
   function liveObTrendGateRequired() {
     if (!isLiveObTrendGateEnabled()) return false;
-    return E.logicUsesObTrend(activeLogicLineRaw());
+    const line = activeLogicLineRaw();
+    return E.logicUsesObTrend(line) || E.logicUsesObSignals(line);
   }
 
   async function tbankFetchOrderBookCached(instrumentId) {
@@ -4944,21 +5005,42 @@
   async function liveObTrendAllowsOrder(instrumentId, direction) {
     if (!liveObTrendGateRequired()) return { ok: true, skipped: true };
     if (isLiveSandbox() && !state.tbank.token) {
-      return { ok: true, skipped: true, reason: "песочница без T-Bank — @OBT пропущен" };
+      return { ok: true, skipped: true, reason: "песочница без T-Bank — стакан пропущен" };
     }
     const line = activeLogicLineRaw();
     const logicKey = primaryLogicId();
-    const mode = E.detectObTrendMode(line, logicKey);
     const tradeSide = direction === "ORDER_DIRECTION_SELL" ? "sell" : "buy";
+    const parsed = E.parseLogicLine(line, params(), indicatorSelection());
+    const opAtoms = tradeSide === "sell" ? parsed.opShortAtoms : parsed.opLongAtoms;
+    const obAtoms = (opAtoms || []).filter((a) => E.isObKind(a?.kind));
     try {
       const ob = await tbankFetchOrderBookCached(instrumentId);
-      const verdict = E.evaluateOrderBookTrend(ob, tradeSide, mode);
-      return { ...verdict, mode, tradeSide, logicKey };
+      if (obAtoms.length) {
+        for (const atom of obAtoms) {
+          if (!E.evaluateObAtom(atom, ob, tradeSide)) {
+            const label = `${atom.kind}(${atom.signal})`;
+            return {
+              ok: false,
+              reason: `OB: ${label} не подтвердил`,
+              tradeSide,
+              logicKey,
+              obAtom: label
+            };
+          }
+        }
+        return { ok: true, tradeSide, logicKey, obAtoms: obAtoms.length };
+      }
+      if (E.logicUsesObTrend(line)) {
+        const mode = E.detectObTrendMode(line, logicKey);
+        const verdict = E.evaluateOrderBookTrend(ob, tradeSide, mode);
+        return { ...verdict, mode, tradeSide, logicKey };
+      }
+      return { ok: true, skipped: true, tradeSide, logicKey };
     } catch (err) {
       if (isLiveSandbox()) {
         return { ok: true, skipped: true, reason: err?.message || String(err) };
       }
-      return { ok: false, reason: err?.message || String(err), mode, tradeSide, logicKey };
+      return { ok: false, reason: err?.message || String(err), tradeSide, logicKey };
     }
   }
 

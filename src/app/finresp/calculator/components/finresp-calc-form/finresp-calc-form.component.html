@@ -243,6 +243,15 @@
 <input type="file" id="logic-line-file-input" accept=".json,.txt,.logic,application/json,text/plain" hidden>
 <input type="file" id="calc-protocol-file-input" accept=".json,application/json,text/plain" hidden>
 <div class="logic-grid" id="logic-lines"></div>
+<dialog id="logic-help-dialog" class="logic-help-dialog">
+<form method="dialog">
+<h3 class="logic-help-title"></h3>
+<pre class="logic-help-body"></pre>
+<div class="logic-help-actions">
+<button type="submit" class="calc-btn calc-btn-secondary">Закрыть</button>
+</div>
+</form>
+</dialog>
 <button class="calc-btn" type="button" id="logic-apply" style="margin-top:.5rem">Применить</button>
 <p class="note">Regime/Strict не блокируют вход — учитываются Op/Cl и все заполненные стопы (кратность &gt; 0, длина ATR ≥ 2). Просадка от пика и EOD-flat не считаются.</p>
 </details>

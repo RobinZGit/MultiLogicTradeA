@@ -25,7 +25,10 @@
     return fn;
   }
 
-  const DEFAULT_PARAMS = { LR: 20, Strict: 3, SL: 2, TP: 6, slTpAtrLen: 14, smaCorridorAtr: 1, LinK: 2, CmaLen: 100, CmaPow: 1, Reverse: false };
+  const DEFAULT_PARAMS = {
+    LR: 20, Strict: 3, SL: 2, TP: 6, slTpAtrLen: 14, smaCorridorAtr: 1, LinK: 2, CmaLen: 100, CmaPow: 1, Reverse: false,
+    ObDepth: 5, ObThr: "12%", ObSpr: "0.1%", ObMinLots: 100
+  };
   /** Портфельный stop-loss/take-profit по equity и ATR (defaults). */
   const DEFAULT_STOPPER = {
     useSl: false,
@@ -229,6 +232,8 @@
     throw new Error("MultiLogicFinrespParser не загружен — подключите logics/parser.js перед engine.js");
   }
 
+  const OB_EVAL = root.MultiLogicFinrespOrderBook || {};
+
   const ORDER_BOOK_TREND_TOKEN = "@OBT";
   const DEFAULT_OB_IMBALANCE = 0.12;
 
@@ -243,12 +248,52 @@
       .replace(/@SmaCorridor/g, String(p.smaCorridorAtr ?? DEFAULT_PARAMS.smaCorridorAtr))
       .replace(/@CmaLen/g, String(p.CmaLen ?? DEFAULT_PARAMS.CmaLen))
       .replace(/@CmaPow/g, String(p.CmaPow ?? DEFAULT_PARAMS.CmaPow))
-      .replace(/@K/g, String(p.LinK ?? DEFAULT_PARAMS.LinK));
+      .replace(/@K/g, String(p.LinK ?? DEFAULT_PARAMS.LinK))
+      .replace(/@ObDepth/g, String(p.ObDepth ?? DEFAULT_PARAMS.ObDepth))
+      .replace(/@ObThr/g, String(p.ObThr ?? DEFAULT_PARAMS.ObThr))
+      .replace(/@ObSpr/g, String(p.ObSpr ?? DEFAULT_PARAMS.ObSpr))
+      .replace(/@ObMinLots/g, String(p.ObMinLots ?? DEFAULT_PARAMS.ObMinLots));
   }
 
   /** Логика FINRESP: `logicUsesObTrend`. */
   function logicUsesObTrend(line) {
     return /\B@OBT\b/i.test(String(line || ""));
+  }
+
+  /** Есть ли в строке атомы OB.* (новый DSL стакана). */
+  function logicUsesObSignals(line) {
+    if (logicUsesObTrend(line)) return true;
+    return /\bOB\.\w+\s*\(/i.test(String(line || ""));
+  }
+
+  function isObKind(kind) {
+    if (typeof OB_EVAL.isObKind === "function") return OB_EVAL.isObKind(kind);
+    return /^ob\./i.test(String(kind || ""));
+  }
+
+  /** Профиль OB-логики: only | mixed | usesOb. */
+  function analyzeLogicObProfile(lineOrParsed, params) {
+    const parsed = lineOrParsed && lineOrParsed.opAtoms
+      ? lineOrParsed
+      : PARSER.parseLogicLine(substituteParams(String(lineOrParsed || ""), { ...DEFAULT_PARAMS, ...params }));
+    if (typeof OB_EVAL.analyzeParsed === "function") return OB_EVAL.analyzeParsed(parsed);
+    const all = [...(parsed.opAtoms || []), ...(parsed.clAtoms || [])];
+    const obAtoms = all.filter((a) => isObKind(a?.kind));
+    const candleAtoms = all.filter((a) => !isObKind(a?.kind));
+    return {
+      usesOb: obAtoms.length > 0,
+      obOnly: obAtoms.length > 0 && candleAtoms.length === 0,
+      obMixed: obAtoms.length > 0 && candleAtoms.length > 0,
+      obAtomCount: obAtoms.length
+    };
+  }
+
+  /** Оценка одного OB-атома по снимку стакана (live). */
+  function evaluateObAtom(atom, orderBook, tradeSide) {
+    if (typeof OB_EVAL.evaluateAtom === "function") {
+      return OB_EVAL.evaluateAtom(orderBook, atom, tradeSide);
+    }
+    return false;
   }
 
   /** trend | anti | notrend — по Regime/маркерам в строке логики. */
@@ -380,6 +425,7 @@
       .replace(/OnFlip\([^)]*\)/gi, "")
       .replace(/Note\([^)]*\)/gi, "")
       .replace(/@OBT\s*(\([^)]*\))?\s*/gi, "")
+      .replace(/@OB\s*\[[^\]]*\]\s*/gi, "")
       .trim();
   }
 
@@ -530,6 +576,14 @@
     if (idx < 0) return null;
     const namePart = s.slice(0, idx + 1);
     const sigPart = s.slice(idx + 2);
+    const obM = namePart.match(/^OB\.(\w+)\((.*)\)$/i);
+    if (obM) {
+      return {
+        kind: `ob.${obM[1].toLowerCase()}`,
+        params: obM[2],
+        signal: sigPart.replace(/^\(|\)$/g, "").trim()
+      };
+    }
     const m = namePart.match(/^(\w+)\((.*)\)$/);
     if (!m) return null;
     return { kind: m[1].toLowerCase(), params: m[2], signal: sigPart.replace(/^\(|\)$/g, "").trim() };
@@ -600,6 +654,7 @@
     const enabled = enabledIndicatorSet(indicatorSelection);
     return (atoms || []).filter((atom) => {
       const kind = indicatorKey(atom?.kind);
+      if (isObKind(kind)) return true;
       return !INDICATOR_KEY_SET.has(kind) || enabled.has(kind);
     });
   }
@@ -988,6 +1043,13 @@
         return roll.open;
       }
       return false;
+    }
+    if (isObKind(kind)) {
+      const ob = evalOpts?.orderBook;
+      if (!ob) return false;
+      const side = evalOpts?.tradeSide || "long";
+      const tradeSide = side === "short" || side === "sell" ? "sell" : "buy";
+      return evaluateObAtom(atom, ob, tradeSide);
     }
     return false;
   }
@@ -2462,7 +2524,18 @@
       clAtoms: [...clLongAtoms, ...clShortAtoms],
       indicators: normalizeIndicatorSelection(indicatorSelection)
     }, p);
-    return { type: "logic_line", parsed, line, logicId };
+    const regMeta = BUILTIN_META.find((m) => m.id === logicId || m.key === logicId);
+    const obProfile = analyzeLogicObProfile(parsed);
+    return {
+      type: "logic_line",
+      parsed,
+      line,
+      logicId,
+      requiresOrderBook: !!regMeta?.requiresOrderBook || obProfile.usesOb,
+      obProfile: regMeta?.obProfile || (obProfile.obOnly ? "only" : obProfile.obMixed ? "mixed" : null),
+      obOnly: obProfile.obOnly,
+      obMixed: obProfile.obMixed
+    };
   }
 
   /**
@@ -4751,6 +4824,10 @@
     ORDER_BOOK_TREND_TOKEN,
     DEFAULT_OB_IMBALANCE,
     logicUsesObTrend,
+    logicUsesObSignals,
+    isObKind,
+    analyzeLogicObProfile,
+    evaluateObAtom,
     detectObTrendMode,
     sumOrderBookLevels,
     evaluateOrderBookTrend,

@@ -33,6 +33,8 @@ th{background:#f8fafc;width:28%;}
 .toc{margin:.75rem 0 1.25rem;padding:.75rem 1rem;background:#f8fafc;border-radius:8px;border:1px solid var(--border);font-size:.92rem;}
 .toc a{text-decoration:none;}
 .toc a:hover{text-decoration:underline;}
+.schema-pre{margin:.65rem 0 1rem;padding:.75rem 1rem;background:#f8fafc;border:1px solid var(--border);border-radius:8px;font-family:Consolas,monospace;font-size:.78rem;line-height:1.45;overflow-x:auto;white-space:pre;}
+.schema-caption{margin:.35rem 0 .15rem;font-size:.88rem;font-weight:600;color:#374151;}
 </style>
 </head>
 <body>
@@ -63,6 +65,7 @@ th{background:#f8fafc;width:28%;}
 <a href="#results">Результаты</a> ·
 <a href="#window">Окно</a> ·
 <a href="#extra">Доп. параметры</a> ·
+<a href="#ob-dsl">OB.* стакан</a> ·
 <a href="#charts">Графики</a> ·
 <a href="#tbank">T-Bank</a> ·
 <a href="#live">Реальная торговля</a> ·
@@ -142,6 +145,10 @@ th{background:#f8fafc;width:28%;}
 <tr><td><strong>@LR</strong> — LinReg, свечей</td><td>Длина линейной регрессии в <strong>барах (свечах)</strong>, не в ATR. Кнопка «Оптимизировать»</td></tr>
 <tr><td><strong>@K</strong> — LinReg, ×ATR</td><td>Ширина канала: по умолчанию <strong>2</strong>×ATR (не свечи, не абсолютная цена). UT/UCT: <code>LinReg(@LR;K=@K)</code>. Кнопка «Оптимизировать»</td></tr>
 <tr><td><strong>@Strict</strong> — строгость</td><td><code>Strict(@Strict)</code> в начале строки; 1…5. Кнопка «Оптимизировать»</td></tr>
+<tr><td><strong>@ObDepth</strong> — глубина стакана</td><td>Число уровней bid/ask для <code>OB.Imb</code> и <code>OB.Depth</code> (по умолчанию 5). Подставляется в логики <code>OB_SMA</code>, <code>OB_ONLY</code></td></tr>
+<tr><td><strong>@ObThr</strong> — порог imbalance</td><td>Порог дисбаланса стакана, напр. <code>12%</code> или <code>0.12</code> — см. §<a href="#ob-dsl">9.3.1</a></td></tr>
+<tr><td><strong>@ObSpr</strong> — макс. спред</td><td>Допустимый относительный спред для <code>OB.Spr</code>, напр. <code>0.1%</code></td></tr>
+<tr><td><strong>@ObMinLots</strong> — мин. ликвидность</td><td>Минимальная сумма лотов на top-D уровнях для <code>OB.Depth</code> (по умолчанию 100)</td></tr>
 </table>
 <h3 id="atparams-global">5.2. Параметры @@ (управление портфелем)</h3>
 <p>Блок <strong>«Параметры управления»</strong> — действуют на все логики независимо от строки Op/Cl.</p>
@@ -232,17 +239,148 @@ th{background:#f8fafc;width:28%;}
 <tr><td><strong>Рандомный сдвиг цен (±0,1%)</strong></td><td>По умолчанию выкл. При вкл.: OHLC для <em>индикаторов и сигналов Op/Cl</em> случайно сдвигаются в пределах 0,1%. FINRESP, комиссии и цены сделок — всегда по реальным ценам MOEX. Работает во всех режимах кошелька</td></tr>
 </table>
 
-<h3>9.3. Стакан (@OBT, только live)</h3>
+<h3 id="ob-legacy">9.3. Стакан — legacy <code>@OBT</code> (только live)</h3>
 <table>
 <tr><th>Элемент</th><th>Назначение</th></tr>
-<tr><td><strong>Подтверждать тренд / анти-тренд / отсутствие тренда по стакану</strong></td><td>По умолчанию <em>выкл</em>. Сохраняется в config (<code>live.obTrendConfirm</code>). Работает <strong>только вместе</strong> с маркером <code>@OBT</code> в активной строке логики (L1…L5). В FINRESP по истории не применяется — стакана нет</td></tr>
-<tr><td><code>@OBT</code> в логике</td><td>Маркер управления (как <code>@SL</code>): добавьте в конец строки, напр. <code>… Note(trend) @OBT</code>. Парсер робота MultiLogic принимает <code>@OBT</code>; в бэктесте OsEngine по стакану не фильтрует</td></tr>
+<tr><td><strong>Подтверждать тренд / анти-тренд / отсутствие тренда по стакану</strong></td><td>По умолчанию <em>выкл</em>. Сохраняется в config (<code>live.obTrendConfirm</code>). Работает с маркером <code>@OBT</code> в строке <em>или</em> с атомами <code>OB.*</code> в Op/Cl — см. §<a href="#ob-dsl">9.3.1</a>. В FINRESP по истории не применяется — стакана нет</td></tr>
+<tr><td><code>@OBT</code> в логике</td><td>Маркер управления (как <code>@SL</code>): добавьте в конец строки, напр. <code>… Note(trend) @OBT</code>. Парсер робота MultiLogic принимает <code>@OBT</code>; в бэктесте OsEngine по стакану не фильтрует. <strong>Новый способ</strong> — явные атомы <code>OB.Imb</code> / <code>OB.Spr</code> / <code>OB.Depth</code> внутри <code>Op(Long(…))</code></td></tr>
 <tr><td>Режим <strong>тренд</strong></td><td>По умолчанию (L1, L3…). Покупка: сумма лотов bid &gt; ask (топ-5, порог imbalance ~12%). Продажа — наоборот</td></tr>
 <tr><td><code>@OBT(anti)</code> / <code>Entry=FlatOnly</code></td><td><strong>Анти-тренд:</strong> покупка при перевесе ask, продажа при перевесе bid</td></tr>
 <tr><td><code>@OBT(flat)</code> / L4 (боковик)</td><td><strong>Отсутствие тренда:</strong> |imbalance| &lt; порога (~12%)</td></tr>
-<tr><td>При автоторговле</td><td>Перед выставлением заявки роботом запрашивается <code>GetOrderBook</code> T-Bank; при несовпадении — заявка <em>пропускается</em>, в тех. информации <code>@OBT: …</code> / <code>live-obt-skip</code></td></tr>
+<tr><td>При автоторговле</td><td>Перед выставлением заявки роботом запрашивается <code>GetOrderBook</code> T-Bank; при несовпадении — заявка <em>пропускается</em>, в тех. информации <code>@OBT: …</code> / <code>live-obt-skip</code> / <code>OB: ob.imb(…)</code></td></tr>
 </table>
-<p class="note">Галочка без <code>@OBT</code> в строке — без эффекта. <code>@OBT</code> без галочки — тоже без эффекта.</p>
+<p class="note">Галочка без <code>@OBT</code> и без <code>OB.*</code> в строке — без эффекта. Маркеры/атомы без галочки — тоже без эффекта.</p>
+
+<h3 id="ob-dsl">9.3.1. DSL стакана <code>OB.*</code> — парсинг и алгоритмы</h3>
+<p>В строке логики Op/Cl можно писать условия по <strong>снимку стакана</strong> так же, как условия по индикаторам. Формат атома:</p>
+<p><code>OB.&lt;Kind&gt;(&lt;params&gt;)(&lt;signal&gt;)</code></p>
+<p>Внутри <code>Op(Long(…))</code> / <code>Cl(Long(…))</code> атомы соединяются через <code>AND</code> (как <code>SMA(100)(Ab) AND OB.Imb(…)(BuyOk)</code>). Парсер распознаёт виды <code>ob.imb</code>, <code>ob.spr</code>, <code>ob.depth</code> (регистр и точка в <code>OB.Imb</code> не важны).</p>
+
+<p class="schema-caption">Схема 1 — разбор строки логики (парсер + движок)</p>
+<pre class="schema-pre">Строка каталога (Op/Cl/SL/TP/Note/@OBT/Regime…)
+        │
+        ▼
+ substituteParams  ──►  @ObDepth, @ObThr, @ObSpr, @ObMinLots, @SL, @TP …
+        │
+        ▼
+ stripDecor        ──►  убрать Note, Regime, @OBT, @OB[…] (не путать с OB.Imb)
+        │
+        ▼
+ extractBlocks     ──►  Op(Long(…))  Cl(Long(…))  …
+        │
+        ▼
+ splitTopLevelAnd  ──►  SMA(100)(Ab)  |  OB.Imb(D=5;Thr=12%;Mode=trend)(BuyOk)  |  …
+        │
+        ▼
+ parseAtom         ──►  { kind:"ob.imb", params:"D=5;Thr=12%;Mode=trend", signal:"BuyOk" }
+        │
+        ▼
+ filterAtoms       ──►  OB-атомы всегда остаются; SMA/Stoch — по галочкам «Индикаторы»
+        │
+        ├──► Расчёт FINRESP («Рассчитать»): evaluateAtom(OB) без стакана → false
+        │
+        └──► Live + галочка стакана: GetOrderBook → evaluateObAtom → все OB в Op должны быть true</pre>
+
+<p class="schema-caption">Схема 2 — поток при автоторговле (live reconcile)</p>
+<pre class="schema-pre">Сигнал Op по свечам (SMA, LinReg, …) сработал на баре
+        │
+        ▼
+ Есть OB-атомы в Op активной логики?  ──нет──►  (только @OBT?) legacy evaluateOrderBookTrend
+        │ да
+        ▼
+ live.obTrendConfirm включена?  ──нет──►  заявка без фильтра стакана
+        │ да
+        ▼
+ T-Bank GetOrderBook(instrumentId)
+        │
+        ▼
+ Для каждого OB-атома в Op(сторона заявки): evaluateObAtom(ob, atom, buy|sell)
+        │
+        ├──► все true  ──►  выставить заявку
+        └──► хотя бы один false  ──►  пропуск, live-obt-skip / OB: ob.spr(Tight)</pre>
+
+<p class="schema-caption">Схема 3 — профили логик в выборе «Логика»</p>
+<pre class="schema-pre">  ┌─────────────────┬──────────────────┬─────────────────────────────────────┐
+  │ Профиль         │ Пример           │ «Рассчитать» (FINRESP по MOEX)       │
+  ├─────────────────┼──────────────────┼─────────────────────────────────────┤
+  │ только OB       │ OB_ONLY          │ блок: только стакан, нет свечей     │
+  │ mixed           │ OB_SMA           │ SMA работает; OB-часть = false      │
+  │ без OB          │ UT, L1…          │ как обычно                          │
+  └─────────────────┴──────────────────┴─────────────────────────────────────┘
+  В списке логик OB-профили выделены цветом и курсивом (только стакан).</pre>
+
+<h4>Таблица алгоритмов <code>OB.*</code></h4>
+<table>
+<tr><th>Атом</th><th>Параметры</th><th>Сигнал</th><th>Алгоритм (на снимке стакана)</th><th>Условие true</th></tr>
+<tr>
+<td><code>OB.Imb</code></td>
+<td><code>D</code> — глубина уровней (1…20, по умолч. 5)<br>
+<code>Thr</code> — порог, напр. <code>12%</code> или <code>0.12</code><br>
+<code>Mode</code> — <code>trend</code> | <code>anti</code> | <code>flat</code> / <code>notrend</code></td>
+<td><code>BuyOk</code>, <code>SellOk</code>, <code>Ok</code>, <code>TrendOk</code></td>
+<td>Суммируются лоты bid и ask на top-<code>D</code> уровнях:<br>
+<code>imb = (bidVol − askVol) / (bidVol + askVol)</code><br>
+Если <code>total &lt; 1</code> — false.</td>
+<td><strong>Mode=trend:</strong> buy → imb ≥ Thr; sell → imb ≤ −Thr<br>
+<strong>anti:</strong> buy → imb ≤ −Thr; sell → imb ≥ Thr<br>
+<strong>flat:</strong> |imb| &lt; Thr<br>
+<code>BuyOk</code>/<code>SellOk</code> дополнительно привязывают к стороне заявки</td>
+</tr>
+<tr>
+<td><code>OB.Spr</code></td>
+<td><code>Max</code> — макс. относительный спред, напр. <code>0.1%</code></td>
+<td><code>Tight</code>, <code>Ok</code>, <code>Wide</code></td>
+<td>Лучший bid и ask: <code>spr = (ask − bid) / mid</code>, <code>mid = (bid+ask)/2</code></td>
+<td><code>Tight</code>/<code>Ok</code>: spr ≤ Max<br>
+<code>Wide</code>: spr &gt; Max</td>
+</tr>
+<tr>
+<td><code>OB.Depth</code></td>
+<td><code>D</code> — глубина уровней<br>
+<code>Min</code> — мин. сумма лотов</td>
+<td><code>Liquid</code>, <code>Ok</code>, <code>Thin</code></td>
+<td><code>total = Σ quantity</code> на top-<code>D</code> bid + ask</td>
+<td><code>Liquid</code>/<code>Ok</code>: total ≥ Min<br>
+<code>Thin</code>: total &lt; Min</td>
+</tr>
+</table>
+<p class="note">Проценты: <code>12%</code> → 0,12; голое число <code>12</code> при Thr/Spr тоже трактуется как проценты. Глубина <code>D</code> ограничена 20 уровнями.</p>
+
+<h4>Пример строки (логика <code>OB_SMA</code>)</h4>
+<pre class="schema-pre">Op(Long(
+  SMA(100)(Ab)
+  AND OB.Imb(D=@ObDepth;Thr=@ObThr;Mode=trend)(BuyOk)
+  AND OB.Spr(Max=@ObSpr)(Tight)
+  AND OB.Depth(D=@ObDepth;Min=@ObMinLots)(Liquid)
+))
+Cl(Long(SMA(100)(Bl) OR OB.Imb(D=@ObDepth;Thr=@ObThr;Mode=anti)(SellOk)))
+SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
+<p>На входе — <strong>все</strong> условия (SMA и три OB). На выходе — SMA <em>или</em> анти-imb по стакану (<code>OR</code> внутри одного блока Cl).</p>
+
+<h4>Встроенные логики каталога</h4>
+<table>
+<tr><th>Ключ</th><th>Профиль</th><th>Содержание</th></tr>
+<tr><td><code>OB_SMA</code></td><td>mixed (стакан + свечи)</td><td>SMA(100) + Imb + Spr + Depth на входе; выход по SMA или anti-Imb</td></tr>
+<tr><td><code>OB_ONLY</code></td><td>only стакан · live</td><td>Только OB.Imb + Spr + Depth; расчёт FINRESP по кнопке «Рассчитать» <em>недоступен</em> (сообщение в статусе)</td></tr>
+</table>
+
+<h4>Поведение в режимах</h4>
+<ul>
+<li><strong>«Рассчитать»</strong> — исторических стаканов нет; каждый <code>OB.*</code> на баре даёт <code>false</code>. Логика <code>OB_ONLY</code> не запускается. <code>OB_SMA</code> считается по SMA (OB не влияет на вход).</li>
+<li><strong>Live</strong> — при включённой галочке «Подтверждать … по стакану» проверяются все OB-атомы из <code>Op</code> для стороны заявки; источник — <code>GetOrderBook</code> T-Bank (тот же, что блок «Стакан»).</li>
+<li><strong>Legacy <code>@OBT</code></strong> — если в строке нет <code>OB.*</code>, но есть <code>@OBT</code>, используется прежний единый фильтр imbalance (top-5, ~12%) — §9.3.</li>
+</ul>
+
+<p class="schema-caption">Схема 4 — связь с блоком «Стакан» в live</p>
+<pre class="schema-pre">  Калькулятор                          T-Bank API
+  ┌──────────────────┐                ┌─────────────────┐
+  │ Блок «Стакан»    │──GetOrderBook─►│ bids[] / asks[] │
+  │ (визуализация)   │                └────────┬────────┘
+  └──────────────────┘                         │
+  ┌──────────────────┐                         │
+  │ reconcile робота │──тот же снимок──────────┘
+  │ OB.Imb/Spr/Depth │
+  └──────────────────┘</pre>
 
 <h3>9.4. Общепортфельный Stopper</h3>
 <table>
@@ -258,7 +396,7 @@ th{background:#f8fafc;width:28%;}
 <p><strong>Оптимизировать</strong> (индикаторы) — перебор непустых комбинаций, остаётся набор с лучшим FINRESP.</p>
 
 <h3>9.6. Каталог логик — все встроенные стратегии по умолчанию</h3>
-<p>В блоке «Логики» (каталог) перечислены готовые строки Op/Cl/Regime — те же, что в роботе MultiLogic. Параметры <code>@SL</code>, <code>@TP</code>, <code>@LR</code>, <code>@K</code>, <code>@Strict</code>, <code>@SmaCorridor</code>, <code>@CmaLen</code>, <code>@CmaPow</code> подставляются из основного блока при «Рассчитать» и «Применить». Маркер <code>@OBT</code> в строку добавляется <em>вручную</em> (фильтр по стакану — только live).</p>
+<p>В блоке «Логики» (каталог) перечислены готовые строки Op/Cl/Regime — те же, что в роботе MultiLogic. Параметры <code>@SL</code>, <code>@TP</code>, <code>@LR</code>, <code>@K</code>, <code>@Strict</code>, <code>@SmaCorridor</code>, <code>@CmaLen</code>, <code>@CmaPow</code>, <code>@ObDepth</code>, <code>@ObThr</code>, <code>@ObSpr</code>, <code>@ObMinLots</code> подставляются из основного блока при «Рассчитать» и «Применить». Маркер <code>@OBT</code> в строку добавляется <em>вручную</em> (legacy-фильтр — §9.3); атомы <code>OB.Imb</code> / <code>OB.Spr</code> / <code>OB.Depth</code> — в каталоге <code>OB_SMA</code> и <code>OB_ONLY</code> (§<a href="#ob-dsl">9.3.1</a>).</p>
 
 <h4>Общие принципы</h4>
 <ul>
@@ -356,6 +494,14 @@ th{background:#f8fafc;width:28%;}
 
 <h4>CMS — CM short (CMA + LinReg на входе)</h4>
 <p>Зеркало CML для short: вход — цена ниже CMA + LinReg BlLo; выход — цена выше CMA, OnFlip(Close).</p>
+
+<h4>OB_SMA — SMA + стакан (Imb · Spr · Depth)</h4>
+<p><strong>Назначение:</strong> вход по тренду SMA(100) <em>и</em> три условия по снимку стакана; выход по SMA или anti-imb. Профиль <strong>mixed</strong> — в FINRESP работает только SMA-часть (§<a href="#ob-dsl">9.3.1</a>).</p>
+<p><strong>Вход long:</strong> <code>SMA(100)(Ab)</code> AND <code>OB.Imb(…;Mode=trend)(BuyOk)</code> AND <code>OB.Spr(…)(Tight)</code> AND <code>OB.Depth(…)(Liquid)</code>.</p>
+<p><strong>Выход long:</strong> <code>SMA(100)(Bl)</code> OR <code>OB.Imb(…;Mode=anti)(SellOk)</code>.</p>
+
+<h4>OB_ONLY — только стакан · live</h4>
+<p><strong>Назначение:</strong> вход и выход только по <code>OB.*</code> без индикаторов свечей. Профиль <strong>only</strong> — кнопка «Рассчитать» выдаёт предупреждение и не считает FINRESP; используйте live с T-Bank.</p>
 
 <p class="note">Для UT, UCT, L1…L5 канал LinReg на графике — фиолетовые линии, если LinReg включён в «Индикаторы» и входит в выбранную логику. Текстовые поля Op/Cl/Regime в каталоге редактируются как в роботе; <strong>Применить</strong> пересчитывает с подстановкой @-параметров.</p>
 
@@ -460,17 +606,18 @@ th{background:#f8fafc;width:28%;}
 <tr><td><strong>Песочница (фейк)</strong></td><td>Галочка под заголовком «Реальная торговля», по умолчанию выключена. Включена — спокойная <em>зелёная</em> тема блока; робот и ручные заявки <strong>не уходят на биржу</strong>, а симулируются: портфель меняется от суммы счёта на момент включения, комиссия — по полю <strong>Commission, %</strong> калькулятора. Продажа без лонга открывает <strong>шорт</strong>. Действует <strong>портфельный лимит gross</strong> (§9.1.1). В «Позициях» — открытые и закрытые фейк-позиции с пометкой <code>(фейк)</code>. Снятие галочки — все фейк-позиции и фейк-заявки удаляются, портфель снова показывает <strong>текущую реальную</strong> сумму T-Bank</td></tr>
 <tr><td><strong>Бейдж «Логики»</strong></td><td>Рядом со статусом — краткий список выбранных логик (<code>UT → L5 +2</code>). <strong>Клик</strong> раскрывает полный порядок приоритета (как в блоке «Логика» калькулятора). Обновляется при смене выбора</td></tr>
 <tr><td>Бейдж статуса</td><td>«остановлена» / «торговля активна» / «внимание» / «ошибка»; в песочнице — «· песочница (фейк)». При старте — <strong>подготовка: свечи T-Bank/MOEX/кэш и FINRESP N/M…</strong> (хвост FINRESP по всем выбранным тикерам, затем reconcile)</td></tr>
-<tr><td><strong>Бейдж версии</strong> (<code>pageVersion</code>)</td><td>Справа от статуса — версия страницы калькулятора (для проверки обновления после Ctrl+Shift+R). Актуальная: <code>2026-06-14-equity-delta-labels</code></td></tr>
+<tr><td><strong>Бейдж версии</strong> (<code>pageVersion</code>)</td><td>Справа от статуса — версия страницы калькулятора (для проверки обновления после Ctrl+Shift+R). Актуальная: <code>2026-06-16-panel-counts-v1</code></td></tr>
 <tr><td><strong>Плечо</strong></td><td>То же значение, что в доп. параметрах</td></tr>
 <tr><td><strong>Свечи live</strong></td><td><strong>T-Bank (если токен)</strong> — по умолчанию: свежие бары с API брокера (задержка минуты, есть незакрытый бар). <strong>Только T-Bank</strong> — то же, без MOEX. <strong>Только MOEX ISS</strong> — бесплатно, но часто отстаёт на 10–20 мин. История для индикаторов: при первом старте без расчёта подгружается MOEX/кэш, хвост обновляется T-Bank</td></tr>
 <tr><td><strong>Начать / Остановить торговлю</strong></td><td>Достаточно выбранных инструментов, логики и объёмов; «Рассчитать» не обязателен. При активной торговле — опрос свечей (1м ≈ 30 с, 5м ≈ 45 с…), пересчёт индикаторов и синхронизация позиций с T-Bank</td></tr>
 <tr><td>Бейдж при торговле</td><td>«T-Bank/MOEX бары до … · опрос HH:MM» — начало последнего бара (МСК); «опрос» — время последнего запроса. При нескольких тикерах расчёт по общему концу (самый отстающий)</td></tr>
-<tr><td><strong>Подтверждать тренд по стакану</strong> (<code>@OBT</code>)</td><td>Галочка в toolbar live-блока — то же, что в §9.3; фильтр перед заявкой робота</td></tr>
+<tr><td><strong>Подтверждать тренд по стакану</strong> (<code>@OBT</code> / <code>OB.*</code>)</td><td>Галочка в toolbar live-блока — §9.3 и §<a href="#ob-dsl">9.3.1</a>; фильтр перед заявкой по <code>GetOrderBook</code></td></tr>
 <tr><td><strong>Реверс сторон (Long ↔ Short)</strong> <code>@@ReverseSides</code></td><td>Дублирует реверс в «Параметры управления». Меняет местами сигналы Op/Cl long↔short (полный своп сторон). В live при смене — закрытие всех позиций, затем переключение</td></tr>
 <tr><td><strong>Фин. результат (₽)</strong></td><td>Текущий портфель минус старт сессии (как если закрыть всё по текущим ценам, с учётом комиссий). В песочнице — по фейк-портфелю</td></tr>
 <tr><td><strong>Заявка</strong> (свёрнутый блок)</td><td>Свой выпадающий список <strong>Инструмент</strong> (из бумаг калькулятора), покупка/продажа, рыночная/лимитная, лоты, «Выставить заявку». При лимите и смене инструмента цена подставляется автоматически: сначала <strong>close последней свечи</strong> выбранного тикера, иначе <strong>последняя цена T-Bank</strong> (не остаётся цена прошлого инструмента). Двойной клик в стакане — цена из стакана. Выбор сохраняется в config. <strong>Независим</strong> от инструмента в «Стакане»</td></tr>
-<tr><td><strong>Стакан</strong> (свёрнутый блок)</td><td>Отдельный список <strong>Инструмент</strong> в красной строке над таблицей (справа — глубина, время, спред; тикер в строке — не селектор). Данные T-Bank <code>GetOrderBook</code>, опрос ~4 с при развёрнутом блоке. <strong>Двойной клик по цене</strong> (подчёркнутая ячейка bid/ask) — развернуть «Заявку» и заполнить: инструмент стакана, лимит, цена клика, сторона, <strong>ровно 1 лот</strong>; заявка <em>не отправляется</em> автоматически</td></tr>
-<tr><td><strong>Позиции</strong> (свёрнутый блок)</td><td>Без песочницы — только <em>открытые</em> позиции счёта T-Bank (робот и ручные заявки): тикер, сторона (лонг/шорт), лоты, средняя и текущая цена, сумма, P/L, итого. После «Начать торговлю» — позиции, <strong>изменённые с начала сессии</strong> (неизменённые старые скрыты). Без сессии — все открытые на счёте. <strong>В песочнице</strong> — только фейк-позиции (открытые и недавно закрытые) с пометкой <code>(фейк)</code>. <strong>ПКМ или долгое нажатие</strong> по открытой строке — меню: <strong>Закрыть по рынку</strong> или <strong>Закрыть лимитом</strong> (в песочнице — фейк-закрытие). Опрос ~6 с (реальные позиции) / обновление при фейк-сделках</td></tr>
+<tr><td><strong>Стакан</strong> (свёрнутый блок)</td><td>Отдельный список <strong>Инструмент</strong> в красной строке над таблицей (справа — глубина, время, спред; тикер в строке — не селектор). Данные T-Bank <code>GetOrderBook</code>, опрос ~4 с при развёрнутом блоке. <strong>Двойной клик по цене</strong> (подчёркнутая ячейка bid/ask) — развернуть «Заявку» и заполнить: инструмент стакана, лимит, цена клика, сторона, <strong>ровно 1 лот</strong>; заявка <em>не отправляется</em> автоматически. Тот же снимок используется для <code>OB.*</code> при reconcile (§<a href="#ob-dsl">9.3.1</a>)</td></tr>
+<tr><td><strong>История сделок</strong> (свёрнутый блок)</td><td>Журнал исполнений и активных заявок; в заголовке панели — счётчик <code>· N штук</code> (сколько записей в журнале сейчас). Кнопка «Сохранить протокол» — HTML с FIFO-пакетами</td></tr>
+<tr><td><strong>Нереализованные позиции</strong> (свёрнутый блок)</td><td>Только <em>открытые</em> (незакрытые) позиции; в заголовке — <code>· N штук</code>. Без песочницы — остатки T-Bank (робот и ручные): тикер, лонг/шорт, лоты, цены, P/L. После «Начать торговлю» — позиции, изменённые с начала сессии. В песочнице — фейк-позиции с пометкой <code>(фейк)</code>. <strong>ПКМ</strong> — закрыть по рынку/лимитом. Опрос ~6 с</td></tr>
 <tr><td><strong>Продать всё</strong></td><td>Закрыть все позиции (даже при остановленной торговле)</td></tr>
 <tr><td><strong>Тип заявки</strong> (автоторговля)</td><td>Рыночная или лимитная для синхронизации позиций роботом</td></tr>
 <tr><td><strong>Портфель (все позиции)</strong></td><td>Стоимость счёта с позициями (GetPortfolio). В песочнице — подпись «Портфель (фейк, симуляция)»: стартовая сумма на момент включения галочки ± фейк-сделки и переоценка открытых фейк-позиций</td></tr>
@@ -487,9 +634,9 @@ th{background:#f8fafc;width:28%;}
 <tr><td><strong>Копировать</strong></td><td>Весь диагностический блок в буфер обмена</td></tr>
 <tr><td><strong>Обновить</strong></td><td>Пересобрать текст вручную</td></tr>
 </table>
-<p>Содержит: версию страницы (<code>pageVersion</code>), режим кошелька, ТФ, период, выбор инструментов, состояние кэша, live-поля (<code>liveObTrendConfirm</code>, <code>logicUsesObTrend</code>, <code>liveOpenPositionsCount</code>, источник свечей), блок <code>liveApiForbidden</code> (тикер, sec, name, uid — запрещённые для API инструменты), <code>liveReconcile.*</code> (в т.ч. пропуски по <code>@OBT</code>), журнал <code>errors:</code> со строками <code>live-forbidden-instrument:</code>, <code>live-obt-skip</code>, <code>live-orderbook</code> (до 128 строк). Обновляется при старте, расчёте, live-торговле и ошибках T-Bank.</p>
+<p>Содержит: версию страницы (<code>pageVersion</code>), режим кошелька, ТФ, период, выбор инструментов, состояние кэша, live-поля (<code>liveObTrendConfirm</code>, <code>logicUsesObTrend</code>, <code>logicUsesObSignals</code>, <code>liveOpenPositionsCount</code>, источник свечей), блок <code>liveApiForbidden</code> (тикер, sec, name, uid — запрещённые для API инструменты), <code>liveReconcile.*</code> (в т.ч. пропуски по <code>@OBT</code> и <code>OB.*</code>), журнал <code>errors:</code> со строками <code>live-forbidden-instrument:</code>, <code>live-obt-skip</code>, <code>live-orderbook</code> (до 128 строк). Обновляется при старте, расчёте, live-торговле и ошибках T-Bank.</p>
 
-<p class="note">Версия справки: 2026-06-16 (TotStoch/FTS, nav-кнопки графиков) · синхронизирована с формой <code>2026-06-16-totstoch-v1</code> · при изменении контролов калькулятора обновляйте <code>MultiLogic_FinrespCalculator_Help.html</code></p>
+<p class="note">Версия справки: 2026-06-16 (OB.* DSL, счётчики в заголовках журнала/позиций) · синхронизирована с формой <code>2026-06-16-panel-counts-v1</code> · при изменении контролов калькулятора обновляйте <code>MultiLogic_FinrespCalculator_Help.html</code></p>
 
 <div class="btn-row">
 <a class="calc-btn" href="../../finresp">Вернуться в калькулятор</a>

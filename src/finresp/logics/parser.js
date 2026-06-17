@@ -157,6 +157,7 @@
       .replace(/OnFlip\([^)]*\)/gi, "")
       .replace(/Note\([^)]*\)/gi, "")
       .replace(/@OBT\s*(\([^)]*\))?\s*/gi, "")
+      .replace(/@OB\s*\[[^\]]*\]\s*/gi, "")
       .trim();
   }
 
@@ -225,6 +226,14 @@
     if (idx < 0) return null;
     const namePart = s.slice(0, idx + 1);
     const sigPart = s.slice(idx + 2);
+    const obM = namePart.match(/^OB\.(\w+)\((.*)\)$/i);
+    if (obM) {
+      return {
+        kind: `ob.${obM[1].toLowerCase()}`,
+        params: obM[2],
+        signal: sigPart.replace(/^\(|\)$/g, "").trim()
+      };
+    }
     const m = namePart.match(/^(\w+)\((.*)\)$/);
     if (!m) return null;
     return { kind: m[1].toLowerCase(), params: m[2], signal: sigPart.replace(/^\(|\)$/g, "").trim() };

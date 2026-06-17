@@ -241,6 +241,8 @@ export class FinrespFormService implements OnDestroy {
         name: opt?.name ?? id,
         color: opt?.color ?? '#64748b',
         order: index + 1,
+        obProfile: opt?.obProfile ?? null,
+        requiresOrderBook: opt?.requiresOrderBook ?? false,
       };
     });
     this.bridge.formCatalog$.next({

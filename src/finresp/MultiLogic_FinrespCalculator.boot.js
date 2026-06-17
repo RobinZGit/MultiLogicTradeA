@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-16-orderbook-async-v1";
+  const CALC_PAGE_VERSION = "2026-06-16-logic-help-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -2522,6 +2522,18 @@
     const spec = resolveCalcLogicSpec(p, indicators);
     if (!spec) return null;
 
+    if (!optimCtx && !ro._obWarnDone) {
+      const obWarn = collectObCalcWarnings(selectedLogicIds());
+      if (obWarn.blocking.length) {
+        if (!ro.silent) setCalcStatus(obWarn.blocking[0]);
+        return null;
+      }
+      if (obWarn.notes.length && !ro.silent) {
+        setCalcStatus(obWarn.notes.join(" "));
+        await yieldToUi();
+      }
+    }
+
     // AutoReverses (calc mode): evaluate 4 variants on last @@AutoLookback bars and switch checkboxes.
     // Only for normal calculations (not optimization trials) and only once per run.
     if (!optimCtx && p.AutoReverses && !ro._autoReversesDone) {
@@ -3064,7 +3076,8 @@
 
   const DEFAULT_LOGIC_LINE_KEYS = [
     "RND", "TBC", "UT", "UCT", "L5", "L1", "L2", "L3", "L4", "CML", "CMS",
-    "sma_below", "sma_above", "sma_corridor_trend", "sma_corridor_anti"
+    "sma_below", "sma_above", "sma_corridor_trend", "sma_corridor_anti",
+    "OB_SMA", "OB_ONLY"
   ];
 
   /** CM (long+short) → CML + CMS в каталоге; старый ключ CM скрываем. */
@@ -3098,6 +3111,36 @@
     const meta = E.BUILTIN_META.find((m) => m.id === id || m.key === id);
     if (meta?.name) return meta.name;
     return id;
+  }
+
+  /** Текст справки по встроенной или пользовательской логике. */
+  function logicHelpText(key) {
+    const meta = E.BUILTIN_META.find((m) => m.id === key || m.key === key);
+    if (meta?.helpText) return meta.helpText;
+    const line = state.customLines?.[key] ?? E.DEFAULT_LOGIC_LINES?.[key] ?? "";
+    const note = line.match(/Note\(([^)]*)\)/)?.[1];
+    if (note) {
+      return [
+        "Пользовательская логика.",
+        "",
+        `Метка Note: ${note}`,
+        "",
+        "Встроенная расшифровка формул не задана — смотрите строку Op/Cl и раздел «Справка» калькулятора."
+      ].join("\n");
+    }
+    return "Пользовательская или изменённая логика. Встроенное описание формул не задано — смотрите строку Op/Cl и раздел «Справка» калькулятора.";
+  }
+
+  /** Показать диалог с расшифровкой логики. */
+  function showLogicHelp(key) {
+    const dlg = $("logic-help-dialog");
+    if (!dlg) return;
+    const title = logicDisplayName(key);
+    const titleEl = dlg.querySelector(".logic-help-title");
+    const bodyEl = dlg.querySelector(".logic-help-body");
+    if (titleEl) titleEl.textContent = `${key} — ${title}`;
+    if (bodyEl) bodyEl.textContent = logicHelpText(key);
+    if (typeof dlg.showModal === "function") dlg.showModal();
   }
 
   /** Ключи каталога: дефолтные L/SMA + пользовательские U*; скрытые (hiddenLogicKeys) не показываются. */
@@ -3750,7 +3793,10 @@
         chipsEl.appendChild(arrow);
       }
       const chip = document.createElement("span");
-      chip.className = "calc-logic-chip";
+      const obMeta = logicObMeta(id);
+      chip.className = "calc-logic-chip"
+        + (obMeta.requiresOrderBook ? " calc-logic-chip--ob" : "")
+        + (obMeta.obProfile === "only" ? " calc-logic-chip--ob-only" : "");
       chip.style.setProperty("--logic-color", equityLogicColor(id));
       const ord = document.createElement("span");
       ord.className = "calc-logic-chip-ord";
@@ -3818,11 +3864,67 @@
     collapsed?.focus();
   }
 
+  /** Метаданные OB-логики для UI и предупреждений расчёта. */
+  function logicObMeta(id) {
+    const reg = E.BUILTIN_META.find((m) => m.id === id || m.key === id);
+    const line = logicLineText(id);
+    const profile = E.analyzeLogicObProfile(line, params());
+    const obProfile = reg?.obProfile
+      || (profile.obOnly ? "only" : profile.obMixed ? "mixed" : profile.usesOb ? "mixed" : null);
+    return {
+      obProfile,
+      requiresOrderBook: !!reg?.requiresOrderBook || profile.usesOb
+    };
+  }
+
+  /** Предупреждения при «Рассчитать» для логик со стаканом. */
+  function collectObCalcWarnings(logicIds) {
+    const blocking = [];
+    const notes = [];
+    const ids = Array.isArray(logicIds) ? logicIds.filter(Boolean) : [];
+    if (!ids.length) return { blocking, notes };
+    const profiles = ids.map((id) => ({ id, ...logicObMeta(id) }));
+    const allObOnly = profiles.every((p) => p.obProfile === "only");
+    for (const p of profiles) {
+      const name = logicDisplayName(p.id);
+      if (p.obProfile === "only") {
+        if (allObOnly) {
+          blocking.push(
+            allObOnly && ids.length === 1
+              ? `Логика «${name}» содержит только сигналы стакана (OB.*). В расчёте FINRESP стакан недоступен — используйте live-режим с T-Bank.`
+              : `Выбраны только OB-логики — расчёт FINRESP по стакану невозможен. Используйте live-режим.`
+          );
+          break;
+        }
+        notes.push(`«${name}»: в расчёте не участвует (только стакан / live).`);
+      } else if (p.obProfile === "mixed") {
+        notes.push(`«${name}»: OB-условия в расчёте отключены (работают в live).`);
+      }
+    }
+    return { blocking, notes };
+  }
+
+  function syncLogicObHint() {
+    const ids = selectedLogicIds();
+    const ob = collectObCalcWarnings(ids);
+    let hint = "Каталог редактируется в блоке «Логики» ниже (под доп. параметрами).";
+    const parts = [];
+    if (ob.blocking.length) parts.push(ob.blocking[0]);
+    else if (ob.notes.length) parts.push(ob.notes.join(" "));
+    const hasObCatalog = state.logicLineKeys.some((k) => logicObMeta(k).requiresOrderBook);
+    if (hasObCatalog) parts.push("Логики со стаканом (OB) выделены в списке цветом и курсивом.");
+    if (parts.length) hint = parts.join(" ");
+    const el = $("calc-logic-hint");
+    if (el) el.textContent = hint;
+    bridgeSetFormCatalog({ logicHintText: hint });
+  }
+
   /** Процедура: текст «Выбрано N (порядок): …» над списком логик. */
   function syncLogicSelectedHint() {
     renderLogicSelectedChips();
     syncLogicSelectSize();
     syncLiveLogicsBadge();
+    syncLogicObHint();
   }
 
   /** Функция: spec для расчёта — одна логика или multi_logic (engine.resolveLogicSpecStack). */
@@ -3839,16 +3941,25 @@
     sel.innerHTML = "";
     for (const key of state.logicLineKeys) {
       const o = document.createElement("option");
+      const obMeta = logicObMeta(key);
       o.value = key;
       o.textContent = logicDisplayName(key);
+      if (obMeta.requiresOrderBook) {
+        o.className = obMeta.obProfile === "only" ? "calc-logic-opt--ob-only" : "calc-logic-opt--ob";
+      }
       sel.appendChild(o);
     }
     bridgeSetFormCatalog({
-      logicOptions: state.logicLineKeys.map((key) => ({
-        id: key,
-        name: logicDisplayName(key),
-        color: equityLogicColor(key)
-      }))
+      logicOptions: state.logicLineKeys.map((key) => {
+        const obMeta = logicObMeta(key);
+        return {
+          id: key,
+          name: logicDisplayName(key),
+          color: equityLogicColor(key),
+          obProfile: obMeta.obProfile,
+          requiresOrderBook: obMeta.requiresOrderBook
+        };
+      })
     });
     const allowed = new Set([...sel.options].map((o) => o.value));
     const pick = prev.filter((id) => allowed.has(id));
@@ -4228,6 +4339,14 @@
       label.textContent = title === key ? key : `${key} — ${title}`;
       const actions = document.createElement("div");
       actions.className = "logic-line-actions";
+      const helpBtn = document.createElement("button");
+      helpBtn.type = "button";
+      helpBtn.className = "calc-btn calc-btn-secondary logic-line-help-btn";
+      helpBtn.dataset.helpLogic = key;
+      helpBtn.title = "Расшифровка формул этой логики";
+      helpBtn.textContent = "i.";
+      helpBtn.setAttribute("aria-label", "Справка по логике");
+      actions.appendChild(helpBtn);
       const copyBtn = document.createElement("button");
       copyBtn.type = "button";
       copyBtn.className = "calc-btn calc-btn-secondary logic-line-copy-btn";
@@ -4894,7 +5013,9 @@ ${markers}
     sma_below: "#0d9488",
     sma_above: "#ea580c",
     sma_corridor_trend: "#4f46e5",
-    sma_corridor_anti: "#db2777"
+    sma_corridor_anti: "#db2777",
+    OB_SMA: "#0d9488",
+    OB_ONLY: "#0369a1"
   };
   const EQUITY_EXTRA_PALETTE = ["#64748b", "#78716c", "#71717a", "#57534e", "#0369a1", "#be123c"];
   const EQUITY_RUN_TYPES = new Set(["logic_line", "sma_spread", "sma_corridor"]);
@@ -6800,6 +6921,11 @@ ${referenceBlock}
     loadProtocolFromFileInput(file);
   });
   $("logic-lines")?.addEventListener("click", (ev) => {
+    const helpBtn = ev.target?.closest?.("[data-help-logic]");
+    if (helpBtn) {
+      showLogicHelp(helpBtn.getAttribute("data-help-logic"));
+      return;
+    }
     const exportBtn = ev.target?.closest?.("[data-export-logic]");
     if (exportBtn) {
       exportLogicLine(exportBtn.getAttribute("data-export-logic"));

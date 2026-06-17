@@ -41,6 +41,10 @@
   imp("logics/ftt_s.js");
   imp("logics/cml.js");
   imp("logics/cms.js");
+  imp("orderbook/_eval.js");
+  imp("logics/ob_sma.js");
+  imp("logics/ob_only.js");
+  imp("logics/_descriptions.js");
   imp("MultiLogic_FinrespCalculator.engine.js");
 
   self.onmessage = async (e) => {

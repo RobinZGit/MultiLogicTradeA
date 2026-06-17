@@ -46,8 +46,12 @@ const LOGIC_SCRIPTS = [
   'fts_s.js',
   'ftt_s.js',
   'cml.js',
-  'cms.js'
-].map((p) => join(LOGIC_DIR, p));
+  'cms.js',
+  join('..', 'orderbook', '_eval.js'),
+  'ob_sma.js',
+  'ob_only.js',
+  '_descriptions.js'
+].map((p) => (p.startsWith('..') ? join(LOGIC_DIR, p) : join(LOGIC_DIR, p)));
 
 /** Загрузка browser-IIFE движка в Node (без DOM). */
 export function loadEngine() {
@@ -66,5 +70,7 @@ export function loadEngine() {
   vm.runInContext(code, context, { filename: ENGINE_PATH });
   const E = context.MultiLogicFinrespEngine;
   if (!E) throw new Error('MultiLogicFinrespEngine not exported');
+  globalThis.MultiLogicFinrespParser = context.MultiLogicFinrespParser;
+  globalThis.MultiLogicFinrespOrderBook = context.MultiLogicFinrespOrderBook;
   return E;
 }

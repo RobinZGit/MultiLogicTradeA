@@ -16,7 +16,10 @@
         id,
         name: def.name || id,
         type: def.type || "logic_line",
-        defaultLine: def.defaultLine
+        defaultLine: def.defaultLine,
+        obProfile: def.obProfile || null,
+        requiresOrderBook: !!def.requiresOrderBook,
+        helpText: def.helpText != null ? String(def.helpText) : ""
       };
       if (!byId.has(id)) order.push(id);
       byId.set(id, entry);
@@ -46,7 +49,10 @@
         id: e.id,
         name: e.name || e.id,
         type: e.type || "logic_line",
-        key: e.id
+        key: e.id,
+        obProfile: e.obProfile || null,
+        requiresOrderBook: !!e.requiresOrderBook,
+        helpText: e.helpText || ""
       };
     });
   }
@@ -60,6 +66,13 @@
       }
       const e = byId.get(key);
       return e?.defaultLine != null ? e.defaultLine : "";
+    };
+  }
+
+  if (typeof reg.logicHelp !== "function") {
+    reg.logicHelp = (id) => {
+      const e = byId.get(String(id || ""));
+      return e?.helpText || "";
     };
   }
 })(typeof window !== "undefined" ? window : globalThis);

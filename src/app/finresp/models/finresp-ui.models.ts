@@ -99,6 +99,8 @@ export interface FinrespLogicOption {
   id: string;
   name: string;
   color: string;
+  obProfile?: 'mixed' | 'only' | null;
+  requiresOrderBook?: boolean;
 }
 
 export interface FinrespLogicChipView {
@@ -106,6 +108,8 @@ export interface FinrespLogicChipView {
   name: string;
   color: string;
   order: number;
+  obProfile?: 'mixed' | 'only' | null;
+  requiresOrderBook?: boolean;
 }
 
 export interface FinrespFormCatalogViewModel {
