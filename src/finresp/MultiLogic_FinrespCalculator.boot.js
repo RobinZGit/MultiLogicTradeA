@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-live-notify-goal-events-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-alor-broker-connector-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -418,6 +418,7 @@
     bindCollapsibleToggle("logic-catalog-panel", "logic-catalog-toggle");
     bindCollapsibleToggle("extra-params", "extra-params-toggle");
     bindCollapsibleToggle("tbank-settings", "tbank-settings-toggle");
+    bindCollapsibleToggle("alor-settings", "alor-settings-toggle");
   }
   bindCoreCollapsibleToggles();
 
@@ -487,7 +488,10 @@
         `logic=${selectedLogicIds().join(",") || "—"}`,
         `indicators=${typeof selectedIndicatorKeys === "function" ? selectedIndicatorKeys().join(",") : "—"}`,
         `accountMode=${calcState.accountMode || "paper"}`,
+        `brokerProvider=${$("broker-provider")?.value || "tbank"}`,
         `tbankTokenStored=${(() => { try { return !!localStorage.getItem("multilogic.finresp.tbank.token.v1"); } catch (_) { return false; } })()}`,
+        `alorTokenStored=${(() => { try { return !!localStorage.getItem("multilogic.finresp.alor.token.v1"); } catch (_) { return false; } })()}`,
+        `alorPortfolio=${$("alor-portfolio-id")?.value || calcState.alor?.portfolioId || "—"}`,
         `tbankTokenUnlocked=${!!calcState.tbank?.token}`,
         `pageOrigin=${location.origin || location.protocol}`,
         `tbankAccounts=${calcState.tbank?.accounts?.length ?? 0}`,
@@ -859,6 +863,16 @@
       selectedAccountId: "",
       depositLoaded: false
     },
+    alor: {
+      token: null,
+      accessToken: null,
+      accessTokenExpiresAt: 0,
+      portfolioId: "",
+      exchange: "MOEX",
+      accounts: [],
+      selectedAccountId: "",
+      depositLoaded: false
+    },
     live: {
       active: false,
       pollTimer: null,
@@ -968,6 +982,10 @@
   const TBANK_TOKEN_STORE_KEY = "multilogic.finresp.tbank.token.v1";
   const TBANK_ACCOUNT_STORE_KEY = "multilogic.finresp.tbank.account.v1";
   const TBANK_HOST_STORE_KEY = "multilogic.finresp.tbank.host.v1";
+  const ALOR_TOKEN_STORE_KEY = "multilogic.finresp.alor.token.v1";
+  const ALOR_ACCOUNT_STORE_KEY = "multilogic.finresp.alor.account.v1";
+  const ALOR_PORTFOLIO_STORE_KEY = "multilogic.finresp.alor.portfolio.v1";
+  const ALOR_EXCHANGE_STORE_KEY = "multilogic.finresp.alor.exchange.v1";
   const CONFIG_STORE_KEY = "multilogic.finresp.config.v1";
   const TBANK_CRYPTO_ITERATIONS = 210000;
   const MOEX_MINUTES_PER_SESSION = 530;
@@ -1072,6 +1090,11 @@
       v: 1,
       savedAt: new Date().toISOString(),
       accountMode: formSnap?.accountMode || $("account-mode")?.value || "paper",
+      brokerProvider: $("broker-provider")?.value || "tbank",
+      alor: {
+        portfolioId: $("alor-portfolio-id")?.value || "",
+        exchange: $("alor-exchange")?.value || "MOEX"
+      },
       timeframe: formSnap?.timeframe || $("calc-tf")?.value || "60",
       from: formSnap?.from || $("calc-from")?.value || "",
       till: formSnap?.till || $("calc-till")?.value || "",
@@ -1230,6 +1253,11 @@
       if (cfg.accountMode === "tbank" || cfg.accountMode === "paper" || cfg.accountMode === "live") {
         $("account-mode").value = cfg.accountMode;
       }
+      if (cfg.brokerProvider === "alor" || cfg.brokerProvider === "tbank") {
+        setValueIfExists("broker-provider", cfg.brokerProvider);
+      }
+      if (cfg.alor?.portfolioId != null) setValueIfExists("alor-portfolio-id", cfg.alor.portfolioId);
+      if (cfg.alor?.exchange != null) setValueIfExists("alor-exchange", cfg.alor.exchange);
       setValueIfExists("calc-tf", cfg.timeframe);
       setValueIfExists("calc-from", cfg.from);
       setValueIfExists("calc-till", cfg.till);
@@ -1857,6 +1885,9 @@
   const __mlLiveDeps = {
     state, E, $, fmt, fmtSignedRub, RUB_SIGN, IS_FILE_PROTOCOL,
     TBANK_REST_BASES, TBANK_TOKEN_STORE_KEY, TBANK_ACCOUNT_STORE_KEY, TBANK_HOST_STORE_KEY,
+    ALOR_TOKEN_STORE_KEY, ALOR_ACCOUNT_STORE_KEY, ALOR_PORTFOLIO_STORE_KEY, ALOR_EXCHANGE_STORE_KEY,
+    ALOR_OAUTH_BASE: "https://oauth.alor.ru",
+    ALOR_API_BASE: "https://api.alor.ru",
     TBANK_CRYPTO_ITERATIONS, safeStorageGet, safeStorageSet, safeStorageRemove,
     moneyValueRub, moneyValueToNumber, accountLabel, rubFreeCashFromTbankPositions,
     encryptTbankToken, decryptTbankToken,
@@ -1929,7 +1960,8 @@
     syncLiveStatsHint, renderLiveFreeCashStat, renderLiveFinResultStat,
     snapshotLiveSessionPortfolioBaseline, liveFreeCashRub, liveFinResultRub,
     requireTbankDepositForRun, initAccountMode, connectTbankAndLoadDeposit,
-    connectTbankForLive, saveTbankToken, unlockTbankTokenInteractive,
+    connectTbankForLive, saveTbankToken, saveAlorToken, unlockTbankTokenInteractive, unlockAlorTokenInteractive,
+    syncBrokerSettingsPanels, readBrokerIdFromUi, resetBrokerInst, setAlorStatus,
     ensureTbankTokenUnlocked, loadTbankAccounts, loadTbankDeposit, fillTbankAccounts,
     toggleLiveTrading, sellAllMarketLive, liveTradingReconcile, refreshLiveCandleStream,
     refreshLiveManualLimitPrice, refreshLiveChartsUi, refreshLiveEquityChartsUi,
@@ -7338,6 +7370,26 @@ ${referenceBlock}
       setTbankStatus(`Ошибка подключения: ${err.message}`, true);
       noteTechError(`tbank-unlock: ${err.message}`);
     });
+  });
+  $("alor-save-token")?.addEventListener("click", () => { saveConfig(); saveAlorToken(); });
+  $("alor-unlock-token")?.addEventListener("click", () => {
+    unlockAlorTokenInteractive().catch((err) => {
+      setAlorStatus(`Ошибка подключения: ${err.message}`, true);
+      noteTechError(`alor-unlock: ${err.message}`);
+    });
+  });
+  $("broker-provider")?.addEventListener("change", () => {
+    resetBrokerInst?.();
+    saveConfig();
+    syncBrokerSettingsPanels();
+    syncAccountModeUi();
+    if (isTbankBackedMode()) {
+      void connectTbankAndLoadDeposit({ interactive: false, openUi: false }).catch(() => {});
+    }
+  });
+  ["alor-portfolio-id", "alor-exchange"].forEach((id) => {
+    $(id)?.addEventListener("change", () => { saveConfig(); });
+    $(id)?.addEventListener("input", () => { saveConfig(); });
   });
   bindTbankPassphraseModalUi();
   $("cache-save-file").addEventListener("click", saveCacheToFile);

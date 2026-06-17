@@ -55,6 +55,10 @@
     const TBANK_TOKEN_STORE_KEY = d.TBANK_TOKEN_STORE_KEY;
     const TBANK_ACCOUNT_STORE_KEY = d.TBANK_ACCOUNT_STORE_KEY;
     const TBANK_HOST_STORE_KEY = d.TBANK_HOST_STORE_KEY;
+    const ALOR_TOKEN_STORE_KEY = d.ALOR_TOKEN_STORE_KEY;
+    const ALOR_ACCOUNT_STORE_KEY = d.ALOR_ACCOUNT_STORE_KEY;
+    const ALOR_PORTFOLIO_STORE_KEY = d.ALOR_PORTFOLIO_STORE_KEY;
+    const ALOR_EXCHANGE_STORE_KEY = d.ALOR_EXCHANGE_STORE_KEY;
     const TBANK_CRYPTO_ITERATIONS = d.TBANK_CRYPTO_ITERATIONS;
     const safeStorageGet = d.safeStorageGet;
     const safeStorageSet = d.safeStorageSet;
@@ -136,53 +140,167 @@
     const findLastIndexAtOrBefore = (...a) => d.findLastIndexAtOrBefore(...a);
     const rowIndexByTime = (...a) => d.rowIndexByTime(...a);
 
-  /** Ленивый экземпляр T-Bank коннектора (connectors/tbank.js). */
+  /** Ленивый экземпляр брокерского коннектора (connectors/tbank.js | alor.js). */
   let brokerInst = null;
+  let brokerInstId = "";
+
+  function readBrokerIdFromUi() {
+    const v = String($("broker-provider")?.value || "tbank").toLowerCase();
+    return v === "alor" ? "alor" : "tbank";
+  }
+
+  function activeBrokerState() {
+    return readBrokerIdFromUi() === "alor" ? state.alor : state.tbank;
+  }
+
+  function brokerTokenStoreKey() {
+    return readBrokerIdFromUi() === "alor" ? ALOR_TOKEN_STORE_KEY : TBANK_TOKEN_STORE_KEY;
+  }
+
+  function brokerAccountStoreKey() {
+    return readBrokerIdFromUi() === "alor" ? ALOR_ACCOUNT_STORE_KEY : TBANK_ACCOUNT_STORE_KEY;
+  }
+
+  function brokerLabel() {
+    return readBrokerIdFromUi() === "alor" ? "Алор" : "T-Bank";
+  }
+
+  function resetBrokerInst() {
+    brokerInst = null;
+    brokerInstId = "";
+  }
 
   function hasConnectors() {
     const REG = root.MultiLogicFinrespConnectors;
-    return !!(REG && typeof REG.create === "function" && typeof REG.get === "function" && REG.get("tbank"));
+    const id = readBrokerIdFromUi();
+    return !!(REG && typeof REG.create === "function" && typeof REG.get === "function" && REG.get(id));
   }
 
   function fillTbankAccountsFromStorage() {
-    if (!state.tbank.accounts.length) {
-      state.tbank.selectedAccountId = "";
+    const cred = activeBrokerState();
+    if (!cred.accounts.length) {
+      cred.selectedAccountId = "";
       return;
     }
-    const saved = state.tbank.selectedAccountId || safeStorageGet(TBANK_ACCOUNT_STORE_KEY);
-    if (saved && state.tbank.accounts.some((a) => a.id === saved)) {
-      state.tbank.selectedAccountId = saved;
+    const saved = cred.selectedAccountId || safeStorageGet(brokerAccountStoreKey());
+    if (saved && cred.accounts.some((a) => a.id === saved)) {
+      cred.selectedAccountId = saved;
     } else {
-      state.tbank.selectedAccountId = state.tbank.accounts[0]?.id || "";
+      cred.selectedAccountId = cred.accounts[0]?.id || "";
     }
-    if (state.tbank.selectedAccountId) safeStorageSet(TBANK_ACCOUNT_STORE_KEY, state.tbank.selectedAccountId);
+    if (cred.selectedAccountId) safeStorageSet(brokerAccountStoreKey(), cred.selectedAccountId);
+    if (readBrokerIdFromUi() === "alor") {
+      cred.portfolioId = cred.selectedAccountId;
+      if (cred.portfolioId) safeStorageSet(ALOR_PORTFOLIO_STORE_KEY, cred.portfolioId);
+    }
   }
 
   function getBroker() {
+    const id = readBrokerIdFromUi();
+    if (brokerInst && brokerInstId !== id) {
+      brokerInst = null;
+      brokerInstId = "";
+    }
     if (!brokerInst) {
       if (!hasConnectors()) {
-        throw new Error("Коннектор T-Bank не загружен (connectors/registry.js и connectors/tbank.js). Обновите страницу Ctrl+F5.");
+        throw new Error(`Коннектор ${id === "alor" ? "Алор" : "T-Bank"} не загружен (connectors/registry.js). Обновите страницу Ctrl+F5.`);
       }
-      brokerInst = root.MultiLogicFinrespConnectors.create("tbank", {
-        state,
-        liveState: state.live,
-        TBANK_REST_BASES,
-        TBANK_ACCOUNT_STORE_KEY,
-        TBANK_HOST_STORE_KEY,
-        safeStorageGet,
-        safeStorageSet,
-        moneyValueRub,
-        accountLabel,
-        noteLiveTech,
-        fmt,
-        E,
-        liveOrderTypeUi,
-        resolveOrderPrice,
-        orderBookDepth: 10,
-        onHostFallback: (hostId) => setTbankStatus(`Подключение выполнено через резервный API хост: ${hostId}.`)
-      });
+      if (id === "alor") {
+        const pf = $("alor-portfolio-id")?.value?.trim();
+        if (pf) {
+          state.alor.portfolioId = pf;
+          safeStorageSet(ALOR_PORTFOLIO_STORE_KEY, pf);
+        }
+        const ex = $("alor-exchange")?.value?.trim();
+        if (ex) {
+          state.alor.exchange = ex;
+          safeStorageSet(ALOR_EXCHANGE_STORE_KEY, ex);
+        }
+        brokerInst = root.MultiLogicFinrespConnectors.create("alor", {
+          state,
+          liveState: state.live,
+          ALOR_OAUTH_BASE: d.ALOR_OAUTH_BASE,
+          ALOR_API_BASE: d.ALOR_API_BASE,
+          ALOR_ACCOUNT_STORE_KEY,
+          ALOR_PORTFOLIO_STORE_KEY,
+          ALOR_EXCHANGE_STORE_KEY,
+          safeStorageGet,
+          safeStorageSet,
+          noteLiveTech,
+          fmt,
+          E,
+          liveOrderTypeUi,
+          resolveOrderPrice,
+          orderBookDepth: 10
+        });
+      } else {
+        brokerInst = root.MultiLogicFinrespConnectors.create("tbank", {
+          state,
+          liveState: state.live,
+          TBANK_REST_BASES,
+          TBANK_ACCOUNT_STORE_KEY,
+          TBANK_HOST_STORE_KEY,
+          safeStorageGet,
+          safeStorageSet,
+          moneyValueRub,
+          accountLabel,
+          noteLiveTech,
+          fmt,
+          E,
+          liveOrderTypeUi,
+          resolveOrderPrice,
+          orderBookDepth: 10,
+          onHostFallback: (hostId) => setTbankStatus(`Подключение выполнено через резервный API хост: ${hostId}.`)
+        });
+      }
+      brokerInstId = id;
     }
     return brokerInst;
+  }
+
+  async function buildBrokerPositionRows(portData, posData, options) {
+    const broker = getBroker();
+    if (typeof broker.buildPositionRows === "function") {
+      return broker.buildPositionRows(portData, posData, options);
+    }
+    return buildTbankPositionRows(portData, posData, options);
+  }
+
+  function syncBrokerSettingsPanels() {
+    const id = readBrokerIdFromUi();
+    const tbankPanel = $("tbank-settings");
+    const alorPanel = $("alor-settings");
+    if (tbankPanel) tbankPanel.hidden = id !== "tbank";
+    if (alorPanel) alorPanel.hidden = id !== "alor";
+    syncBrokerModeOptionLabels();
+    syncAlorSettingsState();
+  }
+
+  function syncBrokerModeOptionLabels() {
+    const label = brokerLabel();
+    const dep = document.querySelector('#account-mode option[value="tbank"]');
+    const live = document.querySelector('#account-mode option[value="live"]');
+    if (dep) dep.textContent = `${label} — торговый счёт (депозит)`;
+    if (live) live.textContent = `Реальная торговля ${label}`;
+  }
+
+  function setAlorStatus(message, isError = false) {
+    const el = $("alor-status");
+    if (el) {
+      el.textContent = message;
+      el.classList.toggle("calc-status-error", !!isError);
+    }
+  }
+
+  function syncAlorSettingsState() {
+    const el = $("alor-settings-state");
+    if (!el || readBrokerIdFromUi() !== "alor") return;
+    const stored = !!safeStorageGet(ALOR_TOKEN_STORE_KEY);
+    const unlocked = !!state.alor.token;
+    const portfolio = state.alor.portfolioId || $("alor-portfolio-id")?.value?.trim() || "";
+    const account = portfolio ? `портфель ${portfolio}` : "портфель не указан";
+    const deposit = state.alor.depositLoaded ? "депозит загружен" : "депозит не загружен";
+    el.textContent = unlocked ? `${account}, ${deposit}` : (stored ? "токен сохранён, нужен пароль" : "не подключено");
   }
 
   // === HTML ↔ live: функции ниже экспортируются из install() для вызова из HTML ===
@@ -244,7 +362,7 @@
       el.textContent = "Включите «Песочница (фейк)» или сделайте сделку — появятся «Деньги, свободно» и портфель.";
       return;
     }
-    if (!state.tbank.token) {
+    if (!activeBrokerState().token) {
       el.textContent = "«Деньги, свободно» подтягиваются из T-Bank после подключения токена и счёта.";
       return;
     }
@@ -512,10 +630,15 @@
     el.style.color = isError ? "#b91c1c" : "var(--muted)";
   }
 
+  function setBrokerConnectionStatus(message, isError = false) {
+    if (readBrokerIdFromUi() === "alor") setAlorStatus(message, isError);
+    else setTbankStatus(message, isError);
+  }
+
   /** Синхронизация UI/state: `syncTbankSettingsState`. */
   function syncTbankSettingsState() {
     const el = $("tbank-settings-state");
-    if (!el) return;
+    if (!el || readBrokerIdFromUi() !== "tbank") return;
     const stored = !!safeStorageGet(TBANK_TOKEN_STORE_KEY);
     const unlocked = !!state.tbank.token;
     const account = state.tbank.selectedAccountId ? "счёт найден" : "счёт не загружен";
@@ -1025,11 +1148,11 @@
 
   /** Синхронизация UI/state: `syncRealTradeHistoryFromBroker`. */
   async function syncRealTradeHistoryFromBroker() {
-    if (isLiveSandbox() || !state.tbank.token || !state.tbank.selectedAccountId) return;
+    if (isLiveSandbox() || !activeBrokerState().token || !activeBrokerState().selectedAccountId) return;
     const from = liveBrokerOpsPeriodFrom();
     try {
       const data = await tbankRequest("OperationsService/GetOperations", {
-        accountId: state.tbank.selectedAccountId,
+        accountId: activeBrokerState().selectedAccountId,
         from,
         to: new Date().toISOString(),
         state: "OPERATION_STATE_EXECUTED"
@@ -1040,7 +1163,7 @@
       for (const op of enriched) upsertTradeHistoryFromTbankOperation(op);
       reconcileRealBrokerTradeFinresp(enriched);
     } catch (err) {
-      noteLiveTech("live-broker-ops", err.message, `account=${state.tbank.selectedAccountId || "—"}`);
+      noteLiveTech("live-broker-ops", err.message, `account=${activeBrokerState().selectedAccountId || "—"}`);
     }
   }
 
@@ -2973,8 +3096,8 @@
     if (!anySelectedLogicUsesOrderBook()) return false;
     const sandbox = isLiveSandbox();
     // user asked: if token is not active, do not enable (also for sandbox).
-    if (!state.tbank.token) return false;
-    if (!sandbox && !state.tbank.selectedAccountId) return false;
+    if (!activeBrokerState().token) return false;
+    if (!sandbox && !activeBrokerState().selectedAccountId) return false;
     return true;
   }
 
@@ -3381,8 +3504,8 @@
     try {
       if (!sandbox && !(await ensureTbankTokenUnlocked())) throw new Error("Расшифруйте токен T-Bank.");
       if (!sandbox) {
-        if (!state.tbank.selectedAccountId) await loadTbankAccounts();
-        if (!state.tbank.selectedAccountId) throw new Error("Счёт T-Bank не выбран.");
+        if (!activeBrokerState().selectedAccountId) await loadTbankAccounts();
+        if (!activeBrokerState().selectedAccountId) throw new Error("Счёт T-Bank не выбран.");
       }
       const direction = closeDirectionForPosition(row);
       const lots = positionClosingLots(row);
@@ -3531,7 +3654,7 @@
       paintPositions();
       return;
     }
-    if (!state.tbank.token || !state.tbank.selectedAccountId) {
+    if (!activeBrokerState().token || !activeBrokerState().selectedAccountId) {
       paintPositions();
       return;
     }
@@ -3540,21 +3663,18 @@
     state.live.positionsError = "";
     try {
       if (!(await ensureTbankTokenUnlocked())) {
-        state.live.positionsError = "Расшифруйте токен T-Bank.";
+        state.live.positionsError = `Расшифруйте токен ${brokerLabel()}.`;
         return;
       }
-      const accountId = state.tbank.selectedAccountId;
-      const [portData, posData] = await Promise.all([
-        tbankRequest("OperationsService/GetPortfolio", { accountId, currency: "RUB" }),
-        tbankRequest("OperationsService/GetPositions", { accountId })
-      ]);
-      const rows = await buildTbankPositionRows(portData, posData, { sessionOnly: false });
+      const broker = getBroker();
+      const snap = await broker.getPortfolioSnapshot();
+      const rows = await buildBrokerPositionRows(snap.portfolio, snap.positions, { sessionOnly: false });
       state.live.openPositions = filterLiveOpenPositionRows(rows);
       state.live.positionsUpdatedAt = Date.now();
     } catch (err) {
       state.live.openPositions = [];
       state.live.positionsError = err?.message || String(err);
-      noteLiveTech("live-positions", state.live.positionsError, `account=${state.tbank.selectedAccountId || "—"}`);
+      noteLiveTech("live-positions", state.live.positionsError, `account=${activeBrokerState().selectedAccountId || "—"}`);
     } finally {
       state.live.positionsBusy = false;
       renderLivePanelSummaryCounts();
@@ -3609,7 +3729,7 @@
   /** T-Bank FindInstrument или локальная заглушка в песочнице (без T-Bank / при ошибке API). */
   async function resolveLiveInstrumentMeta(sec, market) {
     if (isLiveSandbox()) {
-      if (!state.tbank.token) return sandboxInstrumentMeta(sec, market);
+      if (!activeBrokerState().token) return sandboxInstrumentMeta(sec, market);
       try {
         const ti = await tbankFindInstrument(sec, market);
         if (!ti) return sandboxInstrumentMeta(sec, market);
@@ -3720,8 +3840,8 @@
   function resolveLiveCandleSource() {
     const ui = liveCandleSourceUi();
     if (ui === "moex") return "moex";
-    if (ui === "tbank") return state.tbank.token ? "tbank" : "moex";
-    return state.tbank.token ? "tbank" : "moex";
+    if (ui === "tbank") return activeBrokerState().token ? "tbank" : "moex";
+    return activeBrokerState().token ? "tbank" : "moex";
   }
 
   /** Подпись фактического источника свечей (может отличаться от выбора в select). */
@@ -3730,8 +3850,8 @@
     const labels = { tbank: "T-Bank", moex: "MOEX", cache: "кэш" };
     const actualKey = state.live.candleSource || resolveLiveCandleSource();
     const actual = labels[actualKey] || actualKey;
-    if (ui === "tbank" && !state.tbank.token) return `${actual} (нет токена T-Bank)`;
-    if (ui === "auto" && !state.tbank.token) return `${actual} (авто → MOEX)`;
+    if (ui === "tbank" && !activeBrokerState().token) return `${actual} (нет токена T-Bank)`;
+    if (ui === "auto" && !activeBrokerState().token) return `${actual} (авто → MOEX)`;
     if (state.live.candleRefreshBusy) return `загрузка ${actual}…`;
     return actual;
   }
@@ -3750,7 +3870,7 @@
     const label = liveCandleSourceEffectiveLabel();
     const showHint = state.live.candleRefreshBusy
       || ui === "auto"
-      || (ui === "tbank" && !state.tbank.token);
+      || (ui === "tbank" && !activeBrokerState().token);
     hint.hidden = !showHint;
     hint.textContent = showHint ? `→ ${label}` : "";
   }
@@ -3976,7 +4096,7 @@
     await yieldToUi();
     let price = packLastClose(picked.sec, picked.market);
     let source = price ? "свечи" : "";
-    if (!price && state.tbank.token) {
+    if (!price && activeBrokerState().token) {
       try {
         if (await ensureTbankTokenUnlocked()) {
           const ti = await tbankFindInstrument(picked.sec, picked.market);
@@ -4891,7 +5011,7 @@
   /** Закрытие позиции/заявки: `closeRealOrderAtMarket`. */
   async function closeRealOrderAtMarket(order) {
     if (!(await ensureTbankTokenUnlocked())) throw new Error("Расшифруйте токен T-Bank.");
-    if (!state.tbank.selectedAccountId) await loadTbankAccounts();
+    if (!activeBrokerState().selectedAccountId) await loadTbankAccounts();
     if (liveOrderCancellable(order, false)) {
       await getBroker().cancelOrder(order.orderId, order.orderRequestId || order.orderId);
       markTradeHistoryCancelled(liveOrderRowId(order));
@@ -5299,7 +5419,7 @@
     try {
       if (isLiveSandbox()) {
         state.live.sessionPositionBaseline = sandboxPositionsByTicker();
-      } else if (state.tbank.token && state.tbank.selectedAccountId
+      } else if (activeBrokerState().token && activeBrokerState().selectedAccountId
         && (await ensureTbankTokenUnlocked({ interactive: false, openUi: false }))) {
         state.live.sessionPositionBaseline = await tbankPositionsByTicker();
       } else {
@@ -5330,7 +5450,7 @@
     sb.orders.length = 0;
     state.live.sandboxPositionsValue = null;
     state.live.openPositions = [];
-    if (state.tbank.token && state.tbank.selectedAccountId) {
+    if (activeBrokerState().token && activeBrokerState().selectedAccountId) {
       await refreshLivePortfolioStats();
       await refreshLiveOpenPositions();
       await refreshLiveOrders();
@@ -5406,7 +5526,7 @@
         await disableLiveSandbox();
         notifyLiveSandboxModeSwitch(false);
         if (state.live.active) {
-          if (!state.tbank.selectedAccountId) await loadTbankAccounts();
+          if (!activeBrokerState().selectedAccountId) await loadTbankAccounts();
           await resetLiveSessionPositionBaseline();
           await refreshLivePortfolioStats();
           await refreshLiveOrders();
@@ -5570,8 +5690,8 @@
         return;
       }
       if (!sandbox) {
-        if (!state.tbank.selectedAccountId) await loadTbankAccounts();
-        if (!state.tbank.selectedAccountId) throw new Error("Счёт T-Bank не выбран.");
+        if (!activeBrokerState().selectedAccountId) await loadTbankAccounts();
+        if (!activeBrokerState().selectedAccountId) throw new Error("Счёт T-Bank не выбран.");
       }
       const picked = parseLiveManualInstrumentKey($("live-manual-sec")?.value);
       if (!picked?.sec) throw new Error("Выберите инструмент из списка калькулятора.");
@@ -5590,7 +5710,7 @@
         }
       }
       let ti = null;
-      if (state.tbank.token && (await ensureTbankTokenUnlocked())) {
+      if (activeBrokerState().token && (await ensureTbankTokenUnlocked())) {
         ti = await tbankFindInstrument(sec, market);
       }
       let instrumentId;
@@ -5671,41 +5791,39 @@
       await updateSandboxPortfolioDisplay();
       return;
     }
-    if (!state.tbank.token || !state.tbank.selectedAccountId) return;
+    if (!activeBrokerState().token || !activeBrokerState().selectedAccountId) return;
     try {
-      const accountId = state.tbank.selectedAccountId;
-      const [portfolio, positions] = await Promise.all([
-        tbankRequest("OperationsService/GetPortfolio", { accountId, currency: "RUB" }),
-        tbankRequest("OperationsService/GetPositions", { accountId })
-      ]);
-      state.live.realPortfolioValue = moneyValueRub(portfolio.totalAmountPortfolio);
-      state.live.freeCashRub = rubFreeCashFromTbankPositions(positions);
+      const broker = getBroker();
+      const snap = await broker.getPortfolioSnapshot();
+      state.live.realPortfolioValue = typeof broker.portfolioValueRub === "function"
+        ? broker.portfolioValueRub(snap.portfolio)
+        : moneyValueRub(snap.portfolio.totalAmountPortfolio);
+      state.live.freeCashRub = typeof broker.freeCashRub === "function"
+        ? broker.freeCashRub(snap.positions)
+        : rubFreeCashFromTbankPositions(snap.positions);
       state.live.portfolioPositions = filterLiveOpenPositionRows(
-        await buildTbankPositionRows(portfolio, positions, { sessionOnly: false })
+        await buildBrokerPositionRows(snap.portfolio, snap.positions, { sessionOnly: false })
       );
       if (!state.live.realLegSeed?.length) {
         captureRealLegSeedFromPortfolioRows(state.live.portfolioPositions);
       }
       const from = liveBrokerOpsPeriodFrom();
-      const ops = await tbankRequest("OperationsService/GetOperations", {
-        accountId: state.tbank.selectedAccountId,
-        from,
-        to: new Date().toISOString(),
-        state: "OPERATION_STATE_EXECUTED"
-      });
+      const ops = await broker.getOperations(from, new Date().toISOString());
       storeBrokerOperationsRaw(ops.operations || []);
-      const enriched = await enrichBrokerOperationsForHistory(state.live.brokerOperationsRaw);
-      state.live.brokerOperations = enriched;
-      for (const op of enriched) upsertTradeHistoryFromTbankOperation(op);
-      reconcileRealBrokerTradeFinresp(enriched);
-      state.live.commissionPaid = sumTbankOperationsCommission(state.live.brokerOperationsRaw);
+      if ((ops.operations || []).length) {
+        const enriched = await enrichBrokerOperationsForHistory(state.live.brokerOperationsRaw);
+        state.live.brokerOperations = enriched;
+        for (const op of enriched) upsertTradeHistoryFromTbankOperation(op);
+        reconcileRealBrokerTradeFinresp(enriched);
+        state.live.commissionPaid = sumTbankOperationsCommission(state.live.brokerOperationsRaw);
+      }
       await recalcLivePortfolioMtmFromCandles();
       snapshotLiveSessionPortfolioBaseline();
       await refreshLiveOpenPositions();
       renderLiveOrdersPanel();
       renderLivePortfolioStats();
     } catch (err) {
-      noteLiveTech("live-portfolio", err.message, `account=${state.tbank.selectedAccountId || "—"}`);
+      noteLiveTech("live-portfolio", err.message, `account=${activeBrokerState().selectedAccountId || "—"}`);
     }
   }
 
@@ -5717,11 +5835,9 @@
       await updateSandboxPortfolioDisplay();
       return;
     }
-    if (!state.tbank.token || !state.tbank.selectedAccountId) return;
+    if (!activeBrokerState().token || !activeBrokerState().selectedAccountId) return;
     try {
-      const data = await tbankRequest("OrdersService/GetOrders", {
-        accountId: state.tbank.selectedAccountId
-      });
+      const data = await getBroker().getOrders();
       state.live.orders = data.orders || [];
       state.live.lastError = "";
       await refreshLivePortfolioStats();
@@ -5729,7 +5845,7 @@
     } catch (err) {
       state.live.lastError = err.message;
       syncLiveTradingUi();
-      noteLiveTech("live-orders", err.message, `account=${state.tbank.selectedAccountId || "—"}`);
+      noteLiveTech("live-orders", err.message, `account=${activeBrokerState().selectedAccountId || "—"}`);
     }
   }
 
@@ -5813,7 +5929,7 @@
   /** Live-торговля: `liveObTrendAllowsOrder`. */
   async function liveObTrendAllowsOrder(instrumentId, direction) {
     if (!liveObTrendGateRequired()) return { ok: true, skipped: true };
-    if (isLiveSandbox() && !state.tbank.token) {
+    if (isLiveSandbox() && !activeBrokerState().token) {
       return { ok: true, skipped: true, reason: "песочница без T-Bank — стакан пропущен" };
     }
     const line = activeLogicLineRaw();
@@ -7081,9 +7197,9 @@ ${referenceBlock}
         syncLiveTradingUi();
         return;
       }
-      if (!state.tbank.selectedAccountId) {
+      if (!activeBrokerState().selectedAccountId) {
         state.live.lastError = "Счёт T-Bank не выбран — заявки не отправляются.";
-        noteLiveReconcileAbort("нет счёта T-Bank", `accounts=${state.tbank.accounts?.length ?? 0}`);
+        noteLiveReconcileAbort("нет счёта T-Bank", `accounts=${activeBrokerState().accounts?.length ?? 0}`);
         syncLiveTradingUi();
         return;
       }
@@ -7353,8 +7469,8 @@ ${referenceBlock}
       return;
     }
     if (!(await ensureTbankTokenUnlocked({ interactive: true, openUi: true }))) return;
-    if (!state.tbank.accounts.length) await loadTbankAccounts();
-    else if (!state.tbank.depositLoaded) await loadTbankDeposit();
+    if (!activeBrokerState().accounts.length) await loadTbankAccounts();
+    else if (!activeBrokerState().depositLoaded) await loadTbankDeposit();
     await refreshLiveOrders();
     await refreshLivePortfolioStats();
     startLiveStatsPoll();
@@ -7401,8 +7517,8 @@ ${referenceBlock}
         syncLiveTradingUi();
         return;
       }
-      if (!state.tbank.selectedAccountId) await loadTbankAccounts();
-      if (!state.tbank.selectedAccountId) {
+      if (!activeBrokerState().selectedAccountId) await loadTbankAccounts();
+      if (!activeBrokerState().selectedAccountId) {
         state.live.lastError = "нет счёта T-Bank";
         setTbankStatus("Не удалось определить счёт T-Bank для торговли.", true);
         syncLiveTradingUi();
@@ -7522,10 +7638,10 @@ ${referenceBlock}
         return;
       }
       if (!(await ensureTbankTokenUnlocked())) return;
-      if (!state.tbank.selectedAccountId) await loadTbankAccounts();
-      if (!state.tbank.selectedAccountId) throw new Error("Счёт T-Bank не выбран.");
+      if (!activeBrokerState().selectedAccountId) await loadTbankAccounts();
+      if (!activeBrokerState().selectedAccountId) throw new Error("Счёт T-Bank не выбран.");
       const data = await tbankRequest("OperationsService/GetPositions", {
-        accountId: state.tbank.selectedAccountId
+        accountId: activeBrokerState().selectedAccountId
       });
       let sent = 0;
       const skipped = [];
@@ -7637,57 +7753,60 @@ ${referenceBlock}
 
   /** Синхронизация UI/state: `syncAccountModeUi`. */
   function syncAccountModeUi() {
+    syncBrokerSettingsPanels();
     state.accountMode = readAccountModeFromUi();
     const isTbank = state.accountMode === "tbank";
     const isLive = isLiveMode();
     const isTbankBacked = isTbankBackedMode();
+    const bl = brokerLabel();
     const deposit = $("vol-deposit");
     if (deposit) {
       deposit.readOnly = isTbankBacked;
       deposit.title = isTbankBacked
-        ? "В режиме T-Bank депозит берётся из выбранного торгового счёта."
+        ? `В режиме ${bl} депозит берётся из выбранного торгового счёта.`
         : "";
     }
     if (isLive) {
-      const stored = !!safeStorageGet(TBANK_TOKEN_STORE_KEY);
-      const unlocked = !!state.tbank.token;
+      const stored = !!safeStorageGet(brokerTokenStoreKey());
+      const unlocked = !!activeBrokerState().token;
       if (stored && !unlocked) {
-        setTbankStatus(
-          "Режим реальной торговли. Токен сохранён локально — введите пароль в «Реальный счёт T-Bank» и нажмите «Расшифровать и подключить».",
+        setBrokerConnectionStatus(
+          `Режим реальной торговли (${bl}). Токен сохранён — введите пароль в блоке брокера и нажмите «Расшифровать и подключить».`,
           true
         );
       } else {
-        setTbankStatus(
-          state.tbank.depositLoaded
-            ? `Режим реальной торговли. Счёт подключён, депозит: ${fmt(+deposit.value || 0, 0)} ₽.`
-            : "Режим реальной торговли. Введите пароль — калькулятор расшифрует токен и подключит тот же счёт T-Bank."
+        setBrokerConnectionStatus(
+          activeBrokerState().depositLoaded
+            ? `Режим реальной торговли (${bl}). Счёт подключён, депозит: ${fmt(+deposit.value || 0, 0)} ₽.`
+            : `Режим реальной торговли (${bl}). Введите пароль — калькулятор расшифрует токен и подключит счёт.`
         );
       }
     } else if (isTbank) {
-      const stored = !!safeStorageGet(TBANK_TOKEN_STORE_KEY);
-      if (stored && !state.tbank.token) {
-        setTbankStatus(
-          "Режим T-Bank активен. Токен сохранён — введите пароль в блоке «Реальный счёт T-Bank» и нажмите «Расшифровать и подключить».",
+      const stored = !!safeStorageGet(brokerTokenStoreKey());
+      if (stored && !activeBrokerState().token) {
+        setBrokerConnectionStatus(
+          `Режим ${bl} активен. Токен сохранён — введите пароль в блоке брокера и нажмите «Расшифровать и подключить».`,
           true
         );
       } else {
-        setTbankStatus(
-          state.tbank.depositLoaded
-            ? `Режим T-Bank активен. Депозит взят со счёта: ${fmt(+deposit.value || 0, 0)} ₽.`
-            : "Режим T-Bank активен. Введите пароль: калькулятор расшифрует токен, загрузит счёт и возьмёт депозит автоматически."
+        setBrokerConnectionStatus(
+          activeBrokerState().depositLoaded
+            ? `Режим ${bl} активен. Депозит взят со счёта: ${fmt(+deposit.value || 0, 0)} ₽.`
+            : `Режим ${bl} активен. Введите пароль: калькулятор расшифрует токен, загрузит счёт и возьмёт депозит.`
         );
       }
     } else {
-      setTbankStatus("Фиктивный кошелёк активен. Поле депозита работает вручную, как раньше.");
+      setBrokerConnectionStatus("Фиктивный кошелёк активен. Поле депозита работает вручную, как раньше.");
     }
     syncTbankSettingsState();
+    syncAlorSettingsState();
     syncLivePeriodControls();
     syncLiveTradingUi();
     if (isLive) {
       try {
-        const needsUnlock = !!safeStorageGet(TBANK_TOKEN_STORE_KEY) && !state.tbank.token;
+        const needsUnlock = !!safeStorageGet(brokerTokenStoreKey()) && !activeBrokerState().token;
         if (!needsUnlock) ensureLiveChartSession();
-        if (state.tbank.token) startLiveStatsPoll();
+        if (activeBrokerState().token) startLiveStatsPoll();
       } catch (err) {
         noteLiveTech("live-chart-session", err?.message || String(err));
         syncLiveTradingUi();
@@ -7735,17 +7854,52 @@ ${referenceBlock}
       $("tbank-token").value = "";
       setTbankStatus("Токен зашифрован и сохранён локально. При выборе T-Bank калькулятор сам загрузит счёт и депозит.");
       syncTbankSettingsState();
-      if (isTbankBackedMode()) connectTbankAndLoadDeposit();
+      if (isTbankBackedMode() && readBrokerIdFromUi() === "tbank") connectTbankAndLoadDeposit();
     } catch (err) {
       setTbankStatus(`Ошибка сохранения токена: ${err.message}`, true);
       noteTechError(`tbank-save-token: ${err.message}`);
     }
   }
 
+  async function saveAlorToken() {
+    const token = $("alor-refresh-token")?.value?.trim();
+    const passphrase = $("alor-passphrase")?.value || "";
+    const portfolio = $("alor-portfolio-id")?.value?.trim();
+    if (!token) { setAlorStatus("Введите refresh token Алор.", true); return; }
+    if (!portfolio) { setAlorStatus("Укажите код портфеля (например D12345).", true); return; }
+    if (passphrase.length < 8) { setAlorStatus("Пароль шифрования должен быть не короче 8 символов.", true); return; }
+    try {
+      const encrypted = await encryptTbankToken(token, passphrase);
+      if (!safeStorageSet(ALOR_TOKEN_STORE_KEY, encrypted)) throw new Error("localStorage недоступен.");
+      state.alor.token = token;
+      state.alor.portfolioId = portfolio;
+      state.alor.exchange = $("alor-exchange")?.value?.trim() || "MOEX";
+      state.alor.depositLoaded = false;
+      state.alor.accessToken = null;
+      safeStorageSet(ALOR_PORTFOLIO_STORE_KEY, portfolio);
+      safeStorageSet(ALOR_EXCHANGE_STORE_KEY, state.alor.exchange);
+      $("alor-refresh-token").value = "";
+      setAlorStatus("Refresh token зашифрован и сохранён. Выберите режим счёта сверху.");
+      syncAlorSettingsState();
+      resetBrokerInst();
+      if (isTbankBackedMode() && readBrokerIdFromUi() === "alor") connectTbankAndLoadDeposit();
+    } catch (err) {
+      setAlorStatus(`Ошибка сохранения: ${err.message}`, true);
+      noteTechError(`alor-save-token: ${err.message}`);
+    }
+  }
+
+  function getBrokerPassphrase() {
+    if (readBrokerIdFromUi() === "alor") {
+      return ($("alor-passphrase")?.value || "").trim();
+    }
+    return ($("tbank-passphrase")?.value || "").trim();
+  }
+
   /** Получение значения: `getTbankPassphrase`. */
   function getTbankPassphrase(opts) {
     const options = opts || {};
-    return ($("tbank-passphrase")?.value || "").trim() || "";
+    return getBrokerPassphrase() || "";
   }
 
   let tbankPassphraseModalResolve = null;
@@ -7797,14 +7951,34 @@ ${referenceBlock}
     let passphrase = getTbankPassphrase();
     if (passphrase) return passphrase;
     if (!options.allowPrompt) return "";
-    const promptTitle = "Введите пароль для расшифровки локального токена T-Bank";
+    const promptTitle = readBrokerIdFromUi() === "alor"
+      ? "Введите пароль для расшифровки refresh token Алор"
+      : "Введите пароль для расшифровки локального токена T-Bank";
     if (IS_FILE_PROTOCOL || options.useModal) {
       passphrase = await showTbankPassphraseModal(promptTitle);
     } else {
       passphrase = window.prompt(promptTitle) || "";
     }
-    if (passphrase && $("tbank-passphrase")) $("tbank-passphrase").value = passphrase;
+    if (passphrase) {
+      if (readBrokerIdFromUi() === "alor" && $("alor-passphrase")) $("alor-passphrase").value = passphrase;
+      else if ($("tbank-passphrase")) $("tbank-passphrase").value = passphrase;
+    }
     return passphrase;
+  }
+
+  function openBrokerPassphraseUi(hint) {
+    if (readBrokerIdFromUi() === "alor") {
+      const details = $("alor-settings");
+      if (details) details.open = true;
+      syncCollapsibleToggleLabel("alor-settings", "alor-settings-toggle");
+      const pp = $("alor-passphrase");
+      if (pp) {
+        try { pp.focus({ preventScroll: false }); } catch (_) { pp.focus(); }
+      }
+      if (hint) setAlorStatus(hint, true);
+      return;
+    }
+    openTbankPassphraseUi(hint);
   }
 
   /** Подпрограмма `openTbankPassphraseUi`. */
@@ -7822,14 +7996,15 @@ ${referenceBlock}
   /** Ленивая инициализация/проверка: `ensureTbankTokenUnlocked`. */
   async function ensureTbankTokenUnlocked(opts) {
     const options = opts || {};
-    if (state.tbank.token) return true;
+    if (activeBrokerState().token) return true;
     if (tbankUnlockInFlight) return tbankUnlockInFlight;
 
     const task = (async () => {
-      const payload = safeStorageGet(TBANK_TOKEN_STORE_KEY);
+      const payload = safeStorageGet(brokerTokenStoreKey());
       if (!payload) {
-        setTbankStatus("Локально сохранённого токена нет. Сохраните токен в блоке «Реальный счёт T-Bank».", true);
-        if (options.openUi !== false) openTbankPassphraseUi();
+        const blk = readBrokerIdFromUi() === "alor" ? "«Реальный счёт Алор»" : "«Реальный счёт T-Bank»";
+        setBrokerConnectionStatus(`Локально сохранённого токена нет. Сохраните токен в блоке ${blk}.`, true);
+        if (options.openUi !== false) openBrokerPassphraseUi();
         return false;
       }
       const passphrase = await requestTbankPassphrase({
@@ -7840,22 +8015,29 @@ ${referenceBlock}
       if (!passphrase) {
         const hint = options.interactive
           ? "Введите пароль в поле ниже или отмените запрос в диалоге."
-          : "Токен сохранён локально — введите пароль в поле «Пароль для шифрования/расшифровки» и нажмите «Расшифровать и подключить» (или смените режим счёта ещё раз).";
-        setTbankStatus(hint, true);
-        if (options.openUi !== false) openTbankPassphraseUi(hint);
+          : "Токен сохранён локально — введите пароль и нажмите «Расшифровать и подключить».";
+        setBrokerConnectionStatus(hint, true);
+        if (options.openUi !== false) openBrokerPassphraseUi(hint);
         return false;
       }
       try {
-        state.tbank.token = await decryptTbankToken(payload, passphrase);
-        state.tbank.depositLoaded = false;
-        setTbankStatus("Токен расшифрован на текущую сессию. Загружаю счёт и депозит…");
+        const cred = activeBrokerState();
+        cred.token = await decryptTbankToken(payload, passphrase);
+        cred.depositLoaded = false;
+        if (readBrokerIdFromUi() === "alor") {
+          cred.accessToken = null;
+          cred.accessTokenExpiresAt = 0;
+        }
+        setBrokerConnectionStatus("Токен расшифрован на текущую сессию. Загружаю счёт и депозит…");
         syncTbankSettingsState();
+        syncAlorSettingsState();
+        resetBrokerInst();
         return true;
       } catch (err) {
-        state.tbank.token = null;
-        setTbankStatus(`Не удалось расшифровать токен: ${err.message}`, true);
-        noteTechError(`tbank-unlock-token: ${err.message}`);
-        if (options.openUi !== false) openTbankPassphraseUi();
+        activeBrokerState().token = null;
+        setBrokerConnectionStatus(`Не удалось расшифровать токен: ${err.message}`, true);
+        noteTechError(`${readBrokerIdFromUi()}-unlock-token: ${err.message}`);
+        if (options.openUi !== false) openBrokerPassphraseUi();
         return false;
       }
     })();
@@ -7866,6 +8048,15 @@ ${referenceBlock}
     } finally {
       if (tbankUnlockInFlight === task) tbankUnlockInFlight = null;
     }
+  }
+
+  async function unlockAlorTokenInteractive() {
+    openBrokerPassphraseUi();
+    const ok = await ensureTbankTokenUnlocked({ interactive: true, openUi: true });
+    if (!ok) return false;
+    await connectTbankAndLoadDeposit({ interactive: true });
+    if (isLiveMode()) await connectTbankForLive();
+    return true;
   }
 
   /** Модалка пароля для расшифровки токена T-Bank. */
@@ -7880,32 +8071,33 @@ ${referenceBlock}
 
   async function loadTbankAccounts() {
     try {
-      setTbankStatus("Загрузка счетов T-Bank…");
+      setBrokerConnectionStatus(`Загрузка счёта ${brokerLabel()}…`);
       await getBroker().loadAccounts();
       fillTbankAccounts();
-      setTbankStatus(`Счёт T-Bank загружен: ${accountLabel(state.tbank.accounts.find((a) => a.id === state.tbank.selectedAccountId) || state.tbank.accounts[0])}. Загружаю депозит…`);
-      if (isTbankBackedMode() && state.tbank.selectedAccountId) await loadTbankDeposit();
+      const acc = activeBrokerState().accounts.find((a) => a.id === activeBrokerState().selectedAccountId) || activeBrokerState().accounts[0];
+      setBrokerConnectionStatus(`Счёт ${brokerLabel()} загружен: ${accountLabel(acc)}. Загружаю депозит…`);
+      if (isTbankBackedMode() && activeBrokerState().selectedAccountId) await loadTbankDeposit();
     } catch (err) {
-      setTbankStatus(`Ошибка загрузки счетов: ${err.message}`, true);
-      noteTechError(`tbank-load-accounts: ${err.message}`);
+      setBrokerConnectionStatus(`Ошибка загрузки счетов: ${err.message}`, true);
+      noteTechError(`${readBrokerIdFromUi()}-load-accounts: ${err.message}`);
     }
   }
 
   async function loadTbankDeposit() {
     try {
-      if (!state.tbank.selectedAccountId) throw new Error("Счёт T-Bank не загружен.");
-      setTbankStatus("Загрузка портфеля T-Bank…");
+      if (!activeBrokerState().selectedAccountId) throw new Error(`Счёт ${brokerLabel()} не загружен.`);
+      setBrokerConnectionStatus(`Загрузка портфеля ${brokerLabel()}…`);
       const amount = await getBroker().loadDepositAmount();
       $("vol-deposit").value = String(Math.round(amount));
       syncLeverageDisplay();
       syncAccountModeUi();
-      setTbankStatus(`Депозит загружен из T-Bank: ${fmt(amount, 2)} ₽.`);
+      setBrokerConnectionStatus(`Депозит загружен из ${brokerLabel()}: ${fmt(amount, 2)} ₽.`);
       saveConfig();
       if (state.packs.length) invalidateFinrespResult();
     } catch (err) {
-      state.tbank.depositLoaded = false;
-      setTbankStatus(`Ошибка загрузки депозита: ${err.message}`, true);
-      noteTechError(`tbank-load-deposit: ${err.message}`);
+      activeBrokerState().depositLoaded = false;
+      setBrokerConnectionStatus(`Ошибка загрузки депозита: ${err.message}`, true);
+      noteTechError(`${readBrokerIdFromUi()}-load-deposit: ${err.message}`);
     }
   }
 
@@ -7918,11 +8110,11 @@ ${referenceBlock}
       openUi: options.openUi !== false
     });
     if (!unlocked) return;
-    if (!state.tbank.accounts.length) {
+    if (!activeBrokerState().accounts.length) {
       await loadTbankAccounts();
       return;
     }
-    if (state.tbank.selectedAccountId) await loadTbankDeposit();
+    if (activeBrokerState().selectedAccountId) await loadTbankDeposit();
     if (isLiveMode()) await refreshLiveOrders();
   }
 
@@ -7932,7 +8124,13 @@ ${referenceBlock}
     state.accountMode = "paper";
     setTbankHostId(safeStorageGet(TBANK_HOST_STORE_KEY) || "tinkoff");
     state.tbank.selectedAccountId = safeStorageGet(TBANK_ACCOUNT_STORE_KEY);
+    state.alor.portfolioId = safeStorageGet(ALOR_PORTFOLIO_STORE_KEY);
+    state.alor.exchange = safeStorageGet(ALOR_EXCHANGE_STORE_KEY) || "MOEX";
+    state.alor.selectedAccountId = safeStorageGet(ALOR_ACCOUNT_STORE_KEY);
+    if ($("alor-portfolio-id") && state.alor.portfolioId) $("alor-portfolio-id").value = state.alor.portfolioId;
+    if ($("alor-exchange") && state.alor.exchange) $("alor-exchange").value = state.alor.exchange;
     fillTbankAccounts();
+    syncBrokerSettingsPanels();
     syncAccountModeUi();
   }
 
@@ -7949,7 +8147,7 @@ ${referenceBlock}
       setTbankStatus(msg, true);
       return false;
     }
-    if (state.tbank.depositLoaded && deposit > 0) return true;
+    if (activeBrokerState().depositLoaded && deposit > 0) return true;
     const msg = "В режиме T-Bank сначала загрузите депозит из выбранного счёта.";
     setCalcStatus(msg);
     setTbankStatus(msg, true);
@@ -7972,7 +8170,7 @@ ${referenceBlock}
     }
     syncAccountModeUi();
     if (state.accountMode !== "tbank" && state.accountMode !== "live") {
-      if (state.packs.length && (!isTbankBackedMode() || state.tbank.depositLoaded)) invalidateFinrespResult();
+      if (state.packs.length && (!isTbankBackedMode() || activeBrokerState().depositLoaded)) invalidateFinrespResult();
     }
   }
 
@@ -8026,7 +8224,13 @@ ${referenceBlock}
       connectTbankAndLoadDeposit,
       connectTbankForLive,
       saveTbankToken,
+      saveAlorToken,
       unlockTbankTokenInteractive,
+      unlockAlorTokenInteractive,
+      syncBrokerSettingsPanels,
+      readBrokerIdFromUi,
+      resetBrokerInst,
+      setAlorStatus,
       ensureTbankTokenUnlocked,
       loadTbankAccounts,
       loadTbankDeposit,

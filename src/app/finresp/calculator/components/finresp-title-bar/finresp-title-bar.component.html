@@ -2,11 +2,17 @@
 <h2>Калькулятор <span class="calc-page-version" id="calc-page-version-badge" title="Версия страницы — для проверки обновления"></span></h2>
 <div class="calc-title-actions" style="display:flex;flex-wrap:wrap;align-items:center;gap:.5rem .75rem;">
 <a class="calc-btn calc-btn-secondary" [href]="helpUrl" target="_blank" rel="noopener" title="Справка по калькулятору">Справка</a>
+<label class="account-mode" for="broker-provider">Брокер:
+<select id="broker-provider" title="T-Bank или Алор — токен и счёт в блоке настроек ниже">
+<option value="tbank" selected>T-Bank</option>
+<option value="alor">Алор</option>
+</select>
+</label>
 <label class="account-mode" for="account-mode">Кошелёк:
 <select id="account-mode" [formControl]="accountMode">
 <option value="paper" selected>Фиктивный кошелёк</option>
-<option value="tbank">T-Bank торговый счёт (депозит)</option>
-<option value="live">Реальная торговля T-Bank</option>
+<option value="tbank" data-broker-deposit>Торговый счёт (депозит)</option>
+<option value="live" data-broker-live>Реальная торговля</option>
 </select>
 </label>
 </div>

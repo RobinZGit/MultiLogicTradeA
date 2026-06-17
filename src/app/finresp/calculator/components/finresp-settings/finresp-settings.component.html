@@ -18,6 +18,28 @@
 <p class="calc-status" id="tbank-status">Фиктивный кошелёк работает как раньше. Для T-Bank сохраните токен, затем выберите режим сверху: калькулятор спросит пароль, расшифрует токен, загрузит счёт и возьмёт депозит.</p>
 </details>
 
+<details class="real-account-card" id="alor-settings" hidden>
+<summary class="real-account-head">
+<span class="real-account-title">Реальный счёт Алор — депозит и торговля</span>
+<span class="real-account-head-right">
+<span class="real-account-state" id="alor-settings-state">не подключено</span>
+<a href="#" class="extra-params-toggle" id="alor-settings-toggle" role="button">Развернуть</a>
+</span>
+</summary>
+<p class="note">Refresh token из <a href="https://alor.dev" target="_blank" rel="noopener">alor.dev</a> → API Access Tokens. Укажите код портфеля (например D12345). Токен шифруется в браузере и хранится только локально.</p>
+<div class="calc-grid">
+<div class="calc-field calc-field-wide"><label for="alor-refresh-token">Refresh token Алор</label><textarea id="alor-refresh-token" autocomplete="off" spellcheck="false" placeholder="Вставьте refresh token, затем задайте пароль и нажмите «Зашифровать и сохранить»"></textarea></div>
+<div class="calc-field"><label for="alor-portfolio-id">Портфель</label><input id="alor-portfolio-id" type="text" autocomplete="off" placeholder="D12345" spellcheck="false"></div>
+<div class="calc-field"><label for="alor-exchange">Биржа</label><select id="alor-exchange"><option value="MOEX" selected>MOEX</option></select></div>
+<div class="calc-field"><label for="alor-passphrase">Пароль для шифрования/расшифровки</label><input id="alor-passphrase" type="password" autocomplete="new-password" placeholder="Не сохраняется"></div>
+</div>
+<div class="real-account-actions">
+<button class="calc-btn calc-btn-secondary" type="button" id="alor-save-token">Зашифровать и сохранить</button>
+<button class="calc-btn calc-btn-secondary" type="button" id="alor-unlock-token">Расшифровать и подключить</button>
+</div>
+<p class="calc-status" id="alor-status">Выберите брокера «Алор» сверху. Сохраните refresh token и портфель, затем режим «Торговый счёт» или «Реальная торговля».</p>
+</details>
+
 <details class="tech-info-card" id="tech-info-panel">
 <summary class="tech-info-head">
 <span class="tech-info-title">Тех. информация — скопируйте и пришлите при сбое</span>

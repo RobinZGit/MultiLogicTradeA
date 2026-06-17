@@ -42,6 +42,7 @@ export const FINRESP_ENGINE_SCRIPTS = [
   'logics/_descriptions.js',
   'connectors/registry.js',
   'connectors/tbank.js',
+  'connectors/alor.js',
   'MultiLogic_FinrespCalculator.engine.js',
   'MultiLogic_FinrespCalculator.charts.js',
   'MultiLogic_FinrespCalculator.live.js',
