@@ -76,7 +76,10 @@ echo.
 echo Starting static server on %MLTA_URL%
 echo Serving folder: %DIST_DIR%
 echo Waiting for port 5173, then opening browser...
+echo Tech info file: logs\finresp-tech-log.txt ^(when tech-log server runs^)
 echo.
+
+start "MultiLogicTradeA-techlog" /MIN cmd /c "cd /d ""%~dp0"" && node scripts\finresp-tech-log-server.mjs"
 
 start "MultiLogicTradeA-serve" /MIN cmd /c "npx --yes serve -s ""%DIST_DIR%"" -l 5173"
 

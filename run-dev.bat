@@ -44,7 +44,10 @@ echo.
 echo Starting Angular dev server on %MLTA_URL%
 echo Waiting for first compile, then opening browser...
 echo Logs: window titled "MultiLogicTradeA-dev"
+echo Tech info file: logs\finresp-tech-log.txt ^(when tech-log server runs^)
 echo.
+
+start "MultiLogicTradeA-techlog" /MIN cmd /c "cd /d ""%~dp0"" && node scripts\finresp-tech-log-server.mjs"
 
 start "MultiLogicTradeA-dev" cmd /k "cd /d ""%~dp0"" && npm start -- --host 127.0.0.1 --port 4200"
 

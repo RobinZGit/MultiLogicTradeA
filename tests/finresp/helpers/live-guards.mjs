@@ -5,6 +5,7 @@
  */
 export function liveRefreshMayProceed(state, needsBootstrap) {
   if (!state.isLiveMode || !state.chartSession) return false;
+  if (state.sandboxToggleBusy) return false;
   const priority = !!needsBootstrap || !!state.active;
   if (state.tradingActionBusy && !priority) return false;
   if (state.uiBusy && !priority) return false;

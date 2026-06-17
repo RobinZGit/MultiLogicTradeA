@@ -1293,6 +1293,7 @@
 
   function liveRefreshMayProceed(needsBootstrap) {
     if (!isLiveMode() || !state.live.chartSession) return false;
+    if (state.live.sandboxToggleBusy) return false;
     const priority = !!needsBootstrap || !!state.live.active;
     if (state.live.tradingActionBusy && !priority) return false;
     if (state.uiBusy && !priority) return false;
@@ -4542,23 +4543,23 @@
 
   /** Процедура (async): включить песочницу — зафиксировать startPortfolio, очистить фейк-состояние. */
   async function enableLiveSandbox() {
-    const hasStored = !!safeStorageGet(TBANK_TOKEN_STORE_KEY);
-    if (hasStored && !state.tbank.token) {
-      await ensureTbankTokenUnlocked({ interactive: false, openUi: false });
-    }
-    try {
-      const portfolio = state.tbank.selectedAccountId
-        ? await tbankRequest("OperationsService/GetPortfolio", {
+    await yieldToUi();
+    const depositFallback = (+$("vol-deposit")?.value || 0);
+    state.live.realPortfolioValue = state.live.portfolioValue ?? depositFallback;
+    if (state.tbank.token && state.tbank.selectedAccountId) {
+      try {
+        const portfolio = await tbankRequest("OperationsService/GetPortfolio", {
           accountId: state.tbank.selectedAccountId,
           currency: "RUB"
-        })
-        : null;
-      state.live.realPortfolioValue = portfolio
-        ? moneyValueRub(portfolio.totalAmountPortfolio)
-        : (+$("vol-deposit")?.value || 0);
-    } catch (_) {
-      state.live.realPortfolioValue = state.live.portfolioValue ?? (+$("vol-deposit")?.value || 0);
+        });
+        if (portfolio) {
+          state.live.realPortfolioValue = moneyValueRub(portfolio.totalAmountPortfolio);
+        }
+      } catch (_) {
+        state.live.realPortfolioValue = state.live.portfolioValue ?? depositFallback;
+      }
     }
+    await yieldToUi();
     const sb = ensureSandboxState();
     sb.startPortfolio = state.live.realPortfolioValue ?? 0;
     sb.cash = sb.startPortfolio;
@@ -4660,11 +4661,13 @@
     if (state.live.active) recordLiveModeRegionSwitch();
     if (on) {
         await enableLiveSandbox();
+        await yieldToUi();
         resetSandboxStopperWatch();
         state.live.lastError = "";
         if (state.live.active) {
           await resetLiveSessionPositionBaseline();
           await updateSandboxPortfolioDisplay();
+          await yieldToUi();
           try {
             await liveTradingReconcile();
           } catch (err) {
@@ -6614,6 +6617,14 @@ ${referenceBlock}
   /** Подключение T-Bank перед live-торговлей (токен, счёт, депозит). */
   async function connectTbankForLive() {
     if (!isLiveMode()) return;
+    if (isLiveSandbox()) {
+      await yieldToUi();
+      await enableLiveSandbox().catch((err) => {
+        noteLiveTech("connectTbankForLive-sandbox", err.message);
+      });
+      syncLiveTradingUi();
+      return;
+    }
     if (!(await ensureTbankTokenUnlocked({ interactive: true, openUi: true }))) return;
     if (!state.tbank.accounts.length) await loadTbankAccounts();
     else if (!state.tbank.depositLoaded) await loadTbankDeposit();
@@ -7220,7 +7231,11 @@ ${referenceBlock}
     state.accountMode = readAccountModeFromUi();
     saveConfig();
     if (state.accountMode === "tbank" || state.accountMode === "live") {
-      await connectTbankAndLoadDeposit({ interactive: true, openUi: true });
+      const sandbox = state.accountMode === "live" && !!$("live-sandbox-mode")?.checked;
+      await connectTbankAndLoadDeposit({
+        interactive: !sandbox,
+        openUi: !sandbox
+      });
       if (state.accountMode === "live") await connectTbankForLive();
     }
     syncAccountModeUi();

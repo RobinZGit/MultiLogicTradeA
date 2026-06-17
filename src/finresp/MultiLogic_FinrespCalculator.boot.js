@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-16-logic-help-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-tech-log-file-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -27,6 +27,54 @@
   const $ = (id) => document.getElementById(id);
   const IS_FILE_PROTOCOL = location.protocol === "file:";
   const TECH_LOG_MAX_ERRORS = 128;
+  const TECH_LOG_FILE_HOST = (() => {
+    try {
+      const h = location.hostname;
+      return h === "127.0.0.1" || h === "localhost";
+    } catch (_) {
+      return false;
+    }
+  })();
+  const TECH_LOG_FILE_URL = "http://127.0.0.1:4201/finresp-tech-log";
+  const TECH_LOG_FILE_REL = "logs/finresp-tech-log.txt";
+  let techLogFileTimer = null;
+
+  /** Локальный dev: снимок тех. информации в файл репозитория (через scripts/finresp-tech-log-server.mjs). */
+  function flushTechInfoToFile() {
+    if (!TECH_LOG_FILE_HOST) return;
+    techLogFileTimer = null;
+    let text;
+    try {
+      text = buildTechInfoText();
+    } catch (_) {
+      return;
+    }
+    const payload = JSON.stringify({
+      at: new Date().toISOString(),
+      lastEvent: techLog.lastEvent,
+      pageVersion: CALC_PAGE_VERSION,
+      url: location.href,
+      text
+    });
+    if (navigator.sendBeacon) {
+      try {
+        const blob = new Blob([payload], { type: "application/json" });
+        if (navigator.sendBeacon(TECH_LOG_FILE_URL, blob)) return;
+      } catch (_) { /* fetch fallback */ }
+    }
+    fetch(TECH_LOG_FILE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload,
+      keepalive: true
+    }).catch(() => { /* optional local sink */ });
+  }
+
+  function scheduleTechInfoFileSink() {
+    if (!TECH_LOG_FILE_HOST) return;
+    clearTimeout(techLogFileTimer);
+    techLogFileTimer = setTimeout(flushTechInfoToFile, 450);
+  }
 
   function bridgeSetResults(view) {
     const api = window.__mlFinrespBridge;
@@ -391,6 +439,7 @@
       `protocol=${location.protocol}`,
       `fileProtocol=${IS_FILE_PROTOCOL}`,
       `moexCorsBlocked=${IS_FILE_PROTOCOL}`,
+      `techLogFileSink=${TECH_LOG_FILE_HOST ? `local:${TECH_LOG_FILE_REL}` : "off"}`,
       `online=${navigator.onLine}`,
       `engineLoaded=${!!E}`,
       `createCandleCache=${!!E?.createCandleCache}`,
@@ -610,8 +659,16 @@
         `url=${location.href}`
       ].join("\n");
     }
+    scheduleTechInfoFileSink();
   }
   updateTechInfo("boot");
+
+  if (TECH_LOG_FILE_HOST) {
+    window.addEventListener("pagehide", () => {
+      clearTimeout(techLogFileTimer);
+      flushTechInfoToFile();
+    });
+  }
 
   window.addEventListener("error", (ev) => {
     const msg = `window.error: ${ev.message || ev.type} @ ${ev.filename || "?"}:${ev.lineno || "?"}`;
@@ -7457,7 +7514,17 @@ ${referenceBlock}
     applyUiLocks();
     syncAccountModeUi();
     const runLiveInit = async () => {
-      if (isTbankBackedMode()) {
+      const sandboxLive = isLiveMode() && !!$("live-sandbox-mode")?.checked;
+      if (sandboxLive) {
+        await yieldToUi();
+        await enableLiveSandbox().catch((err) => {
+          noteLiveTech("live-sandbox-init", err.message);
+        });
+        syncLiveTradingUi();
+        if (isTbankBackedMode()) {
+          void connectTbankAndLoadDeposit({ interactive: false, openUi: false }).catch(() => {});
+        }
+      } else if (isTbankBackedMode()) {
         const stored = !!safeStorageGet(TBANK_TOKEN_STORE_KEY);
         await connectTbankAndLoadDeposit({
           interactive: stored && !state.tbank.token,
@@ -7467,12 +7534,6 @@ ${referenceBlock}
       }
       if (isLiveMode()) {
         await refreshLiveManualLimitPrice({ force: true }).catch(() => {});
-        if ($("live-sandbox-mode")?.checked) {
-          await enableLiveSandbox().catch((err) => {
-            noteLiveTech("live-sandbox-init", err.message);
-          });
-          syncLiveTradingUi();
-        }
       }
       state._initOk = true;
       syncPageVersionBadge();

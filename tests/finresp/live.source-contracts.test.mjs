@@ -48,6 +48,19 @@ test('order book refresh shows loading and uses non-interactive token unlock', (
   assert.match(refreshBlock[0], /lastOrderBookRefreshMs/);
 });
 
+test('sandbox entry does not block on interactive T-Bank unlock', () => {
+  const liveSrc = fs.readFileSync(livePath, 'utf8');
+  const connectBlock = liveSrc.match(/async function connectTbankForLive\(\)[\s\S]*?^  \}/m);
+  assert.ok(connectBlock, 'connectTbankForLive');
+  assert.match(connectBlock[0], /if \(isLiveSandbox\(\)\)/);
+  const enableBlock = liveSrc.match(/async function enableLiveSandbox\(\)[\s\S]*?^  \}/m);
+  assert.ok(enableBlock, 'enableLiveSandbox');
+  assert.doesNotMatch(enableBlock[0], /ensureTbankTokenUnlocked\(\{ interactive: true/);
+  assert.match(liveSrc, /sandboxToggleBusy\) return false/);
+  const bootSrc = fs.readFileSync(bootPath, 'utf8');
+  assert.match(bootSrc, /sandboxLive\s*=\s*isLiveMode\(\)\s*&&\s*!!\$\("live-sandbox-mode"\)\?\.checked/);
+});
+
 test('order book panel toggle does not double-schedule refresh on open', () => {
   const src = fs.readFileSync(livePath, 'utf8');
   const toggleBlock = src.match(/live-order-book-panel[\s\S]*?stopLiveOrderBookPoll/);

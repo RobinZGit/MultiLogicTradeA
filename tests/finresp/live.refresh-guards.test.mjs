@@ -25,6 +25,11 @@ describe('liveRefreshMayProceed (зеркало live.js)', () => {
     assert.equal(liveRefreshMayProceed({ ...liveOn, tradingActionBusy: true, active: true }, false), true);
   });
 
+  it('блокирует опрос во время переключения песочницы', () => {
+    assert.equal(liveRefreshMayProceed({ ...liveOn, sandboxToggleBusy: true }, false), false);
+    assert.equal(liveRefreshMayProceed({ ...liveOn, sandboxToggleBusy: true, active: true }, true), false);
+  });
+
   it('блокирует вне live-режима или без chartSession', () => {
     assert.equal(liveRefreshMayProceed({ ...liveOn, isLiveMode: false }, false), false);
     assert.equal(liveRefreshMayProceed({ ...liveOn, chartSession: false }, false), false);
