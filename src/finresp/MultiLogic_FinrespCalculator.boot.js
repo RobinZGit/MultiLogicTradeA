@@ -3579,6 +3579,11 @@
       return;
     }
 
+    // Render a lightweight step chart from protocol events (no candles required).
+    try {
+      renderProtocolStepCharts(proto);
+    } catch (_) { /* ignore */ }
+
     // Apply metrics to UI as if a run happened.
     const agg = proto.agg || {};
     const perSec = proto.perSec.map((p) => ({
@@ -3642,6 +3647,89 @@
     } catch (err) {
       setCalcStatus(baseMsg + ` Графики восстановить не удалось: ${err.message}`);
     }
+  }
+
+  function renderProtocolStepCharts(proto) {
+    const box = $("calc-chart-equity");
+    if (!box) return;
+    const per = Array.isArray(proto?.perSec) ? proto.perSec : [];
+    if (!per.length) return;
+    const top = per.slice()
+      .sort((a, b) => Math.abs(+b.finresp || 0) - Math.abs(+a.finresp || 0))
+      .slice(0, 24);
+
+    const blocks = top.map((p) => protocolStepChartBlockHtml(p)).join("");
+    syncChartBox(box, `<div class="chart-equity-section">
+<p class="chart-equity-section-title">Протокол: ступенька по событиям (без свечей)</p>
+<p class="note" style="margin:.25rem 0 .65rem">Линия — equity по событиям сделок (cash + pos×price). Маркеры: вход/выход. Для свечей нажмите «Загрузить свечи по протоколу».</p>
+<div class="chart-equity-logic-scroll"><div class="chart-stack">${blocks}</div></div>
+</div>`);
+  }
+
+  function protocolStepChartBlockHtml(p) {
+    const ticker = normalizeProtocolTicker(p) || "?";
+    const ev = Array.isArray(p?.events) ? p.events : [];
+    // points: {x,y,kind}
+    const pts = [];
+    for (let i = 0; i < ev.length; i++) {
+      const e = ev[i] || {};
+      const cash = +e.cash;
+      const pos = +e.pos;
+      const price = +e.price;
+      if (!Number.isFinite(cash) || !Number.isFinite(pos) || !Number.isFinite(price)) continue;
+      const equity = cash + pos * price;
+      pts.push({
+        x: pts.length,
+        t: e.time || "",
+        eq: equity,
+        in: !!e.tradeIn,
+        out: !!e.tradeOut
+      });
+    }
+    if (!pts.length) {
+      return `<div class="chart-equity-logic"><div class="chart-mini-header">${ticker}<span class="note" style="margin-left:.5rem">нет событий</span></div></div>`;
+    }
+    const eqMin = Math.min(...pts.map((p) => p.eq));
+    const eqMax = Math.max(...pts.map((p) => p.eq));
+    const w = 560, h = 92, pad = 8;
+    const span = Math.max(1e-9, eqMax - eqMin);
+    const sx = (w - pad * 2) / Math.max(1, pts.length - 1);
+    const sy = (h - pad * 2) / span;
+    const yOf = (eq) => (h - pad) - (eq - eqMin) * sy;
+    const xOf = (i) => pad + i * sx;
+
+    // Step path (H then V).
+    let d = `M ${xOf(0).toFixed(2)} ${yOf(pts[0].eq).toFixed(2)}`;
+    for (let i = 1; i < pts.length; i++) {
+      const x = xOf(i).toFixed(2);
+      const yPrev = yOf(pts[i - 1].eq).toFixed(2);
+      const y = yOf(pts[i].eq).toFixed(2);
+      d += ` H ${x} V ${y}`;
+    }
+    const markers = pts.filter((p) => p.in || p.out).slice(-120).map((m) => {
+      const cx = xOf(m.x).toFixed(2);
+      const cy = yOf(m.eq).toFixed(2);
+      const fill = m.in ? "#16a34a" : "#dc2626";
+      const title = `${m.in ? "in" : "out"} · ${m.t} · eq=${fmt(m.eq, 0)} ₽`;
+      return `<circle cx="${cx}" cy="${cy}" r="2.7" fill="${fill}"><title>${escapeHtml(title)}</title></circle>`;
+    }).join("");
+    const fin = Number.isFinite(+p.finresp) ? `${fmt(+p.finresp)} ₽` : "—";
+    return `<div class="chart-equity-logic">
+  <div class="chart-mini-header">${ticker}<span class="note" style="margin-left:.5rem">FINRESP ${fin}</span></div>
+  <svg width="100%" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="display:block">
+    <path d="${d}" fill="none" stroke="#0f172a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"></path>
+    ${markers}
+  </svg>
+</div>`;
+  }
+
+  function escapeHtml(s) {
+    return String(s || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll("\"", "&quot;")
+      .replaceAll("'", "&#039;");
   }
 
   /** Payload каталога логик для экспорта (одна или все). */
@@ -7112,6 +7200,9 @@ ${referenceBlock}
   $("calc-restore-defaults")?.addEventListener("click", () => { restoreCalcDefaultsInteractive(); });
   $("calc-protocol-download")?.addEventListener("click", () => { downloadLastProtocol(); });
   $("calc-protocol-load")?.addEventListener("click", () => { $("calc-protocol-file-input")?.click(); });
+  $("calc-protocol-load-candles")?.addEventListener("click", () => {
+    loadCandlesForLoadedProtocol().catch((err) => setCalcStatus(`Протокол: загрузка свечей — ошибка: ${err.message}`));
+  });
   $("logic-catalog-file-input")?.addEventListener("change", async (ev) => {
     const file = ev.target.files?.[0];
     ev.target.value = "";
@@ -7142,6 +7233,55 @@ ${referenceBlock}
     if (!file) return;
     loadProtocolFromFileInput(file);
   });
+
+  async function loadCandlesForLoadedProtocol() {
+    const proto = state.loadedProtocol;
+    if (!proto || proto.format !== CALC_PROTOCOL_FORMAT) {
+      setCalcStatus("Сначала загрузите протокол (JSON).");
+      return;
+    }
+    if (state.uiBusy || isOptimizing()) {
+      setCalcStatus("Дождитесь окончания текущего расчёта/оптимизации.");
+      return;
+    }
+    if (IS_FILE_PROTOCOL) {
+      setCalcStatus("file://: загрузка свечей с MOEX заблокирована CORS. Запустите через run-dev.bat / run-prod.bat.");
+      return;
+    }
+
+    const tf = String(proto.calc?.tf || $("calc-tf")?.value || "60");
+    const from = String(proto.calc?.periodFrom || $("calc-from")?.value || "");
+    const till = String(proto.calc?.periodTill || $("calc-till")?.value || "");
+    if ($("calc-tf")) $("calc-tf").value = tf;
+    if ($("calc-from") && from) $("calc-from").value = from;
+    if ($("calc-till") && till) $("calc-till").value = till;
+
+    const tickers = (proto.perSec || []).map((p) => normalizeProtocolTicker(p)).filter(Boolean);
+    const secSel = $("calc-sec");
+    if (secSel && tickers.length) {
+      const set = new Set(tickers.map((t) => String(t).toUpperCase()));
+      for (const o of secSel.options) {
+        o.selected = set.has(String(o.value || "").toUpperCase());
+      }
+      syncSelectAllCheckboxes();
+      publishInstrumentSelectionFromDom();
+    }
+
+    const instruments = selectedInstruments();
+    if (!instruments.length) {
+      setCalcStatus("Протокол: не удалось сопоставить тикеры со списком MOEX в форме (calc-sec).");
+      return;
+    }
+
+    // Load packs into state.packs (cache first, then MOEX) without blocking UI.
+    setCalcStatus(`Протокол: загрузка свечей ${instruments.length} инстр. (${from || "?"} — ${till || "?"}, tf=${tf})…`);
+    await ensureInstrumentPacks(instruments, from, till, tf);
+    await yieldToUi();
+
+    setCalcStatus("Протокол: свечи загружены. Пересчёт FINRESP…");
+    await yieldToUi();
+    run();
+  }
   $("logic-lines")?.addEventListener("click", (ev) => {
     const helpBtn = ev.target?.closest?.("[data-help-logic]");
     if (helpBtn) {
