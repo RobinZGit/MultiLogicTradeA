@@ -3115,9 +3115,10 @@
 
   /** Текст справки по встроенной или пользовательской логике. */
   function logicHelpText(key) {
-    const meta = E.BUILTIN_META.find((m) => m.id === key || m.key === key);
-    if (meta?.helpText) return meta.helpText;
     const line = state.customLines?.[key] ?? E.DEFAULT_LOGIC_LINES?.[key] ?? "";
+    const auto = explainLogicLineShort(line);
+    const meta = E.BUILTIN_META.find((m) => m.id === key || m.key === key);
+    if (meta?.helpText) return meta.helpText + (auto ? `\n\n---\n\nКратко по формулам в строке:\n${auto}` : "");
     const note = line.match(/Note\(([^)]*)\)/)?.[1];
     if (note) {
       return [
@@ -3125,10 +3126,115 @@
         "",
         `Метка Note: ${note}`,
         "",
-        "Встроенная расшифровка формул не задана — смотрите строку Op/Cl и раздел «Справка» калькулятора."
+        "Встроенная расшифровка формул не задана — смотрите строку Op/Cl и раздел «Справка» калькулятора.",
+        ...(auto ? ["", "---", "", "Кратко по формулам в строке:", auto] : [])
       ].join("\n");
     }
-    return "Пользовательская или изменённая логика. Встроенное описание формул не задано — смотрите строку Op/Cl и раздел «Справка» калькулятора.";
+    return [
+      "Пользовательская или изменённая логика. Встроенное описание формул не задано — смотрите строку Op/Cl и раздел «Справка» калькулятора.",
+      ...(auto ? ["", "---", "", "Кратко по формулам в строке:", auto] : [])
+    ].join("\n");
+  }
+
+  function explainLogicLineShort(line) {
+    const src = String(line || "");
+    if (!src.trim()) return "";
+    const seen = new Set();
+    const out = [];
+    // KIND(params)(signal) — простой парсер для кратких подсказок в help (не заменяет AST).
+    const re = /([A-Za-z][A-Za-z0-9_.]*)\(([^()]*)\)\(([^()]*)\)/g;
+    let m;
+    while ((m = re.exec(src))) {
+      const kind = m[1];
+      const params = m[2];
+      const signal = m[3];
+      const key = `${kind}(${params})(${signal})`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const hint = atomHint(kind, params, signal);
+      if (hint) out.push(`- ${key} — ${hint}`);
+    }
+    return out.join("\n");
+  }
+
+  function atomHint(kind, params, signal) {
+    const k = String(kind || "");
+    const s = String(signal || "");
+    const p = String(params || "");
+    if (k === "SMA") {
+      if (s === "Ab") return "цена выше SMA";
+      if (s === "Bl") return "цена ниже SMA";
+      if (s === "Up") return "SMA растёт";
+      if (s === "Dn") return "SMA падает";
+      return "сигнал относительно SMA";
+    }
+    if (k === "CMA") {
+      if (s === "Ab") return "цена выше CMA";
+      if (s === "Bl") return "цена ниже CMA";
+      return "сигнал относительно CMA";
+    }
+    if (k === "LinReg") {
+      if (s === "AbUp") return "цена/канал в верхней зоне, тренд вверх";
+      if (s === "BlLo") return "цена/канал в нижней зоне, тренд вниз";
+      if (s === "AbLinK") return "выше верхней границы канала (центр + K×ATR)";
+      if (s === "BlLinK") return "ниже нижней границы канала (центр − K×ATR)";
+      if (s === "AbRegK") return "выше верхней границы дрейфующего канала";
+      if (s === "BlRegK") return "ниже нижней границы дрейфующего канала";
+      return "сигнал по линейной регрессии/каналу";
+    }
+    if (k === "ATR") {
+      if (s === "GrOk") return "волатильность/ATR растёт (есть движение)";
+      return "условие по ATR";
+    }
+    if (k === "Stoch" || k === "TotStoch") {
+      const name = k === "TotStoch" ? "TotStoch" : "Stoch";
+      if (/K<=\s*10/.test(s) || /K<=\s*20/.test(s)) return `${name}: перепроданность (низкие K)`;
+      if (/K>=\s*90/.test(s) || /K>=\s*80/.test(s)) return `${name}: перекупленность (высокие K)`;
+      return `${name}: условие по K/D`;
+    }
+    if (k === "CCI") {
+      if (/>=\s*100/.test(s)) return "CCI в сильной зоне тренда вверх";
+      if (/<=\s*-100/.test(s)) return "CCI в сильной зоне тренда вниз";
+      return "условие по CCI";
+    }
+    if (k === "MACD") {
+      if (s === "Macd>Sig") return "MACD выше сигнальной";
+      if (s === "Macd<Sig") return "MACD ниже сигнальной";
+      return "условие по MACD";
+    }
+    if (k === "Momentum") {
+      if (/>\s*0/.test(s)) return "импульс положительный";
+      if (/<\s*0/.test(s)) return "импульс отрицательный";
+      return "условие по Momentum";
+    }
+    if (k === "VWAP") {
+      if (s === "Ab") return "цена выше VWAP";
+      if (s === "Bl") return "цена ниже VWAP";
+      return "условие по VWAP";
+    }
+    if (k === "Bollinger") {
+      if (s === "AbUp") return "пробой/нахождение в верхней зоне Боллинджера";
+      if (s === "BlLo") return "пробой/нахождение в нижней зоне Боллинджера";
+      return "условие по Боллинджеру";
+    }
+    if (k === "Rand") {
+      if (s === "IsOk") return "случайный сигнал с вероятностью P";
+      return "случайный сигнал";
+    }
+    if (k === "OB.Imb") {
+      if (/BuyOk/.test(s)) return "дисбаланс bid/ask в пользу покупок";
+      if (/SellOk/.test(s)) return "дисбаланс bid/ask в пользу продаж";
+      return "дисбаланс стакана (imbalance)";
+    }
+    if (k === "OB.Spr") {
+      if (s === "Tight") return "спред достаточно узкий (<= Max)";
+      return "условие по спреду стакана";
+    }
+    if (k === "OB.Depth") {
+      if (s === "Liquid") return "достаточная ликвидность на глубине D (>= Min)";
+      return "условие по глубине/ликвидности стакана";
+    }
+    return "";
   }
 
   /** Показать диалог с расшифровкой логики. */

@@ -28,6 +28,13 @@
       <span class="calc-logic-chip-ord">{{ chip.order }}</span>
       <span class="calc-logic-chip-key">{{ chip.id }}</span>
       <span *ngIf="chip.name !== chip.id" class="calc-logic-chip-name">{{ chip.name }}</span>
+      <button
+        type="button"
+        class="calc-logic-chip-trash"
+        title="Убрать логику из выбора"
+        aria-label="Убрать логику из выбора"
+        (click)="removeChip($event, chip.id)"
+      >🗑</button>
     </span>
   </ng-container>
 </ng-template>

@@ -76,4 +76,17 @@ export class FinrespLogicsComponent implements OnInit, OnDestroy {
       this.closePicker(false);
     }
   }
+
+  removeChip(event: MouseEvent, id: string): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const removeId = String(id || '').trim();
+    if (!removeId) return;
+    const prev = [...this.logicIds.value];
+    const next = prev.filter((x) => x !== removeId);
+    if (next.length === prev.length) return;
+    const cleared = next.length === 0;
+    this.formService.applyLogicIds(next, cleared);
+    this.bridge.notifyLogicApplied();
+  }
 }
