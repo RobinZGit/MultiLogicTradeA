@@ -3546,12 +3546,102 @@
         const data = JSON.parse(text);
         if (!data || typeof data !== "object") throw new Error("not an object");
         state.loadedProtocol = data;
-        setCalcStatus(`Загружен протокол: ${data.format || "?"} · событий: ${data.eventsTotal ?? "?"}.`);
+        applyLoadedProtocol(data);
       } catch (err) {
         setCalcStatus(`Ошибка протокола JSON: ${err.message}`);
       }
     };
     reader.readAsText(file);
+  }
+
+  function protocolHasFullRows(proto) {
+    // v1 protocol stores only sparse `events` + `rowsCount`. For charts we need full close/time series.
+    // Consider it "full" only if at least one perSec has `rows` array.
+    return Array.isArray(proto?.perSec) && proto.perSec.some((p) => Array.isArray(p?.rows) && p.rows.length > 0);
+  }
+
+  function applyLoadedProtocol(proto) {
+    const fmtProto = proto?.format || "?";
+    if (!proto || typeof proto !== "object") {
+      setCalcStatus("Ошибка протокола: пустой объект.");
+      return;
+    }
+    if (fmtProto !== CALC_PROTOCOL_FORMAT) {
+      setCalcStatus(`Загружен протокол неизвестного формата: ${fmtProto}. Ожидался ${CALC_PROTOCOL_FORMAT}.`);
+      return;
+    }
+    if (!proto?.agg || typeof proto.agg !== "object") {
+      setCalcStatus(`Загружен протокол, но в нём нет agg (итогов). Нужно доработать экспорт протокола.`);
+      return;
+    }
+    if (!Array.isArray(proto?.perSec) || !proto.perSec.length) {
+      setCalcStatus(`Загружен протокол, но в нём нет perSec (детализации по инструментам). Нужно доработать экспорт протокола.`);
+      return;
+    }
+
+    // Apply metrics to UI as if a run happened.
+    const agg = proto.agg || {};
+    const perSec = proto.perSec.map((p) => ({
+      sec: normalizeProtocolTicker(p) || "?",
+      ticker: normalizeProtocolTicker(p) || "?",
+      finresp: p.finresp ?? null,
+      commission: p.commission ?? null,
+      // For protocol v1, we do not have full rows; keep events for drill-down / future use.
+      rows: [],
+      protocol: p
+    }));
+
+    const result = {
+      perSec,
+      agg,
+      preStopperAgg: agg,
+      stopper: { events: [] },
+      a: proto.window?.a ?? null,
+      b: proto.window?.b ?? null,
+      skipped: [],
+      finrespMode: "protocol"
+    };
+    state.lastResult = result;
+    state.lastProtocol = proto;
+    syncProtocolUi();
+
+    // Update results view.
+    const grossFin = (agg.finresp || 0) + (agg.commission || 0);
+    const winLen = proto.calc?.tf ? String(proto.window?.b ?? "—") : "—";
+    bridgeSetResults({
+      finrespText: `${fmt(agg.finresp)} ₽`,
+      finrespColor: agg.finresp < 0 ? "#b91c1c" : "#047857",
+      grossText: `${fmt(grossFin)} ₽`,
+      grossColor: grossFin < 0 ? "#b91c1c" : grossFin > 0 ? "#047857" : "",
+      commissionText: commissionDisplayText(agg.commission || 0),
+      commissionColor: "#b91c1c",
+      candleCount: String(proto.window?.b != null && proto.window?.a != null ? (proto.window.b - proto.window.a + 1) : "—"),
+      position: fmt(agg.pos, 4),
+      cash: `${fmt(agg.cash)} ₽`,
+      bySecText: formatBySec(agg.bySec) || "—",
+      annSimpleText: "—",
+      annSimpleColor: "",
+      annCompoundText: "—",
+      annCompoundColor: "",
+      annHintText: "Загружен протокол. Для % годовых и графиков нужны свечи/полные ряды."
+    });
+
+    const baseMsg = `Загружен протокол: ${fmtProto} · период ${proto.calc?.periodFrom || "?"} — ${proto.calc?.periodTill || "?"} · инстр.: ${perSec.length} · FINRESP Σ: ${fmt(agg.finresp)} ₽.`;
+    if (!protocolHasFullRows(proto)) {
+      setCalcStatus(
+        baseMsg
+        + " Протокол v1 содержит только события сделок (events), без полного ряда свечей/close по каждому бару — графики и пересчёт по барам восстановить нельзя. Нужно доработать протокол: добавить time+close (и лучше pos/cash) для каждой строки (rows) или компактный series."
+      );
+      return;
+    }
+
+    // If a future protocol version provides full rows, we can rebuild charts the same way as after calculate.
+    try {
+      applyResult(result, { redrawCharts: true, redrawChartsAsync: true, liveSession: false });
+      setCalcStatus(baseMsg + " Графики восстановлены из протокола.");
+    } catch (err) {
+      setCalcStatus(baseMsg + ` Графики восстановить не удалось: ${err.message}`);
+    }
   }
 
   /** Payload каталога логик для экспорта (одна или все). */
