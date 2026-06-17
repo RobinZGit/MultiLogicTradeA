@@ -2911,6 +2911,7 @@
     state.live.tradingActionBusy = false;
     state.live.reconcileBusy = false;
     state.live.chartsBootstrapBusy = false;
+    state.live.finrespBootstrapProgress = null;
     resetLiveTradingBusyFlags();
     state.live.lastError = reason
       ? String(reason)
@@ -4663,13 +4664,11 @@
       if (state.packs.length && !state.lastResult?.perSec?.length) {
         const quick = await tryLiveFinrespCalc({ silent: true, chartMode: true, ...ro });
         if (quick?.perSec?.length) {
-          const { perSec, stopper } = quick;
-          drawCharts(perSec, stopper, { liveSession: true });
-          refreshLiveEquityChartsUi();
+          queueLiveChartsRefresh();
           return true;
         }
       }
-      const ok = await refreshLiveCandleStream({ silent: true, redrawCharts: true, ...ro });
+      const ok = await refreshLiveCandleStream({ silent: true, redrawCharts: false, ...ro });
       if (state.lastResult?.perSec?.length) {
         if (!ok) refreshLiveChartsUi();
         return true;
@@ -7065,7 +7064,6 @@ ${referenceBlock}
     state.lastResult = null;
     if (isLiveSandbox()) resetSandboxStopperWatch();
     refreshLiveChartsUi();
-    void bootstrapLiveChartsSession({ reason: "session-start" });
     renderLiveFinResultStat();
     if (state.live.active) startLiveModePoll();
     return true;
@@ -7437,7 +7435,7 @@ ${referenceBlock}
     try {
     for (let pi = 0; pi < total; pi++) {
       if (ro.shouldCancel?.()) break;
-      if (pi > 0 && pi % 2 === 0) await yieldToUi();
+      await yieldToUi();
       const candles = state.packs[pi];
       const sec = candles?.[0]?.sec || "?";
       if (!candles?.length || candles.length < 3) {
@@ -7479,7 +7477,7 @@ ${referenceBlock}
         lastSell: +(last?.sell || 0)
       });
       state.live.finrespBootstrapProgress = { done: pi + 1, total };
-      if (pi > 0 && pi % 8 === 0) syncLiveTradingUi();
+      if (pi > 0 && pi % 4 === 0) syncLiveTradingUi({ skipPanels: true });
     }
     } finally {
       state.live.finrespBootstrapProgress = null;
@@ -7592,18 +7590,20 @@ ${referenceBlock}
     if (isLiveTradingSession()) {
       if (ro.chartMode) {
         pinLiveSessionEquityWindow();
-        let result = await calcResultAsync(null, ro);
-        noteLiveFinrespDiagnostics(result);
-        if (result?.perSec?.length) return { ...result, finrespMode: "window" };
         const tailChart = await calcLiveSignalsPerInstrument(ro);
         noteLiveFinrespDiagnostics(tailChart);
         if (tailChart?.perSec?.length) return tailChart;
+        if (state.live.active) return null;
+        let result = await calcResultAsync(null, ro);
+        noteLiveFinrespDiagnostics(result);
+        if (result?.perSec?.length) return { ...result, finrespMode: "window" };
         return null;
       }
       const tailResult = await calcLiveSignalsPerInstrument(ro);
       noteLiveFinrespDiagnostics(tailResult);
       pinLiveSessionEquityWindow();
       if (tailResult?.perSec?.length) return tailResult;
+      if (state.live.active) return null;
       let result = await calcResultAsync(null, ro);
       noteLiveFinrespDiagnostics(result);
       if (result?.perSec?.length) return { ...result, finrespMode: "window" };
@@ -7669,6 +7669,16 @@ ${referenceBlock}
     return state.live.candleRefreshPromise;
   }
 
+  /** Прогресс загрузки MOEX в live: не блокировать UI на десятках инструментов. */
+  function liveMoexLoadProgress() {
+    return async (done, total) => {
+      if (done === 1 || done === total || done % 3 === 0) {
+        syncLiveTradingUi({ skipPanels: true });
+      }
+      if (done % 2 === 0 || done === total) await yieldToUi();
+    };
+  }
+
   async function refreshLiveCandleStreamInner(options) {
     const opts = options || {};
     if (!isLiveMode() || !state.live.chartSession) return false;
@@ -7687,6 +7697,7 @@ ${referenceBlock}
       const byKey = packsByInstrumentKey(state.packs);
       const candleSource = resolveLiveCandleSource();
       let refreshed;
+      const moexProgress = liveMoexLoadProgress();
       if (candleSource === "broker" || candleSource === "tbank") {
         if (!state.packs.length) {
           if (IS_FILE_PROTOCOL) {
@@ -7700,7 +7711,8 @@ ${referenceBlock}
               till,
               interval,
               byKey,
-              state.candleCache || null
+              state.candleCache || null,
+              moexProgress
             );
             refreshed = await refreshLiveTbankTail(instruments, from, till, interval, moexBoot.byKey);
             refreshed.failures = [...(moexBoot.failures || []), ...(refreshed.failures || [])];
@@ -7719,7 +7731,8 @@ ${referenceBlock}
           till,
           interval,
           byKey,
-          state.candleCache || null
+          state.candleCache || null,
+          moexProgress
         );
         state.live.candleSource = "moex";
       }
@@ -7764,12 +7777,17 @@ ${referenceBlock}
         ? liveFinrespPartialMessage(result.perSec.length, skipN)
         : "";
       await yieldToUi();
+      const redrawCharts = !opts.silent && opts.redrawCharts !== false;
       applyResult(state.lastResult, {
-        redrawCharts: opts.redrawCharts !== false,
+        redrawCharts,
         redrawChartsAsync: true,
         liveSession: true,
         silent: !!opts.silent
       });
+      if (opts.silent && redrawCharts === false) queueLiveChartsRefresh();
+      if (state.live.active && liveFinrespReady() && !state.live.tradingActionBusy) {
+        await liveTradingReconcile();
+      }
       checkLiveTradingGoal();
       syncLiveTradingUi();
       return true;

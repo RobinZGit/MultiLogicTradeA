@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-live-no-calc-required-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-live-ui-responsive-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -7133,8 +7133,9 @@ ${referenceBlock}
     }
     if (opts.redrawCharts !== false) {
       const chartOpts = { liveSession };
+      const chartYield = async () => { await yieldToUi(); };
       if (opts.redrawChartsAsync) {
-        void drawCharts(perSec, stopper, chartOpts);
+        void drawCharts(perSec, stopper, chartOpts, chartYield);
         void drawEquityChartsAsync(a, b, chartOpts);
       } else {
         drawCharts(perSec, stopper, chartOpts);
