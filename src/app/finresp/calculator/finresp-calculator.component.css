@@ -588,6 +588,20 @@ body.calc-running .live-trading-panel--active .live-trading-toolbar{
 }
 .live-logics-badge-detail ol{margin:.15rem 0 0;padding-left:1.15rem;}
 .live-logics-badge-detail li{margin:.12rem 0;}
+.live-logics-badge-detail .live-logic-picked-row{display:flex;align-items:center;justify-content:space-between;gap:.45rem;}
+.live-logics-badge-detail .live-logic-picked-label{min-width:0;overflow:hidden;text-overflow:ellipsis;}
+.live-logics-badge-detail .live-logic-picked-trash{
+  flex:0 0 auto;
+  padding:.1rem .28rem;
+  border:1px solid #fecaca;
+  border-radius:6px;
+  background:#fff;
+  color:#991b1b;
+  font-size:.9rem;
+  line-height:1;
+  cursor:pointer;
+}
+.live-logics-badge-detail .live-logic-picked-trash:hover{background:#fef2f2;}
 .live-logics-badge-detail .live-logics-badge-empty{margin:0;color:var(--muted);}
 .live-trading-panel--sandbox .live-logics-badge{background:#166534;}
 .live-trading-panel--sandbox .live-logics-badge-detail{border-color:#166534;}

@@ -3741,9 +3741,8 @@
     }
     const items = ids.map((id, i) => {
       const name = logicDisplayName(id);
-      return name === id
-        ? `<li><strong>${id}</strong></li>`
-        : `<li><strong>${id}</strong> — ${name}</li>`;
+      const label = name === id ? `<strong>${id}</strong>` : `<strong>${id}</strong> — ${name}`;
+      return `<li class="live-logic-picked-row"><span class="live-logic-picked-label">${label}</span><button type="button" class="live-logic-picked-trash" data-live-remove-logic="${id}" title="Убрать логику из выбора" aria-label="Убрать логику из выбора">🗑</button></li>`;
     }).join("");
     return `<p style="margin:0 0 .25rem;font-weight:600">Выбрано ${ids.length} (порядок приоритета):</p><ol>${items}</ol>`;
   }
@@ -3761,6 +3760,26 @@
     if (summary) summary.title = ids.length
       ? `${short}. Клик — полный список.`
       : "Логики не выбраны. Клик — подсказка.";
+  }
+
+  /** Удалить одну логику из текущего выбора (live badge). */
+  function removeSelectedLogicId(id) {
+    const removeId = String(id || "").trim();
+    if (!removeId) return;
+    const prev = selectedLogicIds();
+    const next = prev.filter((x) => x !== removeId);
+    if (next.length === prev.length) return;
+    const cleared = next.length === 0;
+    state.logicSelectionCleared = cleared;
+    if (bridgeApplyLogicSelection(next, cleared)) return;
+    const sel = $("calc-logic");
+    if (sel) {
+      const set = new Set(next);
+      [...sel.options].forEach((o) => { o.selected = set.has(o.value); });
+    }
+    syncLogicSelectedHint();
+    saveConfig();
+    invalidateFormChange();
   }
 
   /** Процедура: цветные чипы выбранных логик (свёрнутый вид). */
@@ -6707,6 +6726,13 @@ ${referenceBlock}
   if (livePanel && !livePanel.dataset.liveCriticalBound) {
     livePanel.dataset.liveCriticalBound = "1";
     livePanel.addEventListener("click", (e) => {
+      const removeLogicBtn = e.target?.closest?.("[data-live-remove-logic]");
+      if (removeLogicBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        removeSelectedLogicId(removeLogicBtn.getAttribute("data-live-remove-logic"));
+        return;
+      }
       const toggleBtn = e.target?.closest?.("#live-trading-toggle");
       if (toggleBtn) {
         e.preventDefault();
