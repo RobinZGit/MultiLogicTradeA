@@ -379,3 +379,38 @@ test('trade protocol export: blob preview, not SPA protocol html url', () => {
   assert.match(block, /window\.open\(url/);
   assert.match(liveSrc, /function buildProtocolOpenLots/);
 });
+
+test('logic pause equity decor on per-logic charts', () => {
+  const bootSrc = fs.readFileSync(bootPath, 'utf8');
+  assert.match(bootSrc, /function logicPauseDecorForRows/);
+  assert.match(bootSrc, /mode:\s*"logic_pause"/);
+  assert.match(bootSrc, /logic-pause-start/);
+  assert.match(bootSrc, /redrawEquityChartsFromCache/);
+  const liveSrc = fs.readFileSync(livePath, 'utf8');
+  assert.match(liveSrc, /mode === "logic_pause"/);
+  assert.match(liveSrc, /Логика отключена/);
+});
+
+test('trade protocol: sessionEvents journal and HTML section', () => {
+  const liveSrc = fs.readFileSync(livePath, 'utf8');
+  const renderPath = path.join(root, 'src', 'finresp', 'MultiLogic_TradeHistoryProtocol.render.js');
+  const renderSrc = fs.readFileSync(renderPath, 'utf8');
+  assert.match(liveSrc, /function recordLogicSessionEvent/);
+  assert.match(liveSrc, /sessionEvents/);
+  assert.match(liveSrc, /tradeHistoryProtocolSessionEventRow/);
+  assert.match(liveSrc, /buildLiveSessionPayload/);
+  assert.doesNotMatch(
+    liveSrc.match(/async function exportTradeHistoryProtocolFile\(\)[\s\S]*?^  \}/m)?.[0] || '',
+    /ensureTbankTokenUnlocked/
+  );
+  assert.match(renderSrc, /renderSessionEvents/);
+  assert.match(renderSrc, /Логики: включения и отключения/);
+});
+
+test('sandbox start: async auto-reverses and yield to avoid UI freeze', () => {
+  const liveSrc = fs.readFileSync(livePath, 'utf8');
+  assert.match(liveSrc, /async function runSandboxAutoReversesCheck/);
+  assert.match(liveSrc, /runMultiAsync/);
+  assert.match(liveSrc, /rebuildSandboxFromLedgerAsync/);
+  assert.match(liveSrc, /yieldToUi/);
+});

@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-18-protocol-export-blob-v11";
+  const CALC_PAGE_VERSION = "2026-06-18-help-tests-v12";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
