@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-18-perlogic-perf-v21";
+  const CALC_PAGE_VERSION = "2026-06-18-equity-pause-hints-v22";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -6617,26 +6617,29 @@
   }
 
   /** События паузы @@PauseOnDrawdown для одной логики (расчёт + live-журнал). */
+  function logicPauseTimelineEventAffects(logicKey, evLogicKey, cfg) {
+    if (!selectedLogicIds().includes(logicKey)) return false;
+    if (cfg.perLogic) return evLogicKey === logicKey;
+    return true;
+  }
+
   function logicPauseTimelineEvents(logicKey) {
     const out = [];
     const cfg = recoveryStopConfig();
-    const affects = (evKey, portfolioWide) => {
-      if (!selectedLogicIds().includes(logicKey)) return false;
-      if (portfolioWide || !cfg.perLogic) return true;
-      return evKey === logicKey;
-    };
     for (const ev of state.lastResult?.recoveryStop?.events || []) {
-      if (ev.kind === "pause" && affects(ev.logicKey, !ev.logicKey)) {
+      if (ev.kind === "pause" && logicPauseTimelineEventAffects(logicKey, ev.logicKey, cfg)) {
         out.push({ edge: "start", time: ev.time, ms: parseMoexTime(ev.time)?.getTime() });
-      } else if (ev.kind === "resume" && affects(ev.logicKey, !ev.logicKey)) {
+      } else if (ev.kind === "resume" && logicPauseTimelineEventAffects(logicKey, ev.logicKey, cfg)) {
         out.push({ edge: "end", time: ev.time, ms: parseMoexTime(ev.time)?.getTime() });
       }
     }
     if (isLiveMode()) {
       for (const se of state.live.sessionEvents || []) {
         if (se.kind && se.kind !== "logic") continue;
-        if (se.scope === "logic" && se.logicKey !== logicKey) continue;
-        if (se.scope === "portfolio" && !selectedLogicIds().includes(logicKey)) continue;
+        if (cfg.perLogic) {
+          if (se.scope !== "logic" || se.logicKey !== logicKey) continue;
+        } else if (se.scope === "logic" && se.logicKey !== logicKey) continue;
+        else if (se.scope === "portfolio" && !selectedLogicIds().includes(logicKey)) continue;
         const ms = parseMoexTime(se.when)?.getTime();
         if (!Number.isFinite(ms)) continue;
         if (se.action === "disable") out.push({ edge: "start", time: se.when, ms });
@@ -6659,19 +6662,19 @@
   /** Белые полосы и линии на equity-графике логики: периоды отключения (просадка / live). */
   function logicPauseDecorForRows(rows, logicKey) {
     if (!rows?.length || !logicKey) {
-      return { modeRegions: [], vLines: [], logicPauseOverlays: [], hasLogicPause: false };
+      return { modeRegions: [], vLines: [], logicPauseOverlays: [], hasLogicPause: false, hasLogicActive: false };
     }
     const events = logicPauseTimelineEvents(logicKey);
-    const modeRegions = [];
+    const pauseIntervals = [];
     const vLines = [];
     const logicPauseOverlays = [];
     let openIdx = null;
     let openEq = null;
     const closeInterval = (endIdx) => {
       if (openIdx == null || endIdx < openIdx) return;
-      modeRegions.push({ fromIdx: openIdx, toIdx: endIdx, mode: "logic_pause" });
-      vLines.push({ idx: openIdx, kind: "logic-pause-start", label: `${logicKey}: отключена` });
-      vLines.push({ idx: endIdx, kind: "logic-pause-end", label: `${logicKey}: включена` });
+      pauseIntervals.push({ fromIdx: openIdx, toIdx: endIdx });
+      vLines.push({ idx: openIdx, kind: "logic-pause-start", label: `${logicKey}: логика отключена` });
+      vLines.push({ idx: endIdx, kind: "logic-pause-end", label: `${logicKey}: логика включена` });
       if (Number.isFinite(openEq)) {
         logicPauseOverlays.push({ fromIdx: openIdx, toIdx: endIdx, eq: openEq });
       }
@@ -6693,11 +6696,29 @@
       }
     }
     if (openIdx != null) closeInterval(rows.length - 1);
+
+    const modeRegions = [];
+    let cursor = 0;
+    for (const { fromIdx, toIdx } of pauseIntervals) {
+      if (fromIdx > cursor) {
+        modeRegions.push({ fromIdx: cursor, toIdx: fromIdx - 1, mode: "logic_active" });
+      }
+      modeRegions.push({ fromIdx, toIdx, mode: "logic_pause" });
+      cursor = toIdx + 1;
+    }
+    if (cursor < rows.length) {
+      modeRegions.push({ fromIdx: cursor, toIdx: rows.length - 1, mode: "logic_active" });
+    }
+    if (!pauseIntervals.length) {
+      modeRegions.push({ fromIdx: 0, toIdx: rows.length - 1, mode: "logic_active" });
+    }
+
     return {
       modeRegions,
       vLines,
       logicPauseOverlays,
-      hasLogicPause: modeRegions.length > 0
+      hasLogicPause: pauseIntervals.length > 0,
+      hasLogicActive: modeRegions.some((r) => r.mode === "logic_active")
     };
   }
 
@@ -7517,8 +7538,10 @@ ${rects}
       ? " · фиолетовая — смена логик/комиссии/индикаторов"
       : "";
     const pauseLegend = decor.hasLogicPause || (decor.modeRegions || []).some((r) => r.mode === "logic_pause")
-      ? " · белая полоса — логика отключена (просадка)"
-      : "";
+      ? " · зелёная область — логика включена · белая полоса — отключена (просадка)"
+      : (decor.hasLogicActive || (decor.modeRegions || []).some((r) => r.mode === "logic_active")
+        ? " · зелёная область — логика включена"
+        : "");
     const modeLegend = (decor.modeRegions || []).some((r) => r.mode === "sandbox" || r.mode === "real")
       ? " · зелёная область — песочница · розовая — реальная торговля"
       : "";
@@ -7869,8 +7892,10 @@ ${svg}
       faded: !selected,
       chartTitleLines: logicChartTitleLines(key, selected),
       caption: pauseDecor.hasLogicPause
-        ? "Белая полоса — логика отключена (@@PauseOnDrawdown); пунктир — уровень equity на момент отключения"
-        : undefined
+        ? "Зелёная область — логика включена · белая полоса — отключена (@@PauseOnDrawdown); пунктир — equity на момент отключения"
+        : (pauseDecor.hasLogicActive
+          ? "Логика включена на всём окне (наведите на зелёную область)"
+          : undefined)
     };
     const fin = rows.at(-1).eq;
     const lineColor = selected ? equityLogicColor(key) : undefined;

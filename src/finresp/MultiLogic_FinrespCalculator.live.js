@@ -8751,7 +8751,11 @@ ${referenceBlock}
   /** Цветные полосы режимов (live/sandbox/stopped) и паузы логики на графике. */
   function buildModeRegionBands(rows, modeRegions, x, top, bottom) {
     if (!modeRegions?.length) return "";
-    return modeRegions.map(({ fromIdx, toIdx, mode }) => {
+    const sorted = [...modeRegions].sort((a, b) => {
+      const rank = (m) => (m === "logic_active" ? 0 : m === "logic_pause" ? 1 : 2);
+      return rank(a.mode) - rank(b.mode);
+    });
+    return sorted.map(({ fromIdx, toIdx, mode }) => {
       const x0 = x(fromIdx);
       const x1 = x(toIdx);
       let fill = "#fef2f2";
@@ -8762,6 +8766,11 @@ ${referenceBlock}
         fill = "#ecfdf5";
         stroke = "#bbf7d0";
         title = "Песочница (фейк)";
+      } else if (mode === "logic_active") {
+        fill = "#f0fdf4";
+        stroke = "#bbf7d0";
+        title = "Логика включена";
+        opacity = "0.42";
       } else if (mode === "logic_pause") {
         fill = "#ffffff";
         stroke = "#cbd5e1";
