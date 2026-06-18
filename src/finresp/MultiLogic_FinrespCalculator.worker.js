@@ -43,6 +43,8 @@
   imp("logics/ftt_s.js");
   imp("logics/cml.js");
   imp("logics/cms.js");
+  imp("logics/pik.js");
+  imp("logics/pikh.js");
   imp("orderbook/_eval.js");
   imp("logics/ob_sma.js");
   imp("logics/ob_only.js");

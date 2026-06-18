@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-18-equity-reuse-v23";
+  const CALC_PAGE_VERSION = "2026-06-18-instruments-picker-unlock-v28";
   const CHART_ENRICH_LIGHT_MIN_INSTRUMENTS = 16;
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
@@ -177,6 +177,20 @@
     if (!api || typeof api.applyLogicSelection !== "function") return false;
     try {
       api.applyLogicSelection(ids, !!cleared);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  function bridgeApplyDateFields() {
+    const api = bridgeApi();
+    if (!api || typeof api.applyDateFields !== "function") return false;
+    try {
+      api.applyDateFields(
+        $("calc-from")?.value || "",
+        $("calc-till")?.value || "",
+        $("calc-month")?.value || ""
+      );
       return true;
     } catch (_) {
       return false;
@@ -361,6 +375,9 @@
       updatePositionSlHint();
       syncLogicSelectedHint();
       invalidateFormChange();
+    });
+    api.registerInstrumentAppliedHandler?.(() => {
+      onSecSelectionChanged();
     });
   }
   function commissionDisplayText(commission) {
@@ -898,6 +915,16 @@
       lines.push("errors:");
       lines.push(...techLog.errors.map((e) => `  ${e}`));
     }
+    lines.push("--- cycles ---");
+    lines.push(...cycleTechLines());
+    if (calcState?.runCheckpoint) {
+      const rc = calcState.runCheckpoint;
+      lines.push(
+        `runCheckpoint=phase:${rc.phase || "—"} done:${rc.done ?? "—"}/${rc.total ?? "—"} sec:${rc.lastSec || "—"} candle:${rc.lastCandleTime || "—"}`
+      );
+    } else {
+      lines.push("runCheckpoint=—");
+    }
     return lines.join("\n");
   }
 
@@ -920,6 +947,7 @@
     }
     scheduleTechInfoFileSink();
   }
+  initCycleCooperative();
   updateTechInfo("boot");
 
   if (TECH_LOG_FILE_HOST) {
@@ -2245,6 +2273,7 @@
     const till = $("calc-till").value;
     if (!from || !till || from.slice(0, 7) !== till.slice(0, 7)) {
       month.value = "";
+      bridgeApplyDateFields();
       return;
     }
 
@@ -2257,6 +2286,7 @@
     month.value = from === formatDay(monthFrom) && till === formatDay(monthTill)
       ? from.slice(0, 7)
       : "";
+    bridgeApplyDateFields();
   }
 
   /** Применение настроек/результата: `applyMonthSelection`. */
@@ -2411,6 +2441,9 @@
     get resolveEffectiveCalcLogicSpec() { return resolveEffectiveCalcLogicSpec; },
     get calcResultAsync() { return calcResultAsync; },
     get yieldToUi() { return yieldToUi; },
+    get cycleBegin() { return cycleBegin; },
+    get cycleBeat() { return cycleBeat; },
+    get cycleEnd() { return cycleEnd; },
     get syncChartBox() { return syncChartBox; },
     get invalidateFinrespResult() { return invalidateFinrespResult; },
     get invalidateFormChange() { return invalidateFormChange; },
@@ -3258,6 +3291,44 @@
     return new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
   }
 
+  function cycleCoopApi() {
+    return window.MultiLogicFinrespCycleCoop;
+  }
+
+  function cycleBegin(id, meta) {
+    cycleCoopApi()?.beginCycle(id, meta);
+  }
+
+  async function cycleBeat(partial) {
+    const CC = cycleCoopApi();
+    if (CC) await CC.cycleBeat(partial);
+    else await yieldToUi();
+  }
+
+  function cycleEnd(result) {
+    const CC = cycleCoopApi();
+    return CC ? CC.endCycle(result) : null;
+  }
+
+  function cycleTechLines() {
+    const CC = cycleCoopApi();
+    return CC ? CC.buildTechLines() : ["activeCycle=—", "cycleCoop=missing"];
+  }
+
+  function initCycleCooperative() {
+    if (initCycleCooperative._done) return;
+    initCycleCooperative._done = true;
+    const CC = cycleCoopApi();
+    if (!CC) return;
+    CC.install({
+      warnMs: 3000,
+      hungMs: 8000,
+      yieldMs: 14,
+      techRefreshMs: 2000,
+      onTechRefresh: () => updateTechInfo("cycle-cooperative")
+    });
+  }
+
   /** Подпрограмма `mapLoadProgressPct`. */
   function mapLoadProgressPct(done, total) {
     const t = Math.max(1, +total || 1);
@@ -3493,6 +3564,7 @@
       stopBtn.disabled = !lock;
     }
     document.querySelectorAll(CALC_LOCK_SELECTOR).forEach((el) => {
+      if (el.closest("#calc-logic-picker")) return;
       if (lock) {
         if (el.dataset.calcLockPrev == null) el.dataset.calcLockPrev = el.disabled ? "1" : "0";
         el.disabled = true;
@@ -4176,6 +4248,7 @@
 
   const DEFAULT_LOGIC_LINE_KEYS = [
     "RND", "TBC", "UT", "UCT", "L5", "L1", "L2", "L3", "L4", "CML", "CMS",
+    "PIK", "PIKH",
     "sma_below", "sma_above", "sma_corridor_trend", "sma_corridor_anti",
     "OB_SMA", "OB_ONLY"
   ];
@@ -5348,19 +5421,18 @@
 
   /** Обновить признак «отключена просадкой» на чипах логик (Angular + fallback DOM). */
   function syncLogicChipDrawdownState() {
-    bridgeSetFormCatalog({ logicDrawdownDisabledIds: drawdownDisabledLogicIds() });
-    const api = bridgeApi();
-    if (api?.refreshLogicChips) {
-      api.refreshLogicChips();
-    } else {
-      renderLogicSelectedChips();
-    }
+    renderLogicSelectedChips();
     if (state.lastEquityChartCtx) redrawEquityChartsFromCache();
   }
 
   /** Процедура: цветные чипы выбранных логик (свёрнутый вид). */
   function renderLogicSelectedChips() {
     bridgeSetFormCatalog({ logicDrawdownDisabledIds: drawdownDisabledLogicIds() });
+    const api = bridgeApi();
+    if (api?.refreshLogicChips) {
+      api.refreshLogicChips();
+      return;
+    }
     if (bridgeApplyLogicSelection(selectedLogicIds(), state.logicSelectionCleared)) return;
     const chipsEl = $("calc-logic-chips");
     const collapsed = $("calc-logic-picker-collapsed");
@@ -8118,13 +8190,13 @@ ${referenceBlock}
 
   /** Асинхронное построение equity-графиков с прогрессом. */
   async function drawEquityChartsAsync(a, b, drawOpts, onProgress) {
-    const data = await calcLogicEquityRunsAsync(a, b, (i, n, key) => {
-      if (onProgress) onProgress("calc", i, n, key);
+    const data = await calcLogicEquityRunsAsync(a, b, async (i, n, key) => {
+      if (onProgress) await Promise.resolve(onProgress("calc", i, n, key));
     });
     if (!data) return;
     await yieldToUi();
-    await renderEquityChartsFromDataAsync(a, b, data, drawOpts, (i, n, key) => {
-      if (onProgress) onProgress("render", i, n, key);
+    await renderEquityChartsFromDataAsync(a, b, data, drawOpts, async (i, n, key) => {
+      if (onProgress) await Promise.resolve(onProgress("render", i, n, key));
     });
   }
 
@@ -8225,8 +8297,7 @@ ${referenceBlock}
     for (let ei = 0; ei < entries.length; ei++) {
       const entry = entries[ei];
       if (onProgress) {
-        const sec = entry.sec || entry.row?.sec || "";
-        onProgress(ei, entries.length, sec);
+        await Promise.resolve(onProgress(ei, entries.length, sec));
       }
       if (entry.kind === "fail") {
         const failEl = document.createElement("div");
@@ -8617,6 +8688,7 @@ ${referenceBlock}
     if (isOptimizing()) stopOptim();
     state.runBusyOwner = runGen;
     setBusy(true);
+    cycleBegin("calc-run", { instruments: instruments.length, bulkMode: !!bulkMode });
     state.lastInstruments = instruments.map((i) => ({ sec: i.sec, market: i.market }));
     const periodNarrowed = enforceDateRange("till", instruments.length);
     const from = $("calc-from").value;
@@ -8653,6 +8725,7 @@ ${referenceBlock}
         const pct = mapLoadProgressPct(done, total);
         const src = meta?.fromCache ? "кэш" : "MOEX";
         trackRunCheckpoint({ phase: "load", done, total, sec });
+        void cycleBeat({ phase: "load", i: done, total, sec, src: groupLabel });
         setCalcProgress(`Идёт загрузка цен MOEX (${groupLabel}, ${src}): ${sec}`, pct);
       }, shouldCancel);
       if (await finishIfCancelled(loadedData)) return;
@@ -8680,7 +8753,7 @@ ${referenceBlock}
       }
       saveWindowAnchor();
       setCalcProgress("Загрузка цен завершена · расчёт FINRESP", CALC_PROGRESS.FINRESP_START);
-      await yieldToUi();
+      await cycleBeat({ phase: "finresp", note: "start" });
       let result;
       try {
         result = await calcResultAsync(null, { shouldCancel });
@@ -8715,14 +8788,16 @@ ${referenceBlock}
         applyResult(result, { redrawCharts: false, liveSession: false });
         const { a: ra, b: rb, perSec, stopper } = result;
         setCalcProgress("Графики по инструментам…", CALC_PROGRESS.CHARTS_START);
-        await yieldToUi();
-        await drawCharts(perSec, stopper, {}, (i, n, sec) => {
+        await cycleBeat({ phase: "charts", note: "instruments-start" });
+        await drawCharts(perSec, stopper, {}, async (i, n, sec) => {
+          await cycleBeat({ phase: "charts", i: i + 1, total: n, sec });
           setCalcProgress(
             `График ${sec} (${i + 1}/${n})`,
             mapInstrumentChartProgressPct(i + 1, n)
           );
         });
-        await drawEquityChartsAsync(ra, rb, {}, (phase, i, n, key) => {
+        await drawEquityChartsAsync(ra, rb, {}, async (phase, i, n, key) => {
+          await cycleBeat({ phase: `equity-${phase}`, i: i + 1, total: n, sec: key });
           const label = phase === "render" ? "Equity график" : "Equity расчёт";
           setCalcProgress(
             `${label}: ${key} (${i + 1}/${n})`,
@@ -8761,6 +8836,7 @@ ${referenceBlock}
         await scrollResultsIntoView();
       }
       if (runGen === state.runGeneration) updateTechInfo("run-finished");
+      cycleEnd({ ok: runGen === state.runGeneration && !state.runCancelRequested });
     }
   }
 
@@ -8964,8 +9040,8 @@ ${referenceBlock}
   if (!bridgeApi()?.setFormCatalog) {
     $("calc-sec-all-shares").addEventListener("change", () => onMarketCheckboxChange("shares", "calc-sec-all-shares"));
     $("calc-sec-all-futures").addEventListener("change", () => onMarketCheckboxChange("futures", "calc-sec-all-futures"));
+    $("calc-sec").addEventListener("change", onSecSelectionChanged);
   }
-  $("calc-sec").addEventListener("change", onSecSelectionChanged);
   $("prefix-pick-stocks").addEventListener("click", () => {
     reloadShareList();
     saveConfig();
@@ -9137,29 +9213,31 @@ ${referenceBlock}
       if (!state.live.candleRefreshBusy) void refreshLiveCandleStream({ silent: true });
     } else if (state.packs.length) invalidateFinrespResult();
   });
-  $("calc-month").addEventListener("change", () => {
-    applyMonthSelection();
-    saveConfig();
-    if (state.packs.length) invalidateFinrespResult();
-  });
-  $("calc-from").addEventListener("change", () => {
-    state.userDateRangeTouched = true;
-    enforceDateRange("from");
-    clearWindowAnchor();
-    syncMonthInputFromDates();
-    updateDateHint(selectedInstrumentCount());
-    saveConfig();
-    if (state.packs.length) invalidateFinrespResult();
-  });
-  $("calc-till").addEventListener("change", () => {
-    state.userDateRangeTouched = true;
-    enforceDateRange("till");
-    clearWindowAnchor();
-    syncMonthInputFromDates();
-    updateDateHint(selectedInstrumentCount());
-    saveConfig();
-    if (state.packs.length) invalidateFinrespResult();
-  });
+  if (!bridgeApi()?.setFormCatalog) {
+    $("calc-month").addEventListener("change", () => {
+      applyMonthSelection();
+      saveConfig();
+      if (state.packs.length) invalidateFinrespResult();
+    });
+    $("calc-from").addEventListener("change", () => {
+      state.userDateRangeTouched = true;
+      enforceDateRange("from");
+      clearWindowAnchor();
+      syncMonthInputFromDates();
+      updateDateHint(selectedInstrumentCount());
+      saveConfig();
+      if (state.packs.length) invalidateFinrespResult();
+    });
+    $("calc-till").addEventListener("change", () => {
+      state.userDateRangeTouched = true;
+      enforceDateRange("till");
+      clearWindowAnchor();
+      syncMonthInputFromDates();
+      updateDateHint(selectedInstrumentCount());
+      saveConfig();
+      if (state.packs.length) invalidateFinrespResult();
+    });
+  }
   $("calc-start").addEventListener("input", () => {
     state.movedSlider = "start";
     saveWindowAnchor();
@@ -9338,6 +9416,26 @@ ${referenceBlock}
       if (modal) modal.hidden = true;
     }
     updateTechInfo("manual-unstick");
+  };
+  window.__mlFinresp.applyMonthSelectionFromValue = (monthValue) => {
+    const monthEl = $("calc-month");
+    if (monthEl && monthValue != null) monthEl.value = String(monthValue);
+    applyMonthSelection();
+    return {
+      from: $("calc-from")?.value || "",
+      till: $("calc-till")?.value || "",
+      month: $("calc-month")?.value || ""
+    };
+  };
+  window.__mlFinresp.enforceUserDateRange = (anchor) => {
+    state.userDateRangeTouched = true;
+    enforceDateRange(anchor === "from" ? "from" : "till");
+    clearWindowAnchor();
+    updateDateHint(selectedInstrumentCount());
+  };
+  window.__mlFinresp.onUserDateFieldsChanged = () => {
+    saveConfig();
+    if (state.packs.length) invalidateFinrespResult();
   };
   finalizeAngularFormFromConfig();
   installBridgeWindowHandler();

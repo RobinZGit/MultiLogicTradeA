@@ -37,6 +37,7 @@ export class FinrespFormService implements OnDestroy {
   private instrumentMarket = new Map<string, 'shares' | 'futures'>();
   private logicSelectionCleared = false;
   private syncingWindow = false;
+  private syncingDates = false;
   private subs: Subscription[] = [];
 
   constructor(
@@ -53,10 +54,16 @@ export class FinrespFormService implements OnDestroy {
     this.bridge.registerApplyInstruments((ids) => this.applyInstrumentIds(ids));
     this.bridge.registerApplyLogics((ids, cleared) => this.applyLogicIds(ids, cleared));
     this.bridge.registerLogicChipsRefresh(() => this.refreshLogicChips());
+    this.bridge.registerApplyDateFields((from, till, month) =>
+      this.applyDateFields(from, till, month),
+    );
     this.bridge.registerWindowSync((view) => this.syncWindowFromBridge(view));
 
     this.subs.push(
-      this.form.valueChanges.subscribe(() => this.pushScalarsToDom()),
+      this.form.controls.timeframe.valueChanges.subscribe(() => this.onTimeframeChange()),
+      this.form.controls.month.valueChanges.subscribe((month) => this.onUserMonthChange(month)),
+      this.form.controls.from.valueChanges.subscribe(() => this.onUserFromTillChange('from')),
+      this.form.controls.till.valueChanges.subscribe(() => this.onUserFromTillChange('till')),
       this.accountMode.valueChanges.subscribe(() => {
         const domAlreadyMatched = !this.pushAccountModeToDom();
         if (domAlreadyMatched) {
@@ -65,8 +72,8 @@ export class FinrespFormService implements OnDestroy {
       }),
       this.form.controls.instrumentIds.valueChanges.subscribe(() => {
         this.pushInstrumentsToDom();
-        this.refreshLogicChips();
         window.__mlFinresp?.persistInstrumentSelection?.();
+        this.bridge.notifyInstrumentApplied();
       }),
       this.form.controls.logicIds.valueChanges.subscribe(() => {
         this.pushLogicsToDom();
@@ -85,9 +92,7 @@ export class FinrespFormService implements OnDestroy {
   }
 
   bindLegacyDomListeners(): void {
-    const sec = document.getElementById('calc-sec');
     const logic = document.getElementById('calc-logic');
-    sec?.addEventListener('change', () => this.syncInstrumentsFromDom());
     logic?.addEventListener('change', () => this.syncLogicsFromDom());
   }
 
@@ -99,13 +104,23 @@ export class FinrespFormService implements OnDestroy {
   }
 
   applyInstrumentIds(ids: string[]): void {
+    const cur = this.form.controls.instrumentIds.value;
+    if (this.sameIdList(cur, ids)) {
+      return;
+    }
     this.form.controls.instrumentIds.setValue([...ids], { emitEvent: true });
   }
 
   applyLogicIds(ids: string[], cleared = false): void {
+    const cur = this.form.controls.logicIds.value;
+    const same =
+      this.logicSelectionCleared === cleared && this.sameIdList(cur, ids);
     this.logicSelectionCleared = cleared;
+    if (same) {
+      this.refreshLogicChips();
+      return;
+    }
     this.form.controls.logicIds.setValue([...ids], { emitEvent: true });
-    this.refreshLogicChips();
   }
 
   setLogicSelectionCleared(cleared: boolean): void {
@@ -152,7 +167,6 @@ export class FinrespFormService implements OnDestroy {
     this.pushInstrumentsToDom();
     this.pushLogicsToDom();
     this.refreshLogicChips();
-    window.__mlFinrespBridge?.refreshLogicChips?.();
   }
 
   /** Перед записью config: Angular → скрытые DOM-зеркала, без затирания из пустого select. */
@@ -278,6 +292,12 @@ export class FinrespFormService implements OnDestroy {
         drawdownDisabled,
       };
     });
+    if (
+      catalog.logicSelectionCleared === this.logicSelectionCleared &&
+      this.logicChipsEqual(catalog.logicChips, chips)
+    ) {
+      return;
+    }
     this.bridge.formCatalog$.next({
       ...catalog,
       logicChips: chips,
@@ -285,14 +305,80 @@ export class FinrespFormService implements OnDestroy {
     });
   }
 
+  private logicChipsEqual(a: FinrespLogicChipView[], b: FinrespLogicChipView[]): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      const x = a[i];
+      const y = b[i];
+      if (
+        x.id !== y.id ||
+        x.name !== y.name ||
+        x.color !== y.color ||
+        x.order !== y.order ||
+        x.obProfile !== y.obProfile ||
+        x.requiresOrderBook !== y.requiresOrderBook ||
+        x.drawdownDisabled !== y.drawdownDisabled
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   private pushScalarsToDom(): void {
     const v = this.form.getRawValue();
-    this.setValue('calc-tf', v.timeframe);
-    this.setValue('calc-month', v.month);
-    this.setValue('calc-from', v.from);
-    this.setValue('calc-till', v.till);
+    this.setDomValueSilent('calc-tf', v.timeframe);
+    this.setDomValueSilent('calc-month', v.month);
+    this.setDomValueSilent('calc-from', v.from);
+    this.setDomValueSilent('calc-till', v.till);
     this.pushInstrumentsToDom();
     this.pushLogicsToDom();
+  }
+
+  applyDateFields(from: string, till: string, month?: string): void {
+    this.syncingDates = true;
+    const patch: { from: string; till: string; month?: string } = { from, till };
+    if (month !== undefined) {
+      patch.month = month;
+    }
+    this.form.patchValue(patch, { emitEvent: false });
+    this.setDomValueSilent('calc-from', from);
+    this.setDomValueSilent('calc-till', till);
+    if (month !== undefined) {
+      this.setDomValueSilent('calc-month', month);
+    }
+    this.syncingDates = false;
+  }
+
+  private onTimeframeChange(): void {
+    const tf = this.form.controls.timeframe.value;
+    const el = document.getElementById('calc-tf') as HTMLSelectElement | null;
+    if (el && el.value !== tf) {
+      el.value = tf;
+    }
+    el?.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  private onUserMonthChange(month: string): void {
+    if (this.syncingDates || !month) {
+      return;
+    }
+    const apply = window.__mlFinresp?.applyMonthSelectionFromValue;
+    if (!apply) {
+      return;
+    }
+    apply(month);
+    window.__mlFinresp?.onUserDateFieldsChanged?.();
+  }
+
+  private onUserFromTillChange(anchor: 'from' | 'till'): void {
+    if (this.syncingDates) {
+      return;
+    }
+    this.setDomValueSilent('calc-from', this.form.controls.from.value);
+    this.setDomValueSilent('calc-till', this.form.controls.till.value);
+    window.__mlFinresp?.enforceUserDateRange?.(anchor);
+    window.__mlFinresp?.onUserDateFieldsChanged?.();
   }
 
   private normalizeAccountMode(mode: string): 'paper' | 'live' {
@@ -333,19 +419,48 @@ export class FinrespFormService implements OnDestroy {
   }
 
   private pushInstrumentsToDom(): void {
-    this.setMultiSelect('calc-sec', this.form.controls.instrumentIds.value);
+    const ids = this.form.controls.instrumentIds.value;
+    this.setMultiSelect('calc-sec', ids, { emitChange: false });
+    this.syncInstrumentVisibleSelect(ids);
+  }
+
+  private syncInstrumentVisibleSelect(ids: string[]): void {
+    const el = document.getElementById('calc-sec-visible') as HTMLSelectElement | null;
+    if (!el) {
+      return;
+    }
+    const set = new Set(ids);
+    for (const opt of Array.from(el.options)) {
+      opt.selected = set.has(opt.value);
+    }
   }
 
   private pushLogicsToDom(): void {
-    this.setMultiSelect('calc-logic', this.form.controls.logicIds.value);
-  }
-
-  private syncInstrumentsFromDom(): void {
-    this.form.controls.instrumentIds.setValue(this.readMultiSelect('calc-sec'), { emitEvent: true });
+    const ids = this.form.controls.logicIds.value;
+    this.setMultiSelect('calc-logic', ids);
+    const pickerOpen = document
+      .getElementById('calc-logic-picker')
+      ?.classList.contains('calc-logic-picker--open');
+    if (!pickerOpen) {
+      this.setMultiSelect('calc-logic-visible', ids);
+    }
   }
 
   private syncLogicsFromDom(): void {
-    this.form.controls.logicIds.setValue(this.readMultiSelect('calc-logic'), { emitEvent: true });
+    const next = this.readMultiSelect('calc-logic');
+    const cur = this.form.controls.logicIds.value;
+    if (this.sameIdList(cur, next)) {
+      return;
+    }
+    this.form.controls.logicIds.setValue(next, { emitEvent: true });
+  }
+
+  private sameIdList(a: string[], b: string[]): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) return false;
+    }
+    return true;
   }
 
   private readMultiSelect(id: string): string[] {
@@ -356,7 +471,7 @@ export class FinrespFormService implements OnDestroy {
     return Array.from(el.selectedOptions).map((o) => o.value);
   }
 
-  private setMultiSelect(id: string, values: string[]): void {
+  private setMultiSelect(id: string, values: string[], opts?: { emitChange?: boolean }): void {
     const el = document.getElementById(id) as HTMLSelectElement | null;
     if (!el) {
       return;
@@ -370,7 +485,7 @@ export class FinrespFormService implements OnDestroy {
         changed = true;
       }
     }
-    if (changed) {
+    if (changed && opts?.emitChange !== false) {
       el.dispatchEvent(new Event('change', { bubbles: true }));
     }
   }
@@ -384,6 +499,16 @@ export class FinrespFormService implements OnDestroy {
     if (el.value !== next) {
       el.value = next;
       el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
+
+  private setDomValueSilent(id: string, value: string): void {
+    const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+    if (!el) {
+      return;
+    }
+    if (el.value !== value) {
+      el.value = value;
     }
   }
 

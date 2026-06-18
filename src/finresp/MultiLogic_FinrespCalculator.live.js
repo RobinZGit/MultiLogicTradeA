@@ -116,6 +116,12 @@
     const resolveEffectiveCalcLogicSpec = (...a) => d.resolveEffectiveCalcLogicSpec(...a);
     const calcResultAsync = (...a) => d.calcResultAsync(...a);
     const yieldToUi = (...a) => d.yieldToUi(...a);
+    const cycleBegin = (...a) => d.cycleBegin?.(...a);
+    const cycleBeat = async (...a) => {
+      if (d.cycleBeat) return d.cycleBeat(...a);
+      return yieldToUi();
+    };
+    const cycleEnd = (...a) => d.cycleEnd?.(...a);
     const syncChartBox = (...a) => d.syncChartBox(...a);
     const invalidateFinrespResult = (...a) => d.invalidateFinrespResult(...a);
     const invalidateFormChange = (...a) => d.invalidateFormChange(...a);
@@ -3042,14 +3048,16 @@
     if (!isTradeHistoryPanelOpen()) return;
     if (state.live.journalPanelBusy) return;
     state.live.journalPanelBusy = true;
+    cycleBegin("live-journal-panel");
     try {
-      await yieldToUi();
+      await cycleBeat({ phase: "sync-start" });
       await syncTradeHistoryFromSourcesAsync({ force: true });
-      await yieldToUi();
+      await cycleBeat({ phase: "paint" });
       await paintTradeHistoryPanelDom();
     } finally {
       state.live.journalPanelBusy = false;
       state.live.lastJournalPanelRenderMs = Date.now();
+      cycleEnd({ ok: true });
       updateTechInfo("live-journal-panel");
     }
   }
@@ -3106,7 +3114,7 @@
         activeBlock = '<tr class="live-trade-history-subhead"><td colspan="12">Текущие заявки (не исполнены полностью)</td></tr>';
         for (let i = 0; i < active.length; i++) {
           activeBlock += renderTradeHistoryRow(active[i]);
-          if (i > 0 && i % PANEL_RENDER_CHUNK_ROWS === 0) await yieldToUi();
+          if (i > 0 && i % PANEL_RENDER_CHUNK_ROWS === 0) await cycleBeat({ phase: "rows-active", i, total: active.length });
         }
       }
       let doneBlock = "";
@@ -3114,7 +3122,7 @@
         if (active.length) doneBlock = '<tr class="live-trade-history-subhead"><td colspan="12">Исполненные и завершённые</td></tr>';
         for (let i = 0; i < done.length; i++) {
           doneBlock += renderTradeHistoryRow(done[i]);
-          if (i > 0 && i % PANEL_RENDER_CHUNK_ROWS === 0) await yieldToUi();
+          if (i > 0 && i % PANEL_RENDER_CHUNK_ROWS === 0) await cycleBeat({ phase: "rows-done", i, total: done.length });
         }
       }
       const tableHtml = `<table><thead><tr><th></th><th>Тикер</th><th>Сторона</th><th>Тип / сумма</th><th>Лоты</th><th>Статус</th><th>FINRESPΔ</th><th>Комиссия buy</th><th>Комиссия sell</th><th>Источник</th><th>Режим</th><th>Время</th></tr></thead><tbody>${activeBlock}${doneBlock}</tbody></table>`;
@@ -9219,11 +9227,11 @@ ${referenceBlock}
 
   /** Прогресс загрузки MOEX в live: не блокировать UI на десятках инструментов. */
   function liveMoexLoadProgress() {
-    return async (done, total) => {
+    return async (done, total, sec) => {
       if (done === 1 || done === total || done % 3 === 0) {
         syncLiveTradingUi({ skipPanels: true });
       }
-      if (done % 2 === 0 || done === total) await yieldToUi();
+      await cycleBeat({ phase: "moex-load", i: done, total, sec: sec || "" });
     };
   }
 
@@ -9236,10 +9244,12 @@ ${referenceBlock}
     const instruments = selectedInstruments();
     if (!instruments.length) return false;
     state.live.candleRefreshBusy = true;
+    cycleBegin("live-candle-refresh", { instruments: instruments.length });
     syncLiveTradingUi({ skipPanels: true });
     updateTechInfo("live-candles-start");
     const refreshT0 = performance.now();
-    await yieldToUi();
+    let refreshOk = false;
+    await cycleBeat({ phase: "start" });
     try {
       const { from, till, interval } = liveCandleStreamRange(instruments);
       const byKey = packsByInstrumentKey(state.packs);
@@ -9341,6 +9351,7 @@ ${referenceBlock}
       }
       checkLiveTradingGoal();
       syncLiveTradingUi();
+      refreshOk = true;
       return true;
     } catch (err) {
       state.live.lastError = err.message;
@@ -9350,6 +9361,7 @@ ${referenceBlock}
     } finally {
       state.live.lastCandleRefreshMs = Math.round(performance.now() - refreshT0);
       state.live.candleRefreshBusy = false;
+      cycleEnd({ ok: refreshOk, ms: state.live.lastCandleRefreshMs });
       syncLiveTradingUi();
       updateTechInfo("live-candles-done");
     }

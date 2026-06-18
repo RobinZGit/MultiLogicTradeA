@@ -1,10 +1,11 @@
-import { ChangeDetectorRef, Component, OnDestroy, OnInit, ViewEncapsulation } from '@angular/core';
+import { Component, OnDestroy, OnInit, ViewEncapsulation } from '@angular/core';
 import { Subscription } from 'rxjs';
 import { FinrespBridgeService } from '../../../finresp-bridge.service';
 import { FinrespFormService } from '../../../finresp-form.service';
 import {
   EMPTY_FINRESP_FORM_CATALOG,
   FinrespFormCatalogViewModel,
+  FinrespInstrumentOption,
 } from '../../../models/finresp-ui.models';
 
 @Component({
@@ -21,19 +22,21 @@ export class FinrespInstrumentsComponent implements OnInit, OnDestroy {
   constructor(
     private readonly bridge: FinrespBridgeService,
     private readonly formService: FinrespFormService,
-    private readonly cdr: ChangeDetectorRef,
   ) {}
 
   ngOnInit(): void {
     this.sub = this.bridge.formCatalog$.subscribe((value) => {
+      const optionsChanged = value.instrumentOptions !== this.catalog.instrumentOptions;
       this.catalog = value;
-      this.formService.setInstrumentOptions(value.instrumentOptions);
+      if (optionsChanged) {
+        this.formService.setInstrumentOptions(value.instrumentOptions);
+        queueMicrotask(() => this.syncVisibleSelect(this.selectedIds()));
+      }
       this.syncMarketCheckboxes();
-      this.cdr.markForCheck();
     });
     this.idsSub = this.formService.form.controls.instrumentIds.valueChanges.subscribe(() => {
+      this.syncVisibleSelect(this.selectedIds());
       this.syncMarketCheckboxes();
-      this.cdr.markForCheck();
     });
   }
 
@@ -70,8 +73,8 @@ export class FinrespInstrumentsComponent implements OnInit, OnDestroy {
     return this.formService.form.controls.instrumentIds.value;
   }
 
-  isSelected(id: string): boolean {
-    return this.selectedIds().includes(id);
+  trackInstrumentOption(_index: number, opt: FinrespInstrumentOption): string {
+    return opt.id;
   }
 
   onVisibleChange(event: Event): void {
@@ -94,5 +97,15 @@ export class FinrespInstrumentsComponent implements OnInit, OnDestroy {
       }
     }
     this.formService.applyInstrumentIds([...current]);
+  }
+
+  /** Нативный multiple-select: без [selected] в шаблоне — иначе Angular сбрасывает клики. */
+  private syncVisibleSelect(ids: string[]): void {
+    const el = document.getElementById('calc-sec-visible') as HTMLSelectElement | null;
+    if (!el) return;
+    const set = new Set(ids);
+    for (const opt of Array.from(el.options)) {
+      opt.selected = set.has(opt.value);
+    }
   }
 }

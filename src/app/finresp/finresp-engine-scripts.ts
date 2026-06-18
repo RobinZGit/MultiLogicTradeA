@@ -38,6 +38,8 @@ export const FINRESP_ENGINE_SCRIPTS = [
   'logics/ftt_s.js',
   'logics/cml.js',
   'logics/cms.js',
+  'logics/pik.js',
+  'logics/pikh.js',
   'orderbook/_eval.js',
   'logics/ob_sma.js',
   'logics/ob_only.js',
@@ -56,6 +58,7 @@ export const FINRESP_ENGINE_SCRIPTS = [
 
 export const FINRESP_BOOTSTRAP_SCRIPTS = [
   'MultiLogic_FinrespCalculator.preboot.js',
+  'MultiLogic_FinrespCalculator.cycle-cooperative.js',
   'MultiLogic_FinrespCalculator.boot.js',
   'MultiLogic_FinrespCalculator.fallback.js',
 ] as const;

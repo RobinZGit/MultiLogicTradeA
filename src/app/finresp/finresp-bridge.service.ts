@@ -32,11 +32,13 @@ export interface FinrespBridgeApi {
   applyInstrumentSelection: (ids: string[]) => void;
   applyLogicSelection: (ids: string[], cleared?: boolean) => void;
   applyFormSnapshot: (snapshot: Partial<FinrespFormValues>) => void;
+  applyDateFields: (from: string, till: string, month?: string) => void;
   prepareForConfigPersist: () => FinrespFormValues;
   registerWindowHandler: (
     handler: (which: 'start' | 'end', start: number, end: number) => void,
   ) => void;
   registerLogicAppliedHandler: (handler: () => void) => void;
+  registerInstrumentAppliedHandler: (handler: () => void) => void;
   registerLogicChipsRefresh: (handler: () => void) => void;
   refreshLogicChips: () => void;
   syncFormFromDom: () => void;
@@ -70,11 +72,15 @@ export class FinrespBridgeService {
   private applyLogicsHandler: ((ids: string[], cleared?: boolean) => void) | null = null;
   private applyFormSnapshotHandler: ((snapshot: Partial<FinrespFormValues>) => void) | null =
     null;
+  private applyDateFieldsHandler:
+    | ((from: string, till: string, month?: string) => void)
+    | null = null;
   private prepareForConfigPersistHandler: (() => FinrespFormValues) | null = null;
   private windowInputHandler:
     | ((which: 'start' | 'end', start: number, end: number) => void)
     | null = null;
   private logicAppliedHandler: (() => void) | null = null;
+  private instrumentAppliedHandler: (() => void) | null = null;
   private logicChipsRefreshHandler: (() => void) | null = null;
   private windowSyncHandler: ((view: FinrespWindowViewModel) => void) | null = null;
 
@@ -97,6 +103,8 @@ export class FinrespBridgeService {
         this.ngZone.run(() => this.applyLogicsHandler?.(ids, cleared)),
       applyFormSnapshot: (snapshot) =>
         this.ngZone.run(() => this.applyFormSnapshotHandler?.(snapshot)),
+      applyDateFields: (from, till, month) =>
+        this.ngZone.run(() => this.applyDateFieldsHandler?.(from, till, month)),
       prepareForConfigPersist: () =>
         this.ngZone.run(() => this.prepareForConfigPersistHandler?.() ?? this.emptyFormSnapshot()),
       registerWindowHandler: (handler) => {
@@ -105,6 +113,9 @@ export class FinrespBridgeService {
       },
       registerLogicAppliedHandler: (handler) => {
         this.logicAppliedHandler = () => this.ngZone.run(() => handler());
+      },
+      registerInstrumentAppliedHandler: (handler) => {
+        this.instrumentAppliedHandler = () => this.ngZone.run(() => handler());
       },
       registerLogicChipsRefresh: (handler) => {
         this.logicChipsRefreshHandler = () => this.ngZone.run(() => handler());
@@ -147,6 +158,12 @@ export class FinrespBridgeService {
     this.applyFormSnapshotHandler = handler;
   }
 
+  registerApplyDateFields(
+    handler: (from: string, till: string, month?: string) => void,
+  ): void {
+    this.applyDateFieldsHandler = handler;
+  }
+
   registerPrepareForConfigPersist(handler: () => FinrespFormValues): void {
     this.prepareForConfigPersistHandler = handler;
   }
@@ -167,6 +184,10 @@ export class FinrespBridgeService {
 
   notifyLogicApplied(): void {
     this.logicAppliedHandler?.();
+  }
+
+  notifyInstrumentApplied(): void {
+    this.instrumentAppliedHandler?.();
   }
 
   registerLogicChipsRefresh(handler: () => void): void {

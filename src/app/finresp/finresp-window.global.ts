@@ -13,6 +13,13 @@ export interface MlFinrespGlobal {
   deferBrokerConnect?: boolean;
   saveConfig?: () => void;
   unstickUi?: (reason?: string) => void;
+  applyMonthSelectionFromValue?: (month: string) => {
+    from: string;
+    till: string;
+    month: string;
+  };
+  enforceUserDateRange?: (anchor?: 'from' | 'till') => void;
+  onUserDateFieldsChanged?: () => void;
 }
 
 declare global {

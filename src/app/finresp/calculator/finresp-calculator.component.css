@@ -475,11 +475,10 @@ body.calc-running .live-trading-panel--active .live-trading-toolbar{
 .calc-logic-chip--ob{border-style:dashed;}
 .calc-logic-chip--ob-only{font-style:italic;}
 .calc-logic-chip--drawdown-disabled{
-  opacity:.58;
+  opacity:.78;
   border-style:dashed;
   border-color:#cbd5e1;
   background:#f8fafc;
-  filter:grayscale(.4);
 }
 .calc-logic-chip--drawdown-disabled .calc-logic-chip-ord{background:#94a3b8;}
 .calc-logic-chip--drawdown-disabled .calc-logic-chip-key,
@@ -494,7 +493,19 @@ body.calc-running .live-trading-panel--active .live-trading-toolbar{
 .calc-logic-opt--drawdown-disabled{color:#94a3b8!important;font-style:italic;}
 .calc-logic-opt--ob{color:#0d9488;font-weight:600;}
 .calc-logic-opt--ob-only{color:#0369a1;font-style:italic;font-weight:600;}
-.calc-logic-picker-edit{margin-left:auto;font-size:.8rem;color:var(--muted);font-weight:600;white-space:nowrap;}
+.calc-logic-picker-edit{
+  margin-left:auto;
+  padding:.2rem .45rem;
+  border:none;
+  border-radius:6px;
+  background:transparent;
+  font-size:.8rem;
+  color:#2563eb;
+  font-weight:600;
+  white-space:nowrap;
+  cursor:pointer;
+}
+.calc-logic-picker-edit:hover{background:#eff6ff;}
 .calc-logic-picker-panel{margin-top:.45rem;padding:.55rem .65rem;border:2px solid #93c5fd;border-radius:10px;background:#fff;}
 .calc-logic-picker-panel[hidden]{display:none!important;}
 .calc-logic-picker-panel-hint{margin:0 0 .4rem;font-size:.82rem;color:var(--muted);line-height:1.4;}

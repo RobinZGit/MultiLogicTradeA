@@ -13,7 +13,7 @@
   [disabled]="catalog.instrumentsDisabled"
   (change)="onVisibleChange($event)"
 >
-<option *ngFor="let opt of catalog.instrumentOptions" [value]="opt.id" [selected]="isSelected(opt.id)">{{ opt.id }}</option>
+<option *ngFor="let opt of catalog.instrumentOptions; trackBy: trackInstrumentOption" [value]="opt.id">{{ opt.id }}</option>
 </select>
 <select id="calc-sec" multiple size="8" hidden aria-hidden="true" tabindex="-1"></select>
 <p class="calc-sec-hint" id="calc-sec-hint">{{ catalog.secHintText }}</p>

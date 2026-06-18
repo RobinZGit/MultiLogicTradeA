@@ -5,6 +5,7 @@ import { FinrespFormService } from '../../../finresp-form.service';
 import {
   EMPTY_FINRESP_FORM_CATALOG,
   FinrespFormCatalogViewModel,
+  FinrespLogicOption,
 } from '../../../models/finresp-ui.models';
 
 @Component({
@@ -18,6 +19,7 @@ export class FinrespLogicsComponent implements OnInit, OnDestroy {
   catalog: FinrespFormCatalogViewModel = { ...EMPTY_FINRESP_FORM_CATALOG };
   pickerOpen = false;
   draftIds: string[] = [];
+  drawdownDisabledSet = new Set<string>();
 
   private sub?: Subscription;
 
@@ -27,8 +29,18 @@ export class FinrespLogicsComponent implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit(): void {
+    this.syncDrawdownSet(this.catalog.logicDrawdownDisabledIds);
     this.sub = this.bridge.formCatalog$.subscribe((value) => {
+      const optionsChanged = value.logicOptions !== this.catalog.logicOptions;
+      const drawdownChanged =
+        value.logicDrawdownDisabledIds !== this.catalog.logicDrawdownDisabledIds;
       this.catalog = value;
+      if (drawdownChanged) {
+        this.syncDrawdownSet(value.logicDrawdownDisabledIds);
+      }
+      if (this.pickerOpen && optionsChanged) {
+        queueMicrotask(() => this.syncVisibleSelect(this.draftIds));
+      }
     });
   }
 
@@ -36,7 +48,12 @@ export class FinrespLogicsComponent implements OnInit, OnDestroy {
     this.sub?.unsubscribe();
   }
 
-  openPicker(): void {
+  openPicker(event?: Event): void {
+    event?.stopPropagation();
+    event?.preventDefault();
+    if (this.pickerOpen) {
+      return;
+    }
     this.draftIds = [...this.logicIds.value];
     this.pickerOpen = true;
     const picker = document.getElementById('calc-logic-picker');
@@ -45,6 +62,11 @@ export class FinrespLogicsComponent implements OnInit, OnDestroy {
     picker?.classList.add('calc-logic-picker--open');
     if (panel) panel.hidden = false;
     collapsed?.setAttribute('aria-expanded', 'true');
+    queueMicrotask(() => {
+      this.syncVisibleSelect(this.draftIds);
+      const visible = document.getElementById('calc-logic-visible') as HTMLSelectElement | null;
+      visible?.focus();
+    });
   }
 
   closePicker(apply: boolean): void {
@@ -67,10 +89,32 @@ export class FinrespLogicsComponent implements OnInit, OnDestroy {
     this.draftIds = Array.from(el.selectedOptions).map((o) => o.value);
   }
 
+  trackLogicOption(_index: number, opt: FinrespLogicOption): string {
+    return opt.id;
+  }
+
+  isDrawdownDisabled(id: string): boolean {
+    return this.drawdownDisabledSet.has(id);
+  }
+
+  /** Нативный multiple-select: без [selected] в шаблоне — иначе Angular сбрасывает клики. */
+  private syncVisibleSelect(ids: string[]): void {
+    const el = document.getElementById('calc-logic-visible') as HTMLSelectElement | null;
+    if (!el) return;
+    const set = new Set(ids);
+    for (const opt of Array.from(el.options)) {
+      opt.selected = set.has(opt.value);
+    }
+  }
+
+  private syncDrawdownSet(ids: string[] | undefined): void {
+    this.drawdownDisabledSet = new Set(ids || []);
+  }
+
   onCollapsedKeydown(event: KeyboardEvent): void {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      this.openPicker();
+      this.openPicker(event);
     }
     if (event.key === 'Escape' && this.pickerOpen) {
       this.closePicker(false);

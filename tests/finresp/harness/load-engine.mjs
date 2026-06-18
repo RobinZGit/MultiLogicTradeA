@@ -50,6 +50,8 @@ const LOGIC_SCRIPTS = [
   'ftt_s.js',
   'cml.js',
   'cms.js',
+  'pik.js',
+  'pikh.js',
   join('..', 'orderbook', '_eval.js'),
   'ob_sma.js',
   'ob_only.js',
