@@ -10533,8 +10533,7 @@ ${referenceBlock}
 
   /** Подпрограмма `initAccountMode`. */
   function initAccountMode() {
-    $("account-mode").value = "paper";
-    state.accountMode = "paper";
+    state.accountMode = readAccountModeFromUi();
     setTbankHostId(safeStorageGet(TBANK_HOST_STORE_KEY) || "tinkoff");
     state.tbank.selectedAccountId = safeStorageGet(TBANK_ACCOUNT_STORE_KEY);
     state.alor.portfolioId = safeStorageGet(ALOR_PORTFOLIO_STORE_KEY);

@@ -13,16 +13,16 @@
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
   window.__mlFinresp.persistInstrumentSelection = () => {
-    if (state?.restoringConfig) return;
+    if (state?.restoringConfig || state?.deferConfigSave) return;
     syncSelectAllCheckboxes();
     saveConfig();
   };
   window.__mlFinresp.persistLogicSelection = () => {
-    if (state?.restoringConfig) return;
+    if (state?.restoringConfig || state?.deferConfigSave) return;
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-18-ann-pct-cap-v14";
+  const CALC_PAGE_VERSION = "2026-06-18-boot-restore-v15";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -981,6 +981,7 @@
     runBusyOwner: null,
     uiBusy: false,
     restoringConfig: false,
+    deferConfigSave: true,
     restoredSelectedInstruments: [],
     restoredInstrumentSelectAll: null,
     restoredLogicIds: null,
@@ -1422,7 +1423,7 @@
 
   /** Сохранение: `saveConfig`. */
   function saveConfig() {
-    if (state.restoringConfig) return;
+    if (state.restoringConfig || state.deferConfigSave) return;
     try {
       persistBrokerDepositFromDom?.();
       safeStorageSet(CONFIG_STORE_KEY, JSON.stringify(collectConfig()));
@@ -1524,6 +1525,10 @@
         if (!snap) return;
         if (snap.deposit != null && snap.deposit !== "") cred.depositRub = +snap.deposit || null;
         if (snap.depositProvisional != null) cred.depositProvisional = !!snap.depositProvisional;
+        if (!cred.token) {
+          cred.depositLoaded = false;
+          return;
+        }
         if (snap.depositLoaded != null) cred.depositLoaded = !!snap.depositLoaded;
         else if (cred.depositRub > 0 && !cred.depositProvisional) cred.depositLoaded = true;
       };
@@ -8922,6 +8927,9 @@ ${referenceBlock}
     const sandboxLive = isLiveMode() && !!$("live-sandbox-mode")?.checked;
     if (isTbankBackedMode()) {
       await bootstrapBrokerOnPageInit();
+      if (isLiveMode() && !isLiveSandbox() && safeStorageGet(brokerTokenStoreKey()) && !activeBrokerState().token) {
+        scheduleBrokerUnlockPrompt("page-restore");
+      }
     }
     if (sandboxLive) {
       await yieldToUi();
@@ -8940,8 +8948,8 @@ ${referenceBlock}
     updateTechInfo("init-ok");
   }
 
-  /** Восстановить Angular-форму из localStorage после рендера компонентов. */
-  function finalizeAngularFormFromConfig() {
+  /** Снимок Angular-формы из localStorage (режим, бумаги, логики). */
+  function applyAngularFormSnapshotFromConfig() {
     const cfg = readSavedConfig();
     const api = bridgeApi();
     if (cfg && api?.applyFormSnapshot) {
@@ -8965,18 +8973,41 @@ ${referenceBlock}
       }
       syncSelectAllCheckboxes();
       syncLogicChipDrawdownState();
-    } else {
-      api?.syncFormFromDom?.();
+      return true;
     }
+    api?.syncFormFromDom?.();
+    return false;
+  }
+
+  function syncRestoredFormUiAfterSnapshot() {
     syncAccountModeUi();
     bootstrapLiveTradingPanelVisibility();
-    api?.onBootReady?.();
-    void completeLiveInitAfterFormReady().catch((err) => {
-      noteTechError(`live-init-after-form: ${err?.message || err}`);
-    });
+    bridgeApi()?.onBootReady?.();
+  }
+
+  /** Восстановить Angular-форму из localStorage после рендера компонентов. */
+  function finalizeAngularFormFromConfig() {
+    applyAngularFormSnapshotFromConfig();
+    syncRestoredFormUiAfterSnapshot();
+    const finishBoot = () => {
+      state.deferConfigSave = false;
+      void completeLiveInitAfterFormReady().catch((err) => {
+        noteTechError(`live-init-after-form: ${err?.message || err}`);
+      });
+    };
+    const deferredRestore = () => {
+      applyAngularFormSnapshotFromConfig();
+      syncRestoredFormUiAfterSnapshot();
+      finishBoot();
+    };
+    setTimeout(() => {
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(deferredRestore);
+      else deferredRestore();
+    }, 0);
   }
 
   try {
+    state.deferConfigSave = true;
     window.__mlFinresp.deferBrokerConnect = true;
     fillLogicSelect();
     fillLogicEditor();
@@ -9018,6 +9049,7 @@ ${referenceBlock}
     syncPageVersionBadge();
     syncProtocolUi();
   } catch (err) {
+    state.deferConfigSave = false;
     noteTechError(`init: ${err?.message || err}`);
     setCalcStatus(
       `Ошибка инициализации: ${err.message}. Переключение «Реальная торговля» работает; обновите Ctrl+F5 или запустите run-dev.bat.`

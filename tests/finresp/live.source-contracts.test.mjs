@@ -419,3 +419,19 @@ test('sandbox start: async auto-reverses and yield to avoid UI freeze', () => {
   assert.match(liveSrc, /rebuildSandboxFromLedgerAsync/);
   assert.match(liveSrc, /yieldToUi/);
 });
+
+test('boot defers saveConfig until Angular form restore (не затирает live/бумаги при init)', () => {
+  const bootSrc = fs.readFileSync(bootPath, 'utf8');
+  assert.match(bootSrc, /deferConfigSave/);
+  assert.match(bootSrc, /state\.restoringConfig \|\| state\.deferConfigSave\) return/);
+  assert.match(bootSrc, /function applyAngularFormSnapshotFromConfig/);
+  assert.doesNotMatch(bootSrc, /\$\("account-mode"\)\.value = "paper"/);
+});
+
+test('initAccountMode does not force paper on reload', () => {
+  const liveSrc = fs.readFileSync(livePath, 'utf8');
+  const block = liveSrc.match(/function initAccountMode\(\)[\s\S]*?^  \}/m)?.[0] || '';
+  assert.ok(block, 'initAccountMode');
+  assert.match(block, /readAccountModeFromUi/);
+  assert.doesNotMatch(block, /value = "paper"/);
+});

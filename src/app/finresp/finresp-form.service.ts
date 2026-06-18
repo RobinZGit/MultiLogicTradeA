@@ -143,6 +143,7 @@ export class FinrespFormService implements OnDestroy {
   }
 
   private onBridgeBootReady(): void {
+    this.syncFromDom();
     this.pushScalarsToDom();
     this.pushAccountModeToDom();
     this.pushInstrumentsToDom();
