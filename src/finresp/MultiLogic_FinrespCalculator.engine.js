@@ -3759,6 +3759,56 @@
     return map;
   }
 
+  /** Собрать isolated equity из уже посчитанных equity-runs (без повторного runMulti). */
+  function isoEqByLogicFromEquityRuns(runs, times) {
+    const map = {};
+    if (!runs || !times?.length) return map;
+    for (const [key, run] of Object.entries(runs)) {
+      const rows = run?.rows;
+      if (!rows?.length) continue;
+      const byTime = new Map(rows.map((r) => [r.time, r.eq]));
+      map[key] = times.map((t) => {
+        const v = byTime.get(t);
+        return Number.isFinite(v) ? v : NaN;
+      });
+    }
+    return map;
+  }
+
+  /** Асинхронная isolated equity: yield между логиками + прогресс (не блокирует UI). */
+  async function buildIsolatedLogicEquityMapAsync(
+    packs,
+    logicSpecs,
+    startIdx,
+    endIdx,
+    params,
+    volConfig,
+    times,
+    options
+  ) {
+    const opts = options || {};
+    const map = {};
+    const baseOpts = { ...(opts || {}), recoveryStopConfig: { enabled: false } };
+    const specs = (logicSpecs || []).filter((s) => s?.logicId && !s.disabled);
+    const total = specs.length;
+    const yieldUi = !!opts.yieldUi;
+    const tick = () => (yieldUi ? delay(0) : Promise.resolve());
+    for (let i = 0; i < specs.length; i++) {
+      if (typeof opts.shouldCancel === "function" && opts.shouldCancel()) break;
+      const spec = specs[i];
+      const key = spec.logicId;
+      if (typeof opts.onIsoProgress === "function") opts.onIsoProgress(i, total, key);
+      if (yieldUi) await tick();
+      const { perSec } = yieldUi
+        ? await runMultiAsync(packs, spec, startIdx, endIdx, params, volConfig, null, { ...baseOpts, yieldUi: true })
+        : runMulti(packs, spec, startIdx, endIdx, params, volConfig, null, baseOpts);
+      map[key] = buildPortfolioEquitySeries(perSec, times).total;
+      if (typeof opts.onIsoProgress === "function") opts.onIsoProgress(i + 1, total, key);
+      if (yieldUi) await tick();
+    }
+    return map;
+  }
+
   function runPauseOnDrawdownPerLogicCore(
     executedPerSec,
     shadowPerSec,
@@ -3890,7 +3940,15 @@
     const shadowRowIdx = buildPerSecRowIdxAtTimes(shadowPerSec, times);
     let isoEqByLogic = recoveryCtx?.isoEqByLogic;
     if (!isoEqByLogic && recoveryCtx?.packs && recoveryCtx.isoLogicSpecs) {
-      isoEqByLogic = buildIsolatedLogicEquityMap(
+      const isoOpts = {
+        ...recoveryCtx.runOpts,
+        yieldUi,
+        shouldCancel: opts.shouldCancel,
+        onIsoProgress: (done, total, key) => {
+          if (onProgress) onProgress(done, total, key ? `iso:${key}` : "iso");
+        }
+      };
+      isoEqByLogic = await buildIsolatedLogicEquityMapAsync(
         recoveryCtx.packs,
         recoveryCtx.isoLogicSpecs,
         recoveryCtx.aRef ?? 0,
@@ -3898,7 +3956,7 @@
         recoveryCtx.params,
         volConfig,
         times,
-        recoveryCtx.runOpts
+        isoOpts
       );
       if (yieldUi) await tick();
     }
@@ -3978,6 +4036,7 @@
       bRef,
       params,
       isoLogicSpecs: opts.isoLogicSpecs,
+      isoEqByLogic: opts.isoEqByLogic || null,
       runOpts: {
         signalPacks: activeSignalPacks?.length ? activeSignalPacks : opts.signalPacks,
         ctgSpotPacks: opts.ctgSpotPacks,
@@ -5693,7 +5752,11 @@
       const rd = await applyPauseOnDrawdownAsync(perSec, times, volConfig, opts.recoveryStopConfig, {
         yieldUi: true,
         shouldCancel: opts.shouldCancel,
-        onProgress: (done, total, candleTime) => {
+        onProgress: (done, total, detail) => {
+          const isIso = typeof detail === "string" && detail.startsWith("iso:");
+          const text = isIso
+            ? `Изолированная equity: ${detail.slice(4)} (${done}/${total})`
+            : `PauseOnDrawdown: ${done}/${total}`;
           void emitRunProgressAsync(
             opts,
             lerpCalcProgress(
@@ -5701,8 +5764,8 @@
               cfg ? CALC_PROGRESS.FINRESP_MAX : CALC_PROGRESS.RUN_MAX,
               done / Math.max(1, total)
             ),
-            `PauseOnDrawdown: ${done}/${total}`,
-            { phase: "recovery-stop", done, total, candleTime }
+            text,
+            { phase: isIso ? "iso-equity" : "recovery-stop", done, total, candleTime: detail }
           );
         }
       }, recoveryCtx);
@@ -5816,6 +5879,8 @@
     applyPauseOnDrawdownPerLogic,
     applyPauseOnDrawdownPerLogicAsync,
     buildIsolatedLogicEquityMap,
+    buildIsolatedLogicEquityMapAsync,
+    isoEqByLogicFromEquityRuns,
     resolveStopperProgressText,
     aggregateFinresp,
     buildPortfolioEquityRows,

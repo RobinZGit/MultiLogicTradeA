@@ -51,7 +51,7 @@
   imp("MultiLogic_FinrespCalculator.engine.js");
 
   self.onmessage = async (e) => {
-    const { id, packs, spec, startIdx, endIdx, params, volConfig, stopperConfig, randomPriceShift, ctgSpotPacks, tradingPeriods, calcTf, recoveryStopConfig, isoLogicSpecs } = e.data || {};
+    const { id, packs, spec, startIdx, endIdx, params, volConfig, stopperConfig, randomPriceShift, ctgSpotPacks, tradingPeriods, calcTf, recoveryStopConfig, isoLogicSpecs, isoEqByLogic } = e.data || {};
     try {
       const E = self.MultiLogicFinrespEngine;
       if (!E?.runMulti) throw new Error("engine not loaded in worker");
@@ -61,11 +61,12 @@
         ...(tradingPeriods ? { tradingPeriods, calcTf } : {}),
         ...(recoveryStopConfig ? { recoveryStopConfig } : {}),
         ...(isoLogicSpecs ? { isoLogicSpecs } : {}),
+        ...(isoEqByLogic ? { isoEqByLogic } : {}),
         onProgress: (pct, text, detail) => {
           self.postMessage({ id, type: "progress", pct, text, detail: detail || null });
         }
       };
-      const result = E.runMulti(packs, spec, startIdx, endIdx, params, volConfig, stopperConfig, runOpts);
+      const result = await E.runMultiAsync(packs, spec, startIdx, endIdx, params, volConfig, stopperConfig, runOpts);
       if (result?.perSec) {
         for (const row of result.perSec) delete row.indicatorCache;
       }

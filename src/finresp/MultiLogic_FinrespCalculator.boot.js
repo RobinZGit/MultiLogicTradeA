@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-18-ctg-futures-help-v20";
+  const CALC_PAGE_VERSION = "2026-06-18-perlogic-perf-v21";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -2532,6 +2532,9 @@
         opts.isoLogicSpecs = selectedLogicIds()
           .map((id) => E.resolveLogicSpec(id, state.customLines, p, ind))
           .filter((s) => s && !s.disabled);
+        if (state.precomputedIsoEqByLogic) {
+          opts.isoEqByLogic = state.precomputedIsoEqByLogic;
+        }
       }
     }
     return opts;
@@ -2808,6 +2811,8 @@
   function scheduleDrawdownLogicModelEquityRefresh(a, b) {
     const cfg = recoveryStopConfig();
     if (!cfg.enabled || !cfg.perLogic || !state.packs.length) return;
+    const cacheFp = equityRunsCacheFingerprint(a, b);
+    if (state.equityRunsCache?.fp === cacheFp && state.equityRunsCache.data) return;
     void (async () => {
       try {
         const data = await calcLogicEquityRunsAsync(a, b);
@@ -3569,7 +3574,8 @@
         tradingPeriods: ro.tradingPeriods || finOpts.tradingPeriods || undefined,
         calcTf: ro.calcTf || finOpts.calcTf || undefined,
         recoveryStopConfig: finOpts.recoveryStopConfig || undefined,
-        isoLogicSpecs: finOpts.isoLogicSpecs || undefined
+        isoLogicSpecs: finOpts.isoLogicSpecs || undefined,
+        isoEqByLogic: finOpts.isoEqByLogic || undefined
       });
     });
   }
@@ -3590,6 +3596,24 @@
     const indicators = optimCtx?.indicators ?? indicatorSelection();
     const spec = resolveCalcLogicSpec(p, indicators);
     if (!spec) return null;
+
+    state.precomputedIsoEqByLogic = null;
+    const rdCfg = recoveryStopConfig();
+    if (!optimCtx && rdCfg.enabled && rdCfg.perLogic) {
+      if (!ro.silent) {
+        setCalcProgress("Изолированная equity по логикам…", 34);
+        await yieldToUi();
+      }
+      const equityData = await calcLogicEquityRunsAsync(a, b, (i, n, key) => {
+        if (ro.silent || key === "кэш") return;
+        const pct = 34 + Math.round((i / Math.max(1, n)) * 14);
+        setCalcProgress(`Изолированная equity: ${key} (${i}/${n})`, pct);
+      });
+      if (ro.shouldCancel?.()) throw new Error("cancelled");
+      if (equityData?.runs && equityData?.times) {
+        state.precomputedIsoEqByLogic = E.isoEqByLogicFromEquityRuns(equityData.runs, equityData.times);
+      }
+    }
 
     if (!optimCtx && !ro._obWarnDone) {
       const obWarn = collectObCalcWarnings(selectedLogicIds());
@@ -3688,6 +3712,7 @@
     const { perSec, agg, preStopperAgg, stopper, recoveryStop, skipped } = workerOut;
     state.windowSkipped = skipped || [];
     if (!perSec?.length) return null;
+    state.precomputedIsoEqByLogic = null;
     return { perSec, agg, preStopperAgg, stopper, recoveryStop, a, b, skipped };
   }
 
