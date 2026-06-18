@@ -668,6 +668,53 @@
     });
   }
 
+  /** Индикаторы контанго (папка indicators/ctg/) — только для фьючерсов. */
+  function isCtgIndicatorKind(kind) {
+    const k = indicatorKey(kind);
+    return k === "ctg" || k.startsWith("ctg");
+  }
+
+  /** Подпрограмма `isFuturesMarket`. */
+  function isFuturesMarket(market) {
+    return String(market || "").toLowerCase() === "futures";
+  }
+
+  /** Рынок инструмента из opts или свечей. */
+  function resolveInstrumentMarket(options, candles) {
+    if (options?.market) return options.market;
+    const fromSignal = options?.signalCandles?.[0]?.market;
+    if (fromSignal) return fromSignal;
+    return candles?.[0]?.market;
+  }
+
+  /** Фильтр атомов по чекбоксам индикаторов и рынку (CTG — только futures). */
+  function filterAtomsForInstrument(atoms, indicatorSelection, market) {
+    let list = filterAtomsByIndicators(atoms, indicatorSelection);
+    if (!isFuturesMarket(market)) {
+      list = list.filter((atom) => !isCtgIndicatorKind(atom?.kind));
+    }
+    return list;
+  }
+
+  /** Убрать CTG-атомы из parsed для не-фьючерсов (Op/Cl без контанго). */
+  function applyCtgMarketFilterToParsed(parsed, market) {
+    if (!parsed || isFuturesMarket(market)) return parsed;
+    const strip = (atoms) => (atoms || []).filter((a) => !isCtgIndicatorKind(a?.kind));
+    const opLongAtoms = strip(parsed.opLongAtoms);
+    const opShortAtoms = strip(parsed.opShortAtoms);
+    const clLongAtoms = strip(parsed.clLongAtoms);
+    const clShortAtoms = strip(parsed.clShortAtoms);
+    return {
+      ...parsed,
+      opLongAtoms,
+      opShortAtoms,
+      clLongAtoms,
+      clShortAtoms,
+      opAtoms: [...opLongAtoms, ...opShortAtoms],
+      clAtoms: [...clLongAtoms, ...clShortAtoms]
+    };
+  }
+
   /** Проверка булева условия: `isIndicatorEnabled`. */
   function isIndicatorEnabled(indicatorSelection, key) {
     return !!normalizeIndicatorSelection(indicatorSelection)[indicatorKey(key)];
@@ -689,7 +736,7 @@
   function parsedUsesCtgStoch(parsed) {
     if (!parsed) return false;
     for (const a of [...(parsed.opAtoms || []), ...(parsed.clAtoms || [])]) {
-      if (indicatorKey(a?.kind) === "ctgstoch") return true;
+      if (isCtgIndicatorKind(a?.kind)) return true;
     }
     return false;
   }
@@ -714,7 +761,9 @@
   }
 
   /** Подпрограмма `resolveCtgCandles`. */
-  function resolveCtgCandles(signalCandles, ctgSpotPacks, sec) {
+  function resolveCtgCandles(signalCandles, ctgSpotPacks, sec, market) {
+    const m = market ?? signalCandles?.[0]?.market;
+    if (!isFuturesMarket(m)) return null;
     const buildFn = IND.buildContangoCandles;
     const key = String(sec || signalCandles?.[0]?.sec || "").trim();
     const spot = ctgSpotPacks && (ctgSpotPacks[key] || ctgSpotPacks.get?.(key));
@@ -725,9 +774,11 @@
   /** Подпрограмма `indicatorCacheExtrasForParsed`. */
   function indicatorCacheExtrasForParsed(signalCandles, parsed, opts) {
     const extras = {};
-    if (parsedUsesCtgStoch(parsed)) {
+    const market = resolveInstrumentMarket(opts, signalCandles);
+    if (parsedUsesCtgStoch(parsed) && isFuturesMarket(market)) {
       const sec = opts?.sec || signalCandles?.[0]?.sec || "?";
-      extras.ctgCandles = resolveCtgCandles(signalCandles, opts?.ctgSpotPacks, sec);
+      const ctgCandles = resolveCtgCandles(signalCandles, opts?.ctgSpotPacks, sec, market);
+      if (ctgCandles?.length) extras.ctgCandles = ctgCandles;
     }
     if (parsedUsesTotStoch(parsed)) {
       extras.totCandles = opts?.totCandles || signalCandles;
@@ -747,9 +798,11 @@
     if (opts?.indicatorCache) return opts.indicatorCache;
     const list = parsedList || [];
     const extras = {};
-    if (list.some(parsedUsesCtgStoch)) {
+    const market = resolveInstrumentMarket(opts, signalCandles);
+    if (list.some(parsedUsesCtgStoch) && isFuturesMarket(market)) {
       const sec = opts?.sec || signalCandles?.[0]?.sec || "?";
-      extras.ctgCandles = resolveCtgCandles(signalCandles, opts?.ctgSpotPacks, sec);
+      const ctgCandles = resolveCtgCandles(signalCandles, opts?.ctgSpotPacks, sec, market);
+      if (ctgCandles?.length) extras.ctgCandles = ctgCandles;
     }
     if (list.some(parsedUsesTotStoch)) {
       extras.totCandles = opts?.totCandles || signalCandles;
@@ -758,7 +811,7 @@
   }
 
   /** Разбор строки Op/Cl в AST/spec для симуляции одной логики. */
-  function parseLogicLine(line, params, indicatorSelection) {
+  function parseLogicLine(line, params, indicatorSelection, market) {
     const raw = substituteParams(line, params || DEFAULT_PARAMS);
     const regime = parseRegimeFromLine(raw);
     const sltp = parseSlTp(raw);
@@ -770,10 +823,10 @@
     const atomsForSide = (blocks, side) => blocks
       .filter((block) => block.side === side)
       .flatMap((block) => splitTopLevelAnd(stripOnFlipFromExpr(block.expr)).map(parseAtom).filter(Boolean));
-    const opLongAtoms = filterAtomsByIndicators(atomsForSide(opBlocks, "long"), indicatorSelection);
-    const opShortAtoms = filterAtomsByIndicators(atomsForSide(opBlocks, "short"), indicatorSelection);
-    const clLongAtoms = filterAtomsByIndicators(atomsForSide(clBlocks, "long"), indicatorSelection);
-    const clShortAtoms = filterAtomsByIndicators(atomsForSide(clBlocks, "short"), indicatorSelection);
+    const opLongAtoms = filterAtomsForInstrument(atomsForSide(opBlocks, "long"), indicatorSelection, market);
+    const opShortAtoms = filterAtomsForInstrument(atomsForSide(opBlocks, "short"), indicatorSelection, market);
+    const clLongAtoms = filterAtomsForInstrument(atomsForSide(clBlocks, "long"), indicatorSelection, market);
+    const clShortAtoms = filterAtomsForInstrument(atomsForSide(clBlocks, "short"), indicatorSelection, market);
     const clLongOnFlip = clBlocks.filter((b) => b.side === "long").some((b) => exprHasOnFlipClose(b.expr));
     const clShortOnFlip = clBlocks.filter((b) => b.side === "short").some((b) => exprHasOnFlipClose(b.expr));
     return {
@@ -1841,16 +1894,18 @@
       || (specs || []).filter((s) => s && s.type === "logic_line" && !s.disabled);
     if (!logicSpecs.length) return simulateNoSignalRows(candles, startIdx, endIdx, options);
     if (logicSpecs.length === 1) {
+      const market = resolveInstrumentMarket(opts, candles);
       const parsed = prep?.parsedList?.[0]
-        || applySlTpParams({ ...logicSpecs[0].parsed }, params || DEFAULT_PARAMS);
+        || applyCtgMarketFilterToParsed(applySlTpParams({ ...logicSpecs[0].parsed }, params || DEFAULT_PARAMS), market);
       return simulateLogicLine(candles, parsed, startIdx, endIdx, volConfig, {
         ...options,
         logicId: logicSpecs[0]?.logicId
       });
     }
     const p = prep?.p || { ...DEFAULT_PARAMS, ...params };
+    const market = resolveInstrumentMarket(opts, candles);
     const parsedList = prep?.parsedList
-      || logicSpecs.map((s) => applySlTpParams({ ...s.parsed }, p));
+      || logicSpecs.map((s) => applyCtgMarketFilterToParsed(applySlTpParams({ ...s.parsed }, p), market));
     const signalCandles = opts.signalCandles || candles;
     const cache = opts.indicatorCache || createStackIndicatorCache(signalCandles, parsedList, opts);
     const atrByLen = prep?.atrByLen || (() => {
@@ -2787,18 +2842,20 @@
     const opts = options || {};
     if (!candles?.length || !spec) return { ready: false, reason: "no_data" };
     const p = { ...DEFAULT_PARAMS, ...params };
+    const market = resolveInstrumentMarket(opts, candles);
     const b = Math.min(candles.length - 1, Math.max(0, opts.barIndex ?? candles.length - 1));
     let w = warmupBars();
     if (spec.type === "logic_line" && spec.parsed) {
-      w = logicWarmupBars(applySlTpParams({ ...spec.parsed }, p));
+      w = logicWarmupBars(applyCtgMarketFilterToParsed(applySlTpParams({ ...spec.parsed }, p), market));
     } else if (spec.type === "multi_logic") {
       const parsedList = (spec.specs || [])
         .filter((s) => s?.type === "logic_line" && !s.disabled)
-        .map((s) => applySlTpParams({ ...s.parsed }, p));
+        .map((s) => applyCtgMarketFilterToParsed(applySlTpParams({ ...s.parsed }, p), market));
       if (parsedList.length) w = Math.max(...parsedList.map((x) => logicWarmupBars(x)), 1);
     }
     if (b < w) return { ready: false, reason: "warmup", barIndex: b, needBars: w };
-    const cache = new IndicatorCache(candles);
+    const signalCandles = opts.signalCandles || candles;
+    const probeOpts = { ...opts, market, signalCandles, sec: opts.sec || candles[0]?.sec };
     const pos = +opts.pos || 0;
     const posCtx = buildPosCtx(pos, opts.entryBarIdx ?? null, opts.entryMid ?? null, opts.entryBeta ?? null);
 
@@ -2806,16 +2863,18 @@
       const hits = [];
       for (const s of spec.specs || []) {
         if (!s || s.type !== "logic_line" || s.disabled) continue;
-        const parsed = applySlTpParams({ ...s.parsed }, p);
-        const sig = logicLineExecSignals(parsed, cache, b, posCtx, opts);
+        const parsed = applyCtgMarketFilterToParsed(applySlTpParams({ ...s.parsed }, p), market);
+        const cache = createLogicIndicatorCache(signalCandles, parsed, probeOpts);
+        const sig = logicLineExecSignals(parsed, cache, b, posCtx, probeOpts);
         hits.push({ logicId: s.logicId || "?", ...summarizeLogicBarSignals(sig) });
       }
       const primary = hits.find((h) => h.longOp || h.shortOp || h.longCl || h.shortCl) || hits[0] || null;
       return { ready: true, barIndex: b, multi: true, hits, logicId: primary?.logicId, ...primary };
     }
     if (spec.type === "logic_line") {
-      const parsed = applySlTpParams({ ...spec.parsed }, p);
-      const sig = logicLineExecSignals(parsed, cache, b, posCtx, opts);
+      const parsed = applyCtgMarketFilterToParsed(applySlTpParams({ ...spec.parsed }, p), market);
+      const cache = createLogicIndicatorCache(signalCandles, parsed, probeOpts);
+      const sig = logicLineExecSignals(parsed, cache, b, posCtx, probeOpts);
       return { ready: true, barIndex: b, logicId: spec.logicId || "?", ...summarizeLogicBarSignals(sig) };
     }
     if (spec.type === "sma_spread" || spec.type === "sma_corridor" || spec.type === "cma_spread") {
@@ -2879,7 +2938,8 @@
         slTpAtrLen: spec.slTpAtrLen
       });
     }
-    const parsed = prep?.parsed || applySlTpParams({ ...spec.parsed }, p);
+    const parsed = prep?.parsed
+      || applyCtgMarketFilterToParsed(applySlTpParams({ ...spec.parsed }, p), resolveInstrumentMarket(opts, candles));
     return simulateLogicLine(candles, parsed, startIdx, endIdx, vol, { ...opts, logicId: spec.logicId });
   }
 
@@ -3015,9 +3075,11 @@
     const reverseSignals = options?.reverseSignals != null ? !!options.reverseSignals : !!p.ReverseSignals;
     const prep = { p, vol, reverse, reverseSignals };
     if (!spec || spec.disabled) return prep;
+    const market = resolveInstrumentMarket(options, indicatorCache?.candles);
+    const marketParsed = (parsed) => applyCtgMarketFilterToParsed(applySlTpParams({ ...parsed }, p), market);
     if (spec.type === "multi_logic") {
       const logicSpecs = (spec.specs || []).filter((s) => s && s.type === "logic_line" && !s.disabled);
-      const parsedList = logicSpecs.map((s) => applySlTpParams({ ...s.parsed }, p));
+      const parsedList = logicSpecs.map((s) => marketParsed(s.parsed));
       let atrByLen = null;
       if (indicatorCache && parsedList.length > 1) {
         const atrLenSet = new Set(parsedList.map((x) => x.slTpAtrLen || DEFAULT_PARAMS.slTpAtrLen));
@@ -3027,7 +3089,7 @@
       return prep;
     }
     if (spec.type === "logic_line" && spec.parsed) {
-      prep.parsed = applySlTpParams({ ...spec.parsed }, p);
+      prep.parsed = marketParsed(spec.parsed);
     }
     return prep;
   }
@@ -3040,8 +3102,10 @@
       if (!candles?.length) continue;
       const sec = wu.sec || candles[0]?.sec || "?";
       const signalCandles = signalPacks?.[wu.pi] || candles;
+      const market = candles[0]?.market;
+      const instOpts = { ...options, market, signalCandles, sec };
       const indicatorCache = new IndicatorCache(signalCandles);
-      const gridPrep = buildGridSimulationPrep(spec, params, volConfig, indicatorCache, options);
+      const gridPrep = buildGridSimulationPrep(spec, params, volConfig, indicatorCache, instOpts);
       let preparedStack = gridPrep.preparedStack || null;
       if (preparedStack && !preparedStack.atrByLen && preparedStack.parsedList?.length > 1) {
         const atrLenSet = new Set(preparedStack.parsedList.map((x) => x.slTpAtrLen || DEFAULT_PARAMS.slTpAtrLen));
@@ -3108,8 +3172,13 @@
       });
       for (const ctx of ctxs) {
         ctx.indicatorCache = new IndicatorCache(ctx.signalCandles, { totCandles });
-        // пересобрать preparedStack.atrByLen, если нужен
-        const gridPrep = buildGridSimulationPrep(spec, params, volConfig, ctx.indicatorCache, options);
+        const instOpts = {
+          ...options,
+          market: ctx.candles?.[0]?.market,
+          signalCandles: ctx.signalCandles,
+          sec: ctx.sec
+        };
+        const gridPrep = buildGridSimulationPrep(spec, params, volConfig, ctx.indicatorCache, instOpts);
         ctx.preparedRun = gridPrep;
         ctx.preparedStack = gridPrep.preparedStack || ctx.preparedStack;
         if (ctx.preparedStack && !ctx.preparedStack.atrByLen && ctx.preparedStack.parsedList?.length > 1) {
@@ -3125,11 +3194,19 @@
     if (wantCtg && ctxs.length) {
       const ctgSpotPacks = options?.ctgSpotPacks;
       for (const ctx of ctxs) {
-        const ctgCandles = resolveCtgCandles(ctx.signalCandles, ctgSpotPacks, ctx.sec);
+        if (!isFuturesMarket(ctx.candles?.[0]?.market)) continue;
+        const ctgCandles = resolveCtgCandles(ctx.signalCandles, ctgSpotPacks, ctx.sec, ctx.candles?.[0]?.market);
+        if (!ctgCandles?.length) continue;
         const extras = { ctgCandles };
         if (ctx.indicatorCache?.totCandles) extras.totCandles = ctx.indicatorCache.totCandles;
         ctx.indicatorCache = new IndicatorCache(ctx.signalCandles, extras);
-        const gridPrep = buildGridSimulationPrep(spec, params, volConfig, ctx.indicatorCache, options);
+        const instOpts = {
+          ...options,
+          market: ctx.candles?.[0]?.market,
+          signalCandles: ctx.signalCandles,
+          sec: ctx.sec
+        };
+        const gridPrep = buildGridSimulationPrep(spec, params, volConfig, ctx.indicatorCache, instOpts);
         ctx.preparedRun = gridPrep;
         ctx.preparedStack = gridPrep.preparedStack || ctx.preparedStack;
         if (ctx.preparedStack && !ctx.preparedStack.atrByLen && ctx.preparedStack.parsedList?.length > 1) {
@@ -5342,9 +5419,16 @@
         const unit = workUnits.find((w) => w.pi === pi);
         const signalCandles = signalPacks?.[pi] || candles;
         const indicatorCache = cfg ? new IndicatorCache(signalCandles) : null;
-        const preparedRun = cfg ? buildGridSimulationPrep(spec, params, vol, indicatorCache, opts) : null;
+        const instPrepOpts = {
+          ...opts,
+          market: candles[0]?.market,
+          signalCandles,
+          sec
+        };
+        const preparedRun = cfg ? buildGridSimulationPrep(spec, params, vol, indicatorCache, instPrepOpts) : null;
         const runOpts = {
           sec,
+          market: candles[0]?.market,
           portfolioCap,
           ctgSpotPacks: opts.ctgSpotPacks,
           ...(signalPacks ? { signalCandles } : {}),
@@ -5544,9 +5628,16 @@
         const unit = workUnits.find((w) => w.pi === pi);
         const signalCandles = signalPacks?.[pi] || candles;
         const indicatorCache = cfg ? createIndicatorCache(signalCandles) : null;
-        const preparedRun = cfg ? buildGridSimulationPrep(spec, params, vol, indicatorCache, opts) : null;
+        const instPrepOpts = {
+          ...opts,
+          market: candles[0]?.market,
+          signalCandles,
+          sec
+        };
+        const preparedRun = cfg ? buildGridSimulationPrep(spec, params, vol, indicatorCache, instPrepOpts) : null;
         const runOpts = {
           sec,
+          market: candles[0]?.market,
           portfolioCap,
           ctgSpotPacks: opts.ctgSpotPacks,
           ...(signalPacks ? { signalCandles } : {}),
@@ -5742,6 +5833,9 @@
     resolveFuturesContract,
     resolveFuturesAssetCode,
     specUsesCtgStoch,
+    isCtgIndicatorKind,
+    isFuturesMarket,
+    applyCtgMarketFilterToParsed,
     DEFAULT_STOCK_TICKERS_RAW,
     DEFAULT_FUTURES_PREFIXES_RAW,
     parseTickerPrefixes,

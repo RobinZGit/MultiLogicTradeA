@@ -56,9 +56,30 @@ describe("CtgStoch in FTS", () => {
 
   it("disabled indicator atoms are removed from Op/Cl", () => {
     const line = E.DEFAULT_LOGIC_LINES.FTS;
-    const allOn = E.parseLogicLine(line, E.DEFAULT_PARAMS, { stoch: true, ctgstoch: true, totstoch: true });
-    const noCtg = E.parseLogicLine(line, E.DEFAULT_PARAMS, { stoch: true, ctgstoch: false, totstoch: true });
+    const allOn = E.parseLogicLine(line, E.DEFAULT_PARAMS, { stoch: true, ctgstoch: true, totstoch: true }, "futures");
+    const noCtg = E.parseLogicLine(line, E.DEFAULT_PARAMS, { stoch: true, ctgstoch: false, totstoch: true }, "futures");
     assert.ok((allOn.opLongAtoms || []).some((a) => String(a?.kind).toLowerCase() === "ctgstoch"));
     assert.equal((noCtg.opLongAtoms || []).some((a) => String(a?.kind).toLowerCase() === "ctgstoch"), false);
+  });
+
+  it("CtgStoch atoms stripped for shares (futures-only CTG)", () => {
+    const line = E.DEFAULT_LOGIC_LINES.FTS;
+    const shares = E.parseLogicLine(line, E.DEFAULT_PARAMS, { stoch: true, ctgstoch: true, totstoch: true }, "shares");
+    const fut = E.parseLogicLine(line, E.DEFAULT_PARAMS, { stoch: true, ctgstoch: true, totstoch: true }, "futures");
+    assert.equal((shares.opLongAtoms || []).some((a) => E.isCtgIndicatorKind(a?.kind)), false);
+    assert.equal((shares.clLongAtoms || []).some((a) => E.isCtgIndicatorKind(a?.kind)), false);
+    assert.ok((fut.opLongAtoms || []).some((a) => E.isCtgIndicatorKind(a?.kind)));
+  });
+
+  it("runOnCandles on shares ignores CtgStoch even when enabled", () => {
+    const shares = makeCandles("GAZP", 260, { startPrice: 100, drift: 0.02, market: "shares" });
+    const spec = E.resolveLogicSpec("FTS", {}, E.DEFAULT_PARAMS, {
+      stoch: true, ctgstoch: true, totstoch: true
+    });
+    const vol = { deposit: 100000, maxPositions: 5, volume: 10 };
+    const r = E.runOnCandles(shares, spec, 120, shares.length - 1, E.DEFAULT_PARAMS, vol, { sec: "GAZP" });
+    assert.ok(Number.isFinite(r.finresp));
+    const parsed = E.applyCtgMarketFilterToParsed(spec.parsed, "shares");
+    assert.equal((parsed.opLongAtoms || []).some((a) => E.isCtgIndicatorKind(a?.kind)), false);
   });
 });
