@@ -443,3 +443,16 @@ test('boot flushes config on page hide and periodic save', () => {
   assert.match(bootSrc, /startPeriodicConfigSave/);
   assert.match(bootSrc, /function resolveAccountModeForConfig/);
 });
+
+test('logic stack persisted with selectionCleared and drawdown slice', () => {
+  const bootSrc = fs.readFileSync(bootPath, 'utf8');
+  assert.match(bootSrc, /function resolveLogicIdsForConfig/);
+  assert.match(bootSrc, /logicSelectionCleared: logicPick\.cleared/);
+  assert.match(bootSrc, /prepareForConfigPersist/);
+  const formSrc = fs.readFileSync(
+    path.join(root, 'src', 'app', 'finresp', 'finresp-form.service.ts'),
+    'utf8',
+  );
+  assert.match(formSrc, /prepareForConfigPersist/);
+  assert.match(formSrc, /logicSelectionCleared: this\.logicSelectionCleared/);
+});

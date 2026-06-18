@@ -92,6 +92,7 @@ export interface FinrespFormValues {
   accountMode: string;
   instrumentIds: string[];
   logicIds: string[];
+  logicSelectionCleared?: boolean;
 }
 
 export interface FinrespInstrumentOption {

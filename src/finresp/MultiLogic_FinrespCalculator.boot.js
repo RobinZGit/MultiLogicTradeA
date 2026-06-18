@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-18-config-flush-v16";
+  const CALC_PAGE_VERSION = "2026-06-18-logic-restore-v17";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -263,6 +263,34 @@
     if (ids.length) return ids;
     if (state.logicSelectionCleared) return [];
     return sel.value ? [sel.value] : ["RND"];
+  }
+  function bridgeReadVisibleLogicIdsFromDom() {
+    const picker = $("calc-logic-picker");
+    if (picker?.classList.contains("calc-logic-picker--open")) return [];
+    const sel = $("calc-logic-visible");
+    if (!sel) return [];
+    return [...sel.selectedOptions].map((o) => o.value).filter(Boolean);
+  }
+  function resolveLogicIdsForConfig() {
+    const snap = readFormScalarsForConfig();
+    if (snap?.logicIds != null) {
+      return {
+        ids: snap.logicIds.slice(),
+        cleared: snap.logicSelectionCleared ?? (snap.logicIds.length === 0)
+      };
+    }
+    const fromVisible = bridgeReadVisibleLogicIdsFromDom();
+    if (fromVisible.length) {
+      return { ids: fromVisible, cleared: false };
+    }
+    const fromDom = bridgeReadLogicIdsFromDom();
+    if (fromDom.length) {
+      return { ids: fromDom, cleared: false };
+    }
+    if (state.logicSelectionCleared) {
+      return { ids: [], cleared: true };
+    }
+    return { ids: selectedLogicIds().slice(), cleared: false };
   }
   function publishWindowBridge() {
     const startEl = $("calc-start");
@@ -1297,6 +1325,7 @@
   /** Сериализация state в localStorage config. */
   function collectConfig() {
     const formSnap = readFormScalarsForConfig();
+    const logicPick = resolveLogicIdsForConfig();
     return {
       v: 1,
       savedAt: new Date().toISOString(),
@@ -1309,8 +1338,9 @@
       timeframe: formSnap?.timeframe || $("calc-tf")?.value || "60",
       from: formSnap?.from || $("calc-from")?.value || "",
       till: formSnap?.till || $("calc-till")?.value || "",
-      logic: (formSnap?.logicIds?.[0]) || primaryLogicId(),
-      logics: formSnap?.logicIds?.length ? formSnap.logicIds.slice() : selectedLogicIds(),
+      logic: logicPick.ids[0] || "RND",
+      logics: logicPick.ids,
+      logicSelectionCleared: logicPick.cleared,
       selectedInstruments: collectSelectedInstrumentsForConfig(),
       instrumentSelectAll: {
         shares: !!$("calc-sec-all-shares")?.checked,
@@ -1484,7 +1514,7 @@
         const mode = normalizeAccountMode(state.accountMode);
         if (modeEl.value !== mode) modeEl.value = mode;
       }
-      bridgeApi()?.syncFormFromDom?.();
+      bridgeApi()?.prepareForConfigPersist?.();
       persistBrokerDepositFromDom?.();
       safeStorageSet(CONFIG_STORE_KEY, JSON.stringify(collectConfig()));
       if (!options.force) {
@@ -1587,7 +1617,11 @@
       state.restoredLogicIds = Array.isArray(cfg.logics)
         ? cfg.logics.filter(Boolean)
         : (cfg.logic ? [cfg.logic] : null);
-      state.logicSelectionCleared = Array.isArray(cfg.logics) && cfg.logics.length === 0;
+      if (cfg.logicSelectionCleared != null) {
+        state.logicSelectionCleared = !!cfg.logicSelectionCleared;
+      } else {
+        state.logicSelectionCleared = Array.isArray(cfg.logics) && cfg.logics.length === 0;
+      }
       setValueIfExists("vol-type", cfg.volume?.type);
       setValueIfExists("vol-value", cfg.volume?.value);
       const restoreBrokerDeposit = (cred, snap) => {
@@ -9031,8 +9065,15 @@ ${referenceBlock}
       syncMonthInputFromDates();
       api.applyFormSnapshot({ month: $("calc-month")?.value || "" });
       if (Array.isArray(cfg.logics)) {
-        api.applyFormSnapshot({ logicIds: cfg.logics.filter(Boolean) });
-        state.logicSelectionCleared = cfg.logics.length === 0;
+        api.applyFormSnapshot({
+          logicIds: cfg.logics.filter(Boolean),
+          logicSelectionCleared: cfg.logicSelectionCleared != null
+            ? !!cfg.logicSelectionCleared
+            : cfg.logics.length === 0
+        });
+        state.logicSelectionCleared = cfg.logicSelectionCleared != null
+          ? !!cfg.logicSelectionCleared
+          : cfg.logics.length === 0;
       }
       const savedInst = state.restoredSelectedInstruments || [];
       if (savedInst.length) {

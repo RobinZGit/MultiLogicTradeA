@@ -46,6 +46,7 @@ export class FinrespFormService implements OnDestroy {
     this.bridge.registerFormSync(() => this.syncFromDom());
     this.bridge.registerBootReady(() => this.onBridgeBootReady());
     this.bridge.registerApplyFormSnapshot((snapshot) => this.applySnapshot(snapshot));
+    this.bridge.registerPrepareForConfigPersist(() => this.prepareForConfigPersist());
     this.bridge.registerFormSnapshot(() => this.snapshot());
     this.bridge.registerInstruments(() => this.selectedInstruments());
     this.bridge.registerLogicIds(() => this.selectedLogicIds());
@@ -127,10 +128,13 @@ export class FinrespFormService implements OnDestroy {
     if (snapshot.from != null) patch.from = snapshot.from;
     if (snapshot.till != null) patch.till = snapshot.till;
     if (snapshot.instrumentIds != null) patch.instrumentIds = [...snapshot.instrumentIds];
+    if (snapshot.logicSelectionCleared != null) {
+      this.logicSelectionCleared = !!snapshot.logicSelectionCleared;
+    }
     if (snapshot.logicIds != null) {
       patch.logicIds = [...snapshot.logicIds];
-      if (!snapshot.logicIds.length) {
-        this.logicSelectionCleared = true;
+      if (snapshot.logicSelectionCleared == null) {
+        this.logicSelectionCleared = snapshot.logicIds.length === 0;
       }
     }
 
@@ -150,6 +154,15 @@ export class FinrespFormService implements OnDestroy {
     this.pushLogicsToDom();
     this.refreshLogicChips();
     window.__mlFinrespBridge?.refreshLogicChips?.();
+  }
+
+  /** Перед записью config: Angular → скрытые DOM-зеркала, без затирания из пустого select. */
+  prepareForConfigPersist(): FinrespFormValues {
+    this.pushScalarsToDom();
+    this.pushAccountModeToDom();
+    this.pushInstrumentsToDom();
+    this.pushLogicsToDom();
+    return this.snapshot();
   }
 
   syncFromDom(): void {
@@ -188,6 +201,7 @@ export class FinrespFormService implements OnDestroy {
       accountMode: this.accountMode.value,
       instrumentIds: [...this.form.controls.instrumentIds.value],
       logicIds: [...this.form.controls.logicIds.value],
+      logicSelectionCleared: this.logicSelectionCleared,
     };
   }
 

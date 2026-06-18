@@ -32,6 +32,7 @@ export interface FinrespBridgeApi {
   applyInstrumentSelection: (ids: string[]) => void;
   applyLogicSelection: (ids: string[], cleared?: boolean) => void;
   applyFormSnapshot: (snapshot: Partial<FinrespFormValues>) => void;
+  prepareForConfigPersist: () => FinrespFormValues;
   registerWindowHandler: (
     handler: (which: 'start' | 'end', start: number, end: number) => void,
   ) => void;
@@ -69,6 +70,7 @@ export class FinrespBridgeService {
   private applyLogicsHandler: ((ids: string[], cleared?: boolean) => void) | null = null;
   private applyFormSnapshotHandler: ((snapshot: Partial<FinrespFormValues>) => void) | null =
     null;
+  private prepareForConfigPersistHandler: (() => FinrespFormValues) | null = null;
   private windowInputHandler:
     | ((which: 'start' | 'end', start: number, end: number) => void)
     | null = null;
@@ -95,6 +97,8 @@ export class FinrespBridgeService {
         this.ngZone.run(() => this.applyLogicsHandler?.(ids, cleared)),
       applyFormSnapshot: (snapshot) =>
         this.ngZone.run(() => this.applyFormSnapshotHandler?.(snapshot)),
+      prepareForConfigPersist: () =>
+        this.ngZone.run(() => this.prepareForConfigPersistHandler?.() ?? this.emptyFormSnapshot()),
       registerWindowHandler: (handler) => {
         this.windowInputHandler = (which, start, end) =>
           this.ngZone.run(() => handler(which, start, end));
@@ -141,6 +145,10 @@ export class FinrespBridgeService {
 
   registerApplyFormSnapshot(handler: (snapshot: Partial<FinrespFormValues>) => void): void {
     this.applyFormSnapshotHandler = handler;
+  }
+
+  registerPrepareForConfigPersist(handler: () => FinrespFormValues): void {
+    this.prepareForConfigPersistHandler = handler;
   }
 
   registerWindowHandler(
@@ -200,6 +208,7 @@ export class FinrespBridgeService {
       accountMode: 'paper',
       instrumentIds: [],
       logicIds: [],
+      logicSelectionCleared: false,
     };
   }
 }
