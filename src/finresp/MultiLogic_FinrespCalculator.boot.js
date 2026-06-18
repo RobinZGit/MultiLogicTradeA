@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-live-session-persist-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-account-mode-live-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {

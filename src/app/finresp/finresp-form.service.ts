@@ -9,6 +9,13 @@ import {
   FinrespWindowViewModel,
 } from './models/finresp-ui.models';
 
+declare global {
+  interface Window {
+    __mlOnAccountModeUserChange?: () => void | Promise<void>;
+    __mlSyncAccountMode?: () => void;
+  }
+}
+
 @Injectable()
 export class FinrespFormService implements OnDestroy {
   readonly accountMode = new FormControl('paper', { nonNullable: true });
@@ -48,7 +55,12 @@ export class FinrespFormService implements OnDestroy {
 
     this.subs.push(
       this.form.valueChanges.subscribe(() => this.pushScalarsToDom()),
-      this.accountMode.valueChanges.subscribe(() => this.pushAccountModeToDom()),
+      this.accountMode.valueChanges.subscribe(() => {
+        const domAlreadyMatched = !this.pushAccountModeToDom();
+        if (domAlreadyMatched) {
+          this.notifyLegacyAccountModeChange();
+        }
+      }),
       this.form.controls.instrumentIds.valueChanges.subscribe(() => {
         this.pushInstrumentsToDom();
         this.refreshLogicChips();
@@ -262,18 +274,37 @@ export class FinrespFormService implements OnDestroy {
     this.pushLogicsToDom();
   }
 
-  private pushAccountModeToDom(): void {
+  /** @returns true если значение в DOM было обновлено (change уйдёт в preboot). */
+  private pushAccountModeToDom(): boolean {
     const modeEl = document.getElementById('account-mode') as HTMLSelectElement | null;
     if (!modeEl) {
-      return;
+      return false;
     }
     const next = this.accountMode.value;
     if (modeEl.value === next) {
-      return;
+      return false;
     }
     modeEl.value = next;
     modeEl.dispatchEvent(new Event('input', { bubbles: true }));
     modeEl.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+
+  /** Angular FormControl не всегда даёт нативный change — дергаем legacy boot/live. */
+  private notifyLegacyAccountModeChange(): void {
+    window.__mlFinresp?.preboot?.syncLivePanelFromMode?.();
+    const handler = window.__mlOnAccountModeUserChange;
+    if (typeof handler === 'function') {
+      void Promise.resolve(handler()).catch((err: unknown) => {
+        console.error('account-mode change', err);
+      });
+      return;
+    }
+    try {
+      window.__mlSyncAccountMode?.();
+    } catch {
+      /* preboot-only path */
+    }
   }
 
   private pushInstrumentsToDom(): void {

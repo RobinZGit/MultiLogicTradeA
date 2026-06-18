@@ -94,6 +94,10 @@ test('live goal panel: enabled header shows target date and percent', () => {
   assert.match(liveSrc, /persistLiveSessionToStorage/);
   assert.match(liveSrc, /tryRestoreLiveSessionFromStorage/);
   assert.match(liveSrc, /clearLiveSessionCache/);
+  assert.match(liveSrc, /liveProtocolSessionMeta/);
+  assert.match(liveSrc, /trimSandboxLedgerWithArchive/);
+  assert.match(liveSrc, /archiveEvictedLiveData/);
+  assert.match(liveSrc, /MultiLogicLiveProtocolArchive/);
   assert.match(html, /id="live-session-clear-cache"/);
   assert.match(liveSrc, /Цель установлена/);
 });
@@ -140,4 +144,13 @@ test('live panels defer heavy work on expand (goal, notify, journal, positions)'
   assert.ok(notifyToggle, 'notify panel expand schedules async sync');
   const goalToggle = src.match(/live-goal-panel[\s\S]*?scheduleSyncLiveGoalPanel\(true\)/);
   assert.ok(goalToggle, 'goal panel expand schedules async sync');
+});
+
+test('Angular account mode notifies legacy live boot when DOM already matches', () => {
+  const formPath = path.join(root, 'src', 'app', 'finresp', 'finresp-form.service.ts');
+  const src = fs.readFileSync(formPath, 'utf8');
+  assert.match(src, /domAlreadyMatched/);
+  assert.match(src, /notifyLegacyAccountModeChange/);
+  assert.match(src, /__mlOnAccountModeUserChange/);
+  assert.match(src, /syncLivePanelFromMode/);
 });

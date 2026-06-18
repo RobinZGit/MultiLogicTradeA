@@ -170,10 +170,17 @@
       return;
     }
     const modeLabel = payload.mode === "sandbox" ? "песочница (фейк)" : "реал (брокер)";
+    const archiveNote = payload.archive
+      ? ` · <strong>архив</strong> часть ${payload.archivePart ?? "—"} (${esc(payload.archiveReason || "trim")})`
+      : "";
+    const sessionLine = payload.sessionId
+      ? `<p class="proto-sub">Сессия: <code>${esc(payload.sessionId)}</code>${payload.tradingRunId ? ` · запуск робота: <code>${esc(payload.tradingRunId)}</code>` : ""}</p>`
+      : "";
     mount.innerHTML = `
 <header class="proto-hdr">
-<h1>Протокол истории сделок</h1>
-<p class="proto-sub">Экспорт: ${fmtWhen(payload.exportedAt)} · режим: ${esc(modeLabel)} · версия: ${esc(payload.pageVersion || "—")}</p>
+<h1>Протокол истории сделок${payload.archive ? " (архив)" : ""}</h1>
+<p class="proto-sub">Экспорт: ${fmtWhen(payload.exportedAt)} · режим: ${esc(modeLabel)} · версия: ${esc(payload.pageVersion || "—")}${archiveNote}</p>
+${sessionLine}
 <p class="proto-sub">Формат: ${esc(payload.format || "—")} · сделок: ${payload.trades?.length ?? 0} · закрытий: ${payload.closeEvents?.length ?? 0}</p>
 <nav class="proto-toc">
 <a href="#summary">Сводка</a> · <a href="#closes">Закрытия FIFO</a> · <a href="#open-lots">Открытые пакеты</a> · <a href="#trades">Журнал</a>

@@ -1886,7 +1886,7 @@
       applyTradeHistoryFinrespOnMerge(entry);
       hist.unshift(entry);
     }
-    if (hist.length > 500) hist.length = 500;
+    if (hist.length > LIVE_TRIM_MAX) trimLiveTradeHistoryWithArchive(hist);
   }
 
   /** Одна строка журнала на каждое исполнение в песочнице (ledger append-only, без схлопывания). */
@@ -2452,7 +2452,14 @@
     const el = $("live-trading-orders");
     const metaEl = $("live-trade-history-meta");
     lastJournalDomRenderAt = Date.now();
-    const hist = ensureLiveTradeHistory().slice().sort((a, b) => {
+    const memHist = ensureLiveTradeHistory();
+    const archivedRows = await ensureArchivedTradesLoaded();
+    const memIds = new Set(memHist.map((h) => String(h.id || "")));
+    const archivedEntries = archivedRows
+      .filter((t) => t?.tradeId && !memIds.has(String(t.tradeId)))
+      .map(protocolTradeRowToHistoryEntry)
+      .filter(Boolean);
+    const hist = [...memHist, ...archivedEntries].slice().sort((a, b) => {
       if (!!a.active !== !!b.active) return a.active ? -1 : 1;
       const ta = Date.parse(a.when || 0) || 0;
       const tb = Date.parse(b.when || 0) || 0;
@@ -2465,9 +2472,17 @@
       const nAct = hist.filter((h) => h.active).length;
       const nFake = hist.filter((h) => h.fake).length;
       const nReal = hist.filter((h) => !h.fake).length;
+      const nArch = hist.filter((h) => h.archivedChunk).length;
+      const archSum = await summarizeArchivedSession();
       metaText = isLiveSandbox()
-        ? `Сделок в журнале: ${hist.length} (фейк ${nFake}, реал ${nReal}${nAct ? `, активных заявок ${nAct}` : ""}). ★ покупка · ☆ продажа · FINRESPΔ = продажи − покупки (FIFO) − комиссии · Источник — робот / ручная / закрытие.`
-        : `Сделок в журнале: ${hist.length} (фейк ${nFake}, реал ${nReal}${nAct ? `, активных заявок ${nAct}` : ""}). ★/☆ · FINRESPΔ = продажи − покупки (FIFO) − комиссии (брокер) · позиции до старта сессии — без комиссии покупки в журнале.`;
+        ? `Сделок в журнале: ${hist.length} (фейк ${nFake}, реал ${nReal}${nAct ? `, активных заявок ${nAct}` : ""}${nArch ? `, из архива ${nArch}` : ""}). ★ покупка · ☆ продажа · FINRESPΔ = продажи − покупки (FIFO) − комиссии · Источник — робот / ручная / закрытие.`
+        : `Сделок в журнале: ${hist.length} (фейк ${nFake}, реал ${nReal}${nAct ? `, активных заявок ${nAct}` : ""}${nArch ? `, из архива ${nArch}` : ""}). ★/☆ · FINRESPΔ = продажи − покупки (FIFO) − комиссии (брокер) · позиции до старта сессии — без комиссии покупки в журнале.`;
+      if (state.live.sessionId) {
+        metaText += ` Сессия: ${state.live.sessionId}`;
+      }
+      if (archSum.chunks > 0) {
+        metaText += ` · архив IndexedDB: ${archSum.chunks} частей, ${archSum.trades} сделок (HTML скачивается при ротации).`;
+      }
     }
     const active = hist.filter((h) => h.active);
     const done = hist.filter((h) => !h.active);
@@ -2737,23 +2752,218 @@
     }
     const legToOpenTradeId = {};
     for (const [legId, tradeId] of legToTradeId.entries()) legToOpenTradeId[String(legId)] = tradeId;
+    const sessionMeta = liveProtocolSessionMeta();
     return {
       format: "multilogic-trade-history-protocol-v1",
       exportedAt: new Date().toISOString(),
       pageVersion: (typeof root.__mlFinrespVersion === "string" ? root.__mlFinrespVersion : null),
       mode: isLiveSandbox() ? "sandbox" : "real",
-      session: {
-        liveActive: !!state.live.active,
-        sandbox: isLiveSandbox(),
-        sessionStartedAt: state.live.sessionStartedAt || state.live.chartSession?.startedAt || null,
-        tradingStartedAt: state.live.tradingStartedAt || null
-      },
+      sessionId: sessionMeta.sessionId,
+      tradingRunId: sessionMeta.tradingRunId,
+      session: sessionMeta,
       portfolioSummary: tradeHistoryProtocolPortfolioSummary(done),
       legToOpenTradeId,
       trades,
       closeEvents,
       openLots: [...openLotsByKey.values()]
     };
+  }
+
+  const LIVE_TRIM_MAX = 500;
+  let liveArchivePersistBusy = false;
+  let cachedArchivedTrades = null;
+  let cachedArchivedSessionId = null;
+
+  function liveProtocolArchiveApi() {
+    return root.MultiLogicLiveProtocolArchive;
+  }
+
+  function newLiveSessionId() {
+    return `live-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  function newTradingRunId() {
+    return `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  function liveProtocolSessionMeta() {
+    return {
+      sessionId: state.live.sessionId || null,
+      tradingRunId: state.live.tradingRunId || null,
+      brokerId: readBrokerIdFromUi(),
+      accountId: String(activeBrokerState().selectedAccountId || activeBrokerState().portfolioId || ""),
+      liveActive: !!state.live.active,
+      sandbox: isLiveSandbox(),
+      sessionStartedAt: state.live.sessionStartedAt || state.live.chartSession?.startedAt || null,
+      tradingStartedAt: state.live.tradingStartedAt || null
+    };
+  }
+
+  function protocolTradeRowToHistoryEntry(t) {
+    if (!t) return null;
+    return {
+      id: t.tradeId,
+      orderId: t.orderId,
+      when: t.when,
+      ticker: t.ticker,
+      isBuy: !!t.isBuy,
+      tradeRole: t.tradeRole,
+      price: t.price,
+      lotsExecuted: t.lotsExecuted,
+      lotsRequested: t.lotsRequested,
+      fee: t.fee,
+      notional: t.notional,
+      fake: !!t.fake,
+      mode: t.mode || (t.fake ? "sandbox" : "real"),
+      status: t.status || "исполнена (архив)",
+      active: false,
+      archivedChunk: true,
+      tradeSourceLabel: t.tradeSourceLabel || "архив протокола"
+    };
+  }
+
+  function fillToProtocolTradeRow(fill) {
+    const signed = Math.trunc(+fill.signedPieces || 0);
+    if (!signed) return null;
+    const isBuy = signed > 0;
+    return tradeHistoryProtocolTradeRow({
+      id: fill.orderId || `fill-${fill.fillId}`,
+      orderId: fill.orderId,
+      when: fill.ts,
+      ticker: fill.ticker,
+      isBuy,
+      tradeRole: fill.tradeRole,
+      lotsRequested: fill.lots,
+      lotsExecuted: fill.lots,
+      price: +fill.price,
+      notional: Math.abs(signed) * (+fill.price || 0),
+      fee: fill.fee,
+      status: "исполнена",
+      active: false,
+      fake: true,
+      mode: "sandbox",
+      tradeSourceLabel: fill.tradeSourceLabel || resolveTradeSourceLabel(fill.tradeSource)
+    });
+  }
+
+  async function archiveEvictedLiveData(opts) {
+    const options = opts || {};
+    if (!isLiveMode() || liveArchivePersistBusy) return;
+    const ledgerFills = options.ledgerFills || [];
+    const tradeRows = options.tradeHistoryRows || [];
+    if (!ledgerFills.length && !tradeRows.length) return;
+    liveArchivePersistBusy = true;
+    try {
+      state.live.protocolArchivePart = (state.live.protocolArchivePart || 0) + 1;
+      const part = state.live.protocolArchivePart;
+      const trades = [];
+      const histById = new Map();
+      for (const row of tradeRows) {
+        if (!row?.id) continue;
+        histById.set(String(row.id), row);
+        trades.push(tradeHistoryProtocolTradeRow(row));
+      }
+      for (const fill of ledgerFills) {
+        const row = fillToProtocolTradeRow(fill);
+        if (row && !histById.has(String(row.tradeId))) trades.push(row);
+      }
+      trades.sort((a, b) => (Date.parse(a.when || 0) || 0) - (Date.parse(b.when || 0) || 0));
+      const legToTradeId = new Map();
+      const closeEvents = tradeRows
+        .map((e) => tradeHistoryProtocolClosePacket(e, legToTradeId))
+        .filter(Boolean);
+      const payload = {
+        format: "multilogic-trade-history-protocol-v1",
+        archive: true,
+        archivePart: part,
+        archiveReason: options.reason || "trim",
+        exportedAt: new Date().toISOString(),
+        pageVersion: (typeof root.__mlFinrespVersion === "string" ? root.__mlFinrespVersion : null),
+        mode: isLiveSandbox() ? "sandbox" : "real",
+        sessionId: state.live.sessionId || null,
+        tradingRunId: state.live.tradingRunId || null,
+        session: liveProtocolSessionMeta(),
+        trades,
+        closeEvents,
+        ledgerFills: ledgerFills.map((f) => ({
+          ...f,
+          tradeMatches: f.tradeMatches ? f.tradeMatches.map((m) => ({ ...m })) : null
+        })),
+        sandboxCheckpoint: isLiveSandbox() ? serializeSandboxForSession(brokerSandboxState()) : null,
+        portfolioSummary: null,
+        openLots: []
+      };
+      const api = liveProtocolArchiveApi();
+      if (api?.putChunk) await api.putChunk(payload);
+      cachedArchivedTrades = null;
+      cachedArchivedSessionId = null;
+      try {
+        const html = await buildStandaloneProtocolHtml(payload);
+        const sid = (state.live.sessionId || "sess").replace(/[^\w-]+/g, "").slice(0, 24);
+        const filename = `multilogic_protocol_${sid}_part${part}.html`;
+        const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (_) { /* download optional */ }
+      noteLiveTech(
+        "live-protocol-archive",
+        `part=${part} trades=${trades.length}`,
+        `session=${state.live.sessionId || "—"}`
+      );
+    } catch (err) {
+      noteLiveTech("live-protocol-archive", err.message || String(err));
+    } finally {
+      liveArchivePersistBusy = false;
+    }
+  }
+
+  function trimSandboxLedgerWithArchive(sb) {
+    if (sb.ledger.length <= LIVE_TRIM_MAX) return;
+    const drop = sb.ledger.length - LIVE_TRIM_MAX;
+    const evicted = sb.ledger.splice(0, drop);
+    void archiveEvictedLiveData({ ledgerFills: evicted, reason: "ledger-trim" });
+  }
+
+  function trimLiveTradeHistoryWithArchive(hist) {
+    if (hist.length <= LIVE_TRIM_MAX) return;
+    const evicted = hist.splice(LIVE_TRIM_MAX);
+    void archiveEvictedLiveData({ tradeHistoryRows: evicted, reason: "trade-history-trim" });
+  }
+
+  async function ensureArchivedTradesLoaded() {
+    const sid = state.live.sessionId;
+    if (!sid || !isLiveMode()) return [];
+    if (cachedArchivedSessionId === sid && cachedArchivedTrades) return cachedArchivedTrades;
+    const api = liveProtocolArchiveApi();
+    if (!api?.mergeTradesForSession) {
+      cachedArchivedTrades = [];
+      cachedArchivedSessionId = sid;
+      return cachedArchivedTrades;
+    }
+    try {
+      cachedArchivedTrades = await api.mergeTradesForSession(sid);
+      cachedArchivedSessionId = sid;
+    } catch (_) {
+      cachedArchivedTrades = [];
+      cachedArchivedSessionId = sid;
+    }
+    return cachedArchivedTrades;
+  }
+
+  async function summarizeArchivedSession() {
+    const sid = state.live.sessionId;
+    if (!sid) return { chunks: 0, trades: 0 };
+    const api = liveProtocolArchiveApi();
+    if (!api?.summarizeSession) return { chunks: 0, trades: 0 };
+    try {
+      return await api.summarizeSession(sid);
+    } catch (_) {
+      return { chunks: 0, trades: 0 };
+    }
   }
 
   const PROTOCOL_STORAGE_KEY = "multilogic.trade-protocol.v1";
@@ -2793,7 +3003,8 @@
       window.open(assetUrl("MultiLogic_TradeHistoryProtocol.html"), "_blank");
       const day = new Date().toISOString().slice(0, 10);
       const mode = payload.mode || "live";
-      const filename = `multilogic_trade_protocol_${mode}_${day}.html`;
+      const sid = (payload.sessionId || "sess").replace(/[^\w-]+/g, "").slice(0, 24);
+      const filename = `multilogic_trade_protocol_${mode}_${sid}_${day}.html`;
       const html = await buildStandaloneProtocolHtml(payload);
       const blob = new Blob([html], { type: "text/html;charset=utf-8" });
       const url = URL.createObjectURL(blob);
@@ -5208,7 +5419,7 @@
       ...fillData
     };
     sb.ledger.push(fill);
-    if (sb.ledger.length > 500) sb.ledger.splice(0, sb.ledger.length - 500);
+    trimSandboxLedgerWithArchive(sb);
     scheduleLiveSessionPersist();
     return fill;
   }
@@ -5731,6 +5942,8 @@
       brokerId: id,
       sandbox: !!sandbox,
       accountId: String(accountId || ""),
+      sessionId: state.live.sessionId || null,
+      tradingRunId: state.live.tradingRunId || null,
       volDeposit: dep,
       tradingStartedAt: state.live.tradingStartedAt || null,
       sessionStartedAt: state.live.sessionStartedAt || null,
@@ -5832,6 +6045,8 @@
       if (payload.sessionPositionBaseline) state.live.sessionPositionBaseline = payload.sessionPositionBaseline;
       if (payload.tradingStartedAt) state.live.tradingStartedAt = payload.tradingStartedAt;
       if (payload.sessionStartedAt) state.live.sessionStartedAt = payload.sessionStartedAt;
+      if (payload.sessionId) state.live.sessionId = payload.sessionId;
+      if (payload.tradingRunId) state.live.tradingRunId = payload.tradingRunId;
       hydrateLiveUiFromRuntime(brokerId);
     }
     noteLiveTech("live-session-restore", `${brokerId} sandbox=${sandbox} trades=${(payload.tradeHistory || []).length}`);
@@ -5864,6 +6079,12 @@
     const map = readLiveSessionStoreMap();
     delete map[liveSessionSlot(brokerId, sandbox)];
     writeLiveSessionStoreMap(map);
+    const api = liveProtocolArchiveApi();
+    if (api?.deleteBySession && state.live.sessionId) {
+      try { await api.deleteBySession(state.live.sessionId); } catch (_) { /* ignore */ }
+    }
+    cachedArchivedTrades = null;
+    cachedArchivedSessionId = null;
     if (sandbox) {
       const dep = +($("vol-deposit")?.value || 0) || defaultProvisionalDepositRub();
       await resetSandboxLedgerToBaseline(dep);
@@ -7493,6 +7714,10 @@ ${referenceBlock}
     if (!isLiveMode()) return false;
     if (state.live.chartSession) return true;
     const startedAt = new Date().toISOString();
+    state.live.sessionId = newLiveSessionId();
+    state.live.protocolArchivePart = 0;
+    cachedArchivedTrades = null;
+    cachedArchivedSessionId = null;
     state.live.sessionStartedAt = startedAt;
     const mode = isLiveSandbox() ? "sandbox" : "real";
     const pack = refPack();
@@ -8733,6 +8958,7 @@ ${referenceBlock}
         return;
       }
       state.live.sessionPositionBaseline = sandboxPositionsByTicker();
+      state.live.tradingRunId = newTradingRunId();
       state.live.active = true;
       state.live.tradingStartedAt = new Date().toISOString();
       state.live.realLegSeed = null;
@@ -8769,6 +8995,7 @@ ${referenceBlock}
       noteLiveTech("live-session-baseline", err.message);
     }
     state.live.active = true;
+    state.live.tradingRunId = newTradingRunId();
     state.live.tradingStartedAt = new Date().toISOString();
     state.live.realLegSeed = null;
     resetLiveFinrespBaselinesForTrading();
