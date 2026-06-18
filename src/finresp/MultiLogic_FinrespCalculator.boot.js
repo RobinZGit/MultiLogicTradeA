@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-18-protocol-export-v13";
+  const CALC_PAGE_VERSION = "2026-06-18-ann-pct-cap-v14";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -1165,7 +1165,14 @@
     if (v < 0) return `\u2212${fmt(Math.abs(v), d)}`;
     return fmt(v, d);
   };
-  const fmtPct = (v) => Number.isFinite(v) ? `${v.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %` : "—";
+  /** Верхняя граница % в UI (4 девятки) — длинные числа не помещаются в блок метрик. */
+  const ANN_PCT_DISPLAY_MAX = 9999.99;
+  const fmtPct = (v) => {
+    if (!Number.isFinite(v)) return "—";
+    if (v > ANN_PCT_DISPLAY_MAX) return `>${fmt(ANN_PCT_DISPLAY_MAX)} %`;
+    if (v < -ANN_PCT_DISPLAY_MAX) return `<${fmt(-ANN_PCT_DISPLAY_MAX)} %`;
+    return `${fmt(v)} %`;
+  };
   const fmtBytes = (v) => {
     if (!Number.isFinite(v)) return "—";
     const units = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
@@ -1938,18 +1945,23 @@
     const ratio = 1 + finresp / deposit;
     if (ratio <= 0) return null;
     const elapsedYears = days / 365;
-    return (Math.pow(ratio, 1 / elapsedYears) - 1) * 100;
+    if (elapsedYears <= 0) return null;
+    const exp = 1 / elapsedYears;
+    // Короткий live-период (минуты/часы): степень огромная → Infinity, годовой сложный % бессмысленен.
+    if (exp > 500) return null;
+    const raw = Math.pow(ratio, exp);
+    if (!Number.isFinite(raw) || raw <= 0) return null;
+    const pct = (raw - 1) * 100;
+    return Number.isFinite(pct) ? pct : null;
   }
 
   /** Установка значения: `setAnnMetric`. */
   function setAnnMetric(id, value) {
     const el = $(id);
-    el.textContent = fmtPct(value);
-    if (!Number.isFinite(value)) {
-      el.style.color = "";
-      return;
-    }
-    el.style.color = value < 0 ? "#b91c1c" : "#047857";
+    if (!el) return;
+    const view = annDisplay(value);
+    el.textContent = view.text;
+    el.style.color = view.color;
   }
 
   /** Установка значения: `setCommissionMetric`. */
@@ -8098,6 +8110,9 @@ ${referenceBlock}
         : (days < 1 ? `${Math.max(1, Math.round(days * 24 * 60))} мин` : `${Math.round(days * 10) / 10} календ. дн.`);
       annHintText = `Live · ${mode} · FINRESP и % годовых ${scope} (${c0} — ${c1}, ${daysLabel})`
         + (Number.isFinite(periodPct) ? ` · доходность за период: ${fmtPct(periodPct)}` : "")
+        + (Number.isFinite(annSimple) && !Number.isFinite(annCompound)
+          ? " · сложный %: период слишком короткий для годовой экстраполяции"
+          : "")
         + " · совпадает с FINRESP Σ в блоке «Реальная торговля».";
     } else if (days && deposit > 0) {
       const periodPct = (agg.finresp / deposit) * 100;
