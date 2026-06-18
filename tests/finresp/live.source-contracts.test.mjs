@@ -319,6 +319,17 @@ test('portfolio stopper: sandbox closes positions, real notify only', () => {
   assert.match(liveSrc, /showSandboxStopperNotification\(hit\)/);
 });
 
+test('live commission: reset on session clear, sandbox toggle, always apply from broker ops', () => {
+  const liveSrc = fs.readFileSync(livePath, 'utf8');
+  assert.match(liveSrc, /function resetLiveRealCommissionSession/);
+  assert.match(liveSrc, /function applyLiveBrokerOpsCommission/);
+  assert.match(liveSrc, /brokerOpsPeriodAnchor/);
+  assert.match(liveSrc, /resetLiveRealCommissionSession\(\)/);
+  assert.match(liveSrc, /persistLiveUiToRuntime\([^)]*,\s*\{\s*forceReal:\s*true\s*\}/);
+  assert.match(liveSrc, /applyLiveBrokerOpsCommission\(\)/);
+  assert.match(liveSrc, /syncSandboxCommissionToUi/);
+});
+
 test('conjugate logics: engine export + UI button between help and copy', () => {
   const engineSrc = fs.readFileSync(
     path.join(root, 'src', 'finresp', 'MultiLogic_FinrespCalculator.engine.js'),

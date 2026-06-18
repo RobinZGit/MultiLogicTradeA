@@ -340,9 +340,10 @@
     return Number.isFinite(b.depositRub) ? b.depositRub : defaultProvisionalDepositRub();
   }
 
-  function persistLiveUiToRuntime(brokerId) {
+  function persistLiveUiToRuntime(brokerId, opts) {
+    const options = opts || {};
     const id = brokerId || readBrokerIdFromUi();
-    if (isLiveSandbox()) return;
+    if (!options.forceReal && isLiveSandbox()) return;
     const r = ensureLiveRuntime(id).real;
     r.orders = (state.live.orders || []).slice();
     r.openPositions = (state.live.openPositions || []).slice();
@@ -423,15 +424,16 @@
       const mtm = state.live.sandboxPositionsValue;
       const cash = Number.isFinite(sb.cash) ? sb.cash : sb.startPortfolio;
       const pv = state.live.portfolioValue ?? (Number.isFinite(cash) && Number.isFinite(mtm) ? cash + mtm : cash);
-      return { brokerId, sandbox: true, portfolioValue: pv, freeCashRub: cash, commissionPaid: sb.commissionTotal ?? state.live.commissionPaid, positionsMtmRub: mtm, orders: sb.orders, openPositions: state.live.openPositions };
+      return { brokerId, sandbox: true, portfolioValue: pv, freeCashRub: cash, commissionPaid: Number.isFinite(sb.commissionTotal) ? sb.commissionTotal : (state.live.commissionPaid ?? 0), positionsMtmRub: mtm, orders: sb.orders, openPositions: state.live.openPositions };
     }
     const r = rt.real;
+    const comm = Number.isFinite(state.live.commissionPaid) ? state.live.commissionPaid : r.commissionPaid;
     return {
       brokerId,
       sandbox: false,
       portfolioValue: r.portfolioValue ?? state.live.portfolioValue,
       freeCashRub: r.freeCashRub ?? state.live.freeCashRub,
-      commissionPaid: r.commissionPaid ?? state.live.commissionPaid,
+      commissionPaid: comm,
       positionsMtmRub: r.positionsMtmRub ?? state.live.positionsMtmRub,
       orders: r.orders?.length ? r.orders : state.live.orders,
       openPositions: r.openPositions?.length ? r.openPositions : state.live.openPositions
@@ -1863,6 +1865,34 @@
     return comm;
   }
 
+  /** Записать commissionPaid в state и runtime реала (в т.ч. 0 при пустом списке операций). */
+  function applyLiveBrokerOpsCommission() {
+    const comm = sumTbankOperationsCommission(state.live.brokerOperationsRaw || []);
+    state.live.commissionPaid = comm;
+    if (!isLiveSandbox()) {
+      ensureLiveRuntime(readBrokerIdFromUi()).real.commissionPaid = comm;
+    }
+  }
+
+  /** Сброс комиссии реала и якоря периода GetOperations (метла / новый журнал). */
+  function resetLiveRealCommissionSession(anchorAt) {
+    const anchor = anchorAt || new Date().toISOString();
+    state.live.brokerOpsPeriodAnchor = anchor;
+    state.live.brokerOperationsRaw = [];
+    state.live.brokerOperations = [];
+    state.live.brokerOpCommissionByParentId = new Map();
+    state.live.commissionPaid = 0;
+    const r = ensureLiveRuntime(readBrokerIdFromUi()).real;
+    r.commissionPaid = 0;
+    r.brokerOperationsRaw = null;
+    r.brokerOperations = [];
+  }
+
+  function syncSandboxCommissionToUi() {
+    const sb = ensureSandboxState();
+    state.live.commissionPaid = sb.commissionTotal || 0;
+  }
+
   /** Снимок открытых позиций на старт торговли — для seed legs в боевом режиме. */
   function captureRealLegSeedFromPortfolioRows(rows) {
     if (isLiveSandbox()) return;
@@ -1904,10 +1934,18 @@
 
   /** Начало периода операций брокера для комиссий и журнала. */
   function liveBrokerOpsPeriodFrom() {
-    return state.live.tradingStartedAt
+    const anchor = state.live.brokerOpsPeriodAnchor;
+    const session = state.live.tradingStartedAt
       || state.live.sessionStartedAt
-      || state.live.chartSession?.startedAt
-      || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
+      || state.live.chartSession?.startedAt;
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
+    let from = session || monthStart;
+    if (anchor) {
+      const aMs = Date.parse(anchor);
+      const fMs = Date.parse(from);
+      if (Number.isFinite(aMs) && (!Number.isFinite(fMs) || aMs > fMs)) from = anchor;
+    }
+    return from;
   }
 
   /**
@@ -6445,6 +6483,7 @@
       await updateSandboxPortfolioDisplay();
     } else {
       state.live.tradeHistory = ensureLiveTradeHistory().filter((h) => h.fake || h.mode === "sandbox");
+      resetLiveRealCommissionSession();
       if (isLiveMode() && !isLiveSandbox()) {
         try {
           await refreshLiveOrders();
@@ -6457,7 +6496,8 @@
     }
     scheduleRenderLiveOrdersPanel(true);
     scheduleRenderLivePositionsPanel(true);
-    syncLiveTradingUi();
+    renderLivePortfolioStats();
+    syncLiveTradingUi({ skipGoalCheck: true });
     noteLiveTech("live-session-clear", `${brokerId} sandbox=${sandbox}`);
   }
 
@@ -7064,6 +7104,8 @@
       if (!provisional && depositFallback > 0 && sb.startPortfolio !== depositFallback) {
         await resyncLiveSandboxStartFromDeposit();
       }
+      syncSandboxCommissionToUi();
+      renderLivePortfolioStats();
       return;
     }
     await yieldToUi();
@@ -7141,7 +7183,8 @@
       await refreshLiveOrders();
     } else {
       state.live.freeCashRub = null;
-      state.live.commissionPaid = null;
+      state.live.commissionPaid = 0;
+      ensureLiveRuntime(readBrokerIdFromUi()).real.commissionPaid = 0;
       if (Number.isFinite(state.live.realPortfolioValue)) {
         state.live.portfolioValue = state.live.realPortfolioValue;
       }
@@ -7182,6 +7225,7 @@
       await yieldToUi();
       if (state.live.active) recordLiveModeRegionSwitch();
       if (on) {
+        persistLiveUiToRuntime(readBrokerIdFromUi(), { forceReal: true });
         await enableLiveSandbox();
         notifyLiveSandboxModeSwitch(true);
         await yieldToUi();
@@ -7209,6 +7253,7 @@
           }
         }
         await disableLiveSandbox();
+        hydrateLiveUiFromRuntime(readBrokerIdFromUi());
         notifyLiveSandboxModeSwitch(false);
         if (!activeBrokerState().depositLoaded) await ensureBrokerDepositLoaded();
         if (state.live.active) {
@@ -7506,13 +7551,17 @@
       const from = liveBrokerOpsPeriodFrom();
       const ops = await broker.getOperations(from, new Date().toISOString());
       storeBrokerOperationsRaw(ops.operations || []);
-      if ((ops.operations || []).length) {
-        const enriched = await enrichBrokerOperationsForHistory(state.live.brokerOperationsRaw);
+      const enriched = (ops.operations || []).length
+        ? await enrichBrokerOperationsForHistory(state.live.brokerOperationsRaw)
+        : [];
+      if (enriched.length) {
         state.live.brokerOperations = enriched;
         for (const op of enriched) upsertTradeHistoryFromTbankOperation(op);
         reconcileRealBrokerTradeFinresp(enriched);
-        state.live.commissionPaid = sumTbankOperationsCommission(state.live.brokerOperationsRaw);
+      } else {
+        state.live.brokerOperations = [];
       }
+      applyLiveBrokerOpsCommission();
       await recalcLivePortfolioMtmFromCandles();
       snapshotLiveSessionPortfolioBaseline();
       await refreshLiveOpenPositions();

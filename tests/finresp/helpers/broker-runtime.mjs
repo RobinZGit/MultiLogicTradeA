@@ -167,19 +167,20 @@ export function activeView(state, activeBrokerId, sandboxMode) {
       sandbox: true,
       portfolioValue: pv,
       freeCashRub: cash,
-      commissionPaid: sb.commissionTotal ?? state.live.commissionPaid,
+      commissionPaid: Number.isFinite(sb.commissionTotal) ? sb.commissionTotal : (state.live.commissionPaid ?? 0),
       positionsMtmRub: mtm,
       orders: sb.orders,
       openPositions: state.live.openPositions
     };
   }
   const r = rt.real;
+  const comm = Number.isFinite(state.live.commissionPaid) ? state.live.commissionPaid : r.commissionPaid;
   return {
     brokerId: activeBrokerId,
     sandbox: false,
     portfolioValue: r.portfolioValue ?? state.live.portfolioValue,
     freeCashRub: r.freeCashRub ?? state.live.freeCashRub,
-    commissionPaid: r.commissionPaid ?? state.live.commissionPaid,
+    commissionPaid: comm,
     positionsMtmRub: r.positionsMtmRub ?? state.live.positionsMtmRub,
     orders: r.orders?.length ? r.orders : state.live.orders,
     openPositions: r.openPositions?.length ? r.openPositions : state.live.openPositions
