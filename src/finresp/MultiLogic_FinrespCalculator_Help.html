@@ -403,7 +403,9 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 </ul>
 
 <h3>9.5. Используемые индикаторы</h3>
-<p>Чекбоксы SMA, ATR, Stoch, LinReg, Bollinger, VWAP, CCI, MACD, Momentum. Отключённые удаляются из Op/Cl перед расчётом. SL/TP позиции не зависят от этого списка.</p>
+<p>Чекбоксы SMA, ATR, Stoch, LinReg, Bollinger, VWAP, CCI, MACD, Momentum, <strong>TotStoch</strong>, <strong>CtgStoch</strong>. Отключённые удаляются из Op/Cl перед расчётом. SL/TP позиции не зависят от этого списка.</p>
+<p><strong>TotStoch</strong> — стохастик по <em>тотальной</em> цене корзины (средняя OHLC всех выбранных инструментов на каждом баре). Работает на любом рынке, если атом есть в строке логики.</p>
+<p><strong>CtgStoch</strong> и любые будущие индикаторы из папки <code>indicators/ctg/</code> — <strong>только для фьючерсов</strong>. На акциях и прочих не-фьючерсах атомы контанго (<code>ctgstoch</code> и др.) <em>полностью убираются</em> из Op/Cl: условие не участвует в расчёте (не подменяется обычным Stoch). Spot для контанго подгружается с MOEX ISS только при <code>market=futures</code>. В смешанном портфеле (акции + фьючерсы) одна строка логики применяется по-разному: на GAZP — без CtgStoch, на SiH5 — с CtgStoch (если галочка включена).</p>
 <p><strong>Оптимизировать</strong> (индикаторы) — перебор непустых комбинаций, остаётся набор с лучшим FINRESP.</p>
 
 <h3>9.6. Каталог логик — все встроенные стратегии по умолчанию</h3>
@@ -478,7 +480,7 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 
 <h4>FTS — Фьючерс: CtgStoch + Stoch (лонг), контртренд 20↔80</h4>
 <p><strong>Идея:</strong> покупаем «внизу пилы» и продаём «вверху» на боковике фьючерсов, с подтверждением от <strong>контанго</strong> (спред фьючерс − базовый актив).</p>
-<p><strong>CtgStoch:</strong> стохастик (14-3-3) по ряду OHLC контанго: для каждого фьючерса подгружается spot с MOEX ISS, на каждом баре <code>fut − spot</code>, по этому ряду считается %K/%D (атом <code>ctgstoch</code> в строке логики).</p>
+<p><strong>CtgStoch:</strong> стохастик (14-3-3) по ряду OHLC контанго: для каждого <strong>фьючерса</strong> подгружается spot с MOEX ISS, на каждом баре <code>fut − spot</code>, по этому ряду считается %K/%D (атом <code>ctgstoch</code> в строке логики). На акциях этот атом <em>не применяется</em> — см. §9.5.</p>
 <p><strong>Вход long:</strong> <code>CtgStoch.K ≤ 20</code> и одновременно <code>Stoch.K ≤ 20</code> инструмента.</p>
 <p><strong>Выход long:</strong> <code>CtgStoch.K ≥ 80</code> и одновременно <code>Stoch.K ≥ 80</code> инструмента. SL/TP — по полям @SL/@TP.</p>
 <p class="note">Раньше использовался TotStoch (стохастик по тотальной цене корзины). С 2026-06-17 — только CtgStoch для семейства FTS/FTT/FTS_S/FTT_S.</p>
@@ -646,9 +648,10 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 <h2 id="changelog">13. Изменения</h2>
 
 <h3 id="changelog-2026-06-18">13.1. 18.06.2026</h3>
-<p>Сводка доработок за 18.06.2026. Актуальная сборка: <code>pageVersion=2026-06-18-protocol-export-v13</code>.</p>
+<p>Сводка доработок за 18.06.2026. Актуальная сборка: <code>pageVersion=2026-06-18-ctg-futures-help-v20</code>.</p>
 <table>
 <tr><th>Тема</th><th>Что сделано</th></tr>
+<tr><td><strong>CtgStoch — только фьючерсы</strong></td><td>Индикаторы контанго (<code>indicators/ctg/*</code>, сейчас CtgStoch): на не-фьючерсах атомы убираются из Op/Cl, spot и ряд контанго не строятся. Смешанный портфель — per-instrument фильтр в <code>engine.js</code>. Тесты <code>ctg-stoch.test.mjs</code></td></tr>
 <tr><td><strong>@@PauseOnDrawdownPerLogic</strong></td><td>Пауза по просадке <em>отдельной</em> логики: <code>effectiveLogicIds()</code>, изолированная equity в <code>engine.js</code>, reconcile без остановки сессии, чипы «отключена», persist в config и live-сессии</td></tr>
 <tr><td><strong>Equity: белые полосы паузы</strong></td><td>На mini-графиках equity по логикам — белый фон и пунктиры на интервалах отключения (расчёт + live <code>sessionEvents</code>)</td></tr>
 <tr><td><strong>Протокол сделок: события логик</strong></td><td>Журнал <code>sessionEvents</code>: enable/disable логики (просадка, ручная смена стека, портфельная пауза). Секция в HTML-протоколе «Логики: включения и отключения»</td></tr>
@@ -686,7 +689,7 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 </table>
 <p>Содержит: версию страницы (<code>pageVersion</code>), режим кошелька, <code>brokerProvider</code>, ТФ, период, выбор инструментов, состояние кэша, live-поля (<code>liveFinrespBootstrap</code>, <code>liveCandleRefreshBusy</code>, <code>liveObTrendConfirm</code>, <code>logicUsesObTrend</code>, <code>logicUsesObSignals</code>, <code>liveOpenPositionsCount</code>, источник свечей), блок <code>liveApiForbidden</code> (тикер, sec, name, uid — запрещённые для API инструменты), <code>liveReconcile.*</code> (в т.ч. пропуски по <code>@OBT</code> и <code>OB.*</code>), журнал <code>errors:</code> со строками <code>live-forbidden-instrument:</code>, <code>live-obt-skip</code>, <code>live-orderbook</code> (до 128 строк), трассировка <code>brokerEvents</code> / <code>brokerTraceLocal</code>. Обновляется при старте, расчёте, live-торговле и ошибках брокера.</p>
 
-<p class="note">Версия справки: 2026-06-18 (PerLogic pause, протокол, equity-паузы) · синхронизирована с формой <code>2026-06-18-protocol-export-v13</code> · при изменении контролов калькулятора обновляйте <code>MultiLogic_FinrespCalculator_Help.html</code></p>
+<p class="note">Версия справки: 2026-06-18 (CtgStoch только фьючерсы, per-logic pause, протокол) · синхронизирована с формой <code>2026-06-18-ctg-futures-help-v20</code> · при изменении контролов калькулятора обновляйте <code>MultiLogic_FinrespCalculator_Help.html</code></p>
 
 <div class="btn-row">
 <a class="calc-btn" href="../../finresp">Вернуться в калькулятор</a>
