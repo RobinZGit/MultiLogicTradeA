@@ -209,3 +209,104 @@ test('Angular account mode notifies legacy live boot when DOM already matches', 
   assert.match(src, /__mlOnAccountModeUserChange/);
   assert.match(src, /syncLivePanelFromMode/);
 });
+
+test('pause on drawdown: equity catalog runs skip recovery stop (не N× applyPauseOnDrawdown)', () => {
+  const bootSrc = fs.readFileSync(bootPath, 'utf8');
+  assert.match(bootSrc, /finrespRunOptions\(\{ forEquity: true \}\)/);
+  const equityAsync = bootSrc.match(/async function calcLogicEquityRunsAsync[\s\S]*?^  \}/m);
+  assert.ok(equityAsync, 'calcLogicEquityRunsAsync');
+  assert.match(equityAsync[0], /runMultiAsync/);
+  assert.match(equityAsync[0], /forEquity: true/);
+  assert.doesNotMatch(equityAsync[0], /recoveryStopConfig/);
+  const engineSrc = fs.readFileSync(
+    path.join(root, 'src', 'finresp', 'MultiLogic_FinrespCalculator.engine.js'),
+    'utf8',
+  );
+  assert.match(engineSrc, /applyPauseOnDrawdownAsync/);
+});
+
+test('pause on drawdown: calc params, live banner, engine and live hooks', () => {
+  const liveSrc = fs.readFileSync(livePath, 'utf8');
+  const bootSrc = fs.readFileSync(bootPath, 'utf8');
+  const calcHtml = fs.readFileSync(
+    path.join(root, 'src', 'app', 'finresp', 'calculator', 'components', 'finresp-calc-form', 'finresp-calc-form.component.html'),
+    'utf8',
+  );
+  const liveHtml = fs.readFileSync(
+    path.join(root, 'src', 'app', 'finresp', 'calculator', 'components', 'finresp-live-panel', 'finresp-live-panel.component.html'),
+    'utf8',
+  );
+  const css = fs.readFileSync(
+    path.join(root, 'src', 'app', 'finresp', 'calculator', 'finresp-calculator.component.css'),
+    'utf8',
+  );
+  assert.match(calcHtml, /id="param-pause-on-drawdown"/);
+  assert.match(calcHtml, /id="param-drawdown-pct"/);
+  assert.match(liveHtml, /id="live-recovery-stop-banner"/);
+  assert.match(liveHtml, /id="live-pause-on-drawdown-panel"/);
+  assert.match(css, /\.live-recovery-stop-banner/);
+  assert.match(bootSrc, /recoveryStopConfig/);
+  assert.match(bootSrc, /bindLivePauseOnDrawdownPanelUi/);
+  assert.match(liveSrc, /checkPauseOnDrawdownLive/);
+  assert.match(liveSrc, /triggerRecoveryPauseLive/);
+  assert.match(liveSrc, /tryRecoveryResumeLive/);
+  assert.match(liveSrc, /syncRecoveryStopBanner/);
+});
+
+test('equity charts: только выбранные логики (equitySimLogicKeys + selectedLogicIds)', () => {
+  const bootSrc = fs.readFileSync(bootPath, 'utf8');
+  assert.match(bootSrc, /function equitySimLogicKeys\(\)/);
+  const fn = bootSrc.match(/function equitySimLogicKeys\(\)[\s\S]*?^  \}/m);
+  assert.ok(fn, 'equitySimLogicKeys body');
+  assert.match(fn[0], /selectedLogicIds\(\)/);
+  assert.match(bootSrc, /const catalogKeys = equitySimLogicKeys\(\)/);
+  const liveSrc = fs.readFileSync(livePath, 'utf8');
+  const drawEq = liveSrc.match(/function drawLiveEquityPlaceholders\(\)[\s\S]*?^  \}/m);
+  assert.ok(drawEq);
+  assert.doesNotMatch(drawEq[0], /equityCatalogLogicKeys\(\)/);
+});
+
+test('collapsible calc panels: control params outside main calc, three uniform details', () => {
+  const htmlPath = path.join(
+    root,
+    'src',
+    'app',
+    'finresp',
+    'calculator',
+    'components',
+    'finresp-calc-form',
+    'finresp-calc-form.component.html',
+  );
+  const html = fs.readFileSync(htmlPath, 'utf8');
+  const bootSrc = fs.readFileSync(bootPath, 'utf8');
+  const mainPanel = html.match(/id="calc-main-panel"[\s\S]*?<\/div>\s*<div class="calc-panels-row">/);
+  assert.ok(mainPanel, 'calc-main-panel closes before calc-panels-row');
+  assert.doesNotMatch(mainPanel[0], /calc-at-params/);
+  assert.match(html, /id="control-params-panel"/);
+  assert.match(html, /id="control-params-toggle"/);
+  assert.match(bootSrc, /bindCollapsibleToggle\("control-params-panel", "control-params-toggle"\)/);
+  const idxControl = html.indexOf('id="control-params-panel"');
+  const idxExtra = html.indexOf('id="extra-params"');
+  const idxLogic = html.indexOf('id="logic-catalog-panel"');
+  assert.ok(idxControl >= 0 && idxExtra > idxControl && idxLogic > idxExtra, 'panel order');
+  assert.match(html, /class="calc-panels-row"[\s\S]*id="control-params-panel"[\s\S]*id="extra-params"[\s\S]*id="logic-catalog-panel"/);
+});
+
+test('conjugate logics: engine export + UI button between help and copy', () => {
+  const engineSrc = fs.readFileSync(
+    path.join(root, 'src', 'finresp', 'MultiLogic_FinrespCalculator.engine.js'),
+    'utf8',
+  );
+  const bootSrc = fs.readFileSync(bootPath, 'utf8');
+  const css = fs.readFileSync(
+    path.join(root, 'src', 'app', 'finresp', 'calculator', 'finresp-calculator.component.css'),
+    'utf8',
+  );
+  assert.match(engineSrc, /function bakeConjugateLogicLine/);
+  assert.match(engineSrc, /conjugateLogicLineVariants/);
+  assert.match(bootSrc, /function generateConjugateLogics/);
+  assert.match(bootSrc, /data-conjugate-logic/);
+  assert.match(bootSrc, /Сгенерировать сопряжённые логики/);
+  assert.match(css, /\.logic-line-conjugate-btn/);
+  assert.match(bootSrc, /logic-line-help-btn[\s\S]*logic-line-conjugate-btn[\s\S]*logic-line-copy-btn/);
+});

@@ -1566,6 +1566,105 @@
     return s;
   }
 
+  /** Инверсия сигналов внутри выражения Op/Cl (AND-атомы). */
+  function transformLogicExpr(expr, reverseSignals) {
+    if (!reverseSignals) return String(expr || "").trim();
+    const hadOnFlip = PARSER._exprHasOnFlipClose(expr);
+    const core = PARSER._stripOnFlipFromExpr(expr);
+    const parts = PARSER._splitTopLevelAnd(core);
+    const out = parts.map((part) => {
+      const atom = PARSER._parseAtom(part);
+      if (!atom) return part;
+      const sig = reverseSignalToken(String(atom.signal || "").replace(/\s+/g, ""));
+      const idx = part.lastIndexOf(")(");
+      if (idx < 0) return part;
+      return `${part.slice(0, idx + 2)}${sig})`;
+    }).join(" AND ");
+    return hadOnFlip ? `${out} OnFlip(Close)` : out;
+  }
+
+  function skipLogicOpClBlocks(s) {
+    let pos = 0;
+    const str = String(s || "");
+    while (pos < str.length) {
+      const rest = str.slice(pos);
+      const m = rest.match(/^\s*(Op|Cl)\s*\(/i);
+      if (!m) break;
+      const openIdx = pos + m.index + m[0].lastIndexOf("(");
+      let depth = 0;
+      let i = openIdx;
+      for (; i < str.length; i++) {
+        const ch = str[i];
+        if (ch === "(") depth++;
+        else if (ch === ")") {
+          depth--;
+          if (depth === 0) { i++; break; }
+        }
+      }
+      pos = i;
+    }
+    return str.slice(pos).trim();
+  }
+
+  function rebuildLogicOpClLine(raw, opBlocks, clBlocks) {
+    const rawStr = String(raw || "");
+    const headerMatch = rawStr.match(/^([\s\S]*?)(?=Op\s*\()/i);
+    const header = headerMatch ? headerMatch[1].trim() : "";
+    const afterHeader = headerMatch ? rawStr.slice(headerMatch[0].length) : rawStr;
+    const tail = skipLogicOpClBlocks(afterHeader);
+    const sideName = (side) => (side === "short" ? "Short" : "Long");
+    const tag = (name, blocks) => (blocks || [])
+      .map((b) => `${name}(${sideName(b.side)}(${b.expr}))`)
+      .join(" ");
+    const op = tag("Op", opBlocks);
+    const cl = tag("Cl", clBlocks);
+    return [header, op, cl, tail].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  }
+
+  /**
+   * Запекает @@ReverseSides / @@ReverseSignals в строку Op/Cl
+   * (эквивалент одного из трёх других углов AutoReverses).
+   */
+  function bakeConjugateLogicLine(line, reverseSides, reverseSignals) {
+    const raw = String(line || "").trim();
+    if (!raw || !/Op\s*\(/i.test(raw)) return raw;
+    let opBlocks = PARSER._extractBlocks(raw, "Op");
+    let clBlocks = PARSER._extractBlocks(raw, "Cl");
+    const revSig = !!reverseSignals !== !!reverseSides;
+    if (revSig) {
+      opBlocks = opBlocks.map((b) => ({ ...b, expr: transformLogicExpr(b.expr, true) }));
+      clBlocks = clBlocks.map((b) => ({ ...b, expr: transformLogicExpr(b.expr, true) }));
+    }
+    if (reverseSides) {
+      const flip = (s) => (s === "long" ? "short" : "long");
+      opBlocks = opBlocks.map((b) => ({ ...b, side: flip(b.side) }));
+      clBlocks = clBlocks.map((b) => ({ ...b, side: flip(b.side) }));
+    }
+    return rebuildLogicOpClLine(raw, opBlocks, clBlocks);
+  }
+
+  /** До трёх уникальных сопряжённых строк (без дубликата исходной). */
+  function conjugateLogicLineVariants(line) {
+    const variants = [
+      { reverseSides: true, reverseSignals: false, mark: "⇄" },
+      { reverseSides: false, reverseSignals: true, mark: "↔" },
+      { reverseSides: true, reverseSignals: true, mark: "⇄↔" }
+    ];
+    const baseNorm = String(line || "").replace(/\s+/g, " ").trim();
+    const groups = new Map();
+    for (const v of variants) {
+      const baked = bakeConjugateLogicLine(line, v.reverseSides, v.reverseSignals);
+      const norm = baked.replace(/\s+/g, " ").trim();
+      if (!norm || norm === baseNorm) continue;
+      if (!groups.has(norm)) groups.set(norm, { line: baked, marks: [] });
+      groups.get(norm).marks.push(v.mark);
+    }
+    return [...groups.values()].map((g) => ({
+      line: g.line,
+      labelSuffix: g.marks.join("+")
+    }));
+  }
+
   /** Swap сторон для сигналов Op/Cl (используется в @@ReverseSides). */
   function swapLogicExecHits(sig) {
     return {
@@ -3402,6 +3501,248 @@
     return row;
   }
 
+  function clonePerSecRows(perSec) {
+    return perSec.map((p) => ({
+      ...p,
+      rows: (p.rows || []).map((r) => ({ ...r }))
+    }));
+  }
+
+  function rowAtOrBefore(rows, time) {
+    const idx = findRowIdxAtOrBefore(rows, time);
+    return idx >= 0 ? rows[idx] : null;
+  }
+
+  function syncExecutedFromShadowAtTime(executedPerSec, shadowPerSec, time) {
+    for (let s = 0; s < executedPerSec.length; s++) {
+      const src = rowAtOrBefore(shadowPerSec[s]?.rows, time);
+      if (!src) continue;
+      const idx = findRowIdxAtOrBefore(executedPerSec[s].rows, time);
+      if (idx >= 0) executedPerSec[s].rows[idx] = { ...src };
+    }
+  }
+
+  function flattenExecutedAtTime(executedPerSec, time, volConfig) {
+    for (const item of executedPerSec) {
+      const idx = findRowIdxAtOrBefore(item.rows, time);
+      if (idx < 0) continue;
+      item.rows[idx] = flattenRowAtIdx(item, idx, volConfig);
+    }
+  }
+
+  function carryFlatExecutedAtTime(executedPerSec, time) {
+    for (const item of executedPerSec) {
+      const idx = findRowIdxAtOrBefore(item.rows, time);
+      if (idx < 0) continue;
+      const prev = idx > 0 ? item.rows[idx - 1] : item.rows[idx];
+      const cash = prev?.eq ?? prev?.cash ?? 0;
+      const close = prev?.close ?? 0;
+      const base = item.rows[idx];
+      item.rows[idx] = {
+        ...base,
+        time: base?.time ?? time,
+        pos: 0,
+        cash,
+        eq: cash,
+        buy: 0,
+        sell: 0,
+        open: close,
+        high: close,
+        low: close,
+        close
+      };
+    }
+  }
+
+  /** Индекс строки perSec на каждый бар times (один проход, без binary search в цикле). */
+  function buildRowIdxAtTimes(rows, times) {
+    const out = new Array(times.length);
+    let rowIdx = -1;
+    for (let t = 0; t < times.length; t++) {
+      const time = times[t];
+      while (rowIdx + 1 < rows.length && rows[rowIdx + 1].time <= time) rowIdx++;
+      out[t] = rowIdx;
+    }
+    return out;
+  }
+
+  function buildPerSecRowIdxAtTimes(perSec, times) {
+    return perSec.map((p) => buildRowIdxAtTimes(p.rows || [], times));
+  }
+
+  function syncExecutedFromShadowAtBar(executedPerSec, shadowPerSec, shadowRowIdx, t) {
+    for (let s = 0; s < executedPerSec.length; s++) {
+      const idx = shadowRowIdx[s][t];
+      if (idx < 0) continue;
+      executedPerSec[s].rows[idx] = { ...shadowPerSec[s].rows[idx] };
+    }
+  }
+
+  function flattenExecutedAtBar(executedPerSec, shadowRowIdx, t, volConfig) {
+    for (let s = 0; s < executedPerSec.length; s++) {
+      const idx = shadowRowIdx[s][t];
+      if (idx < 0) continue;
+      executedPerSec[s].rows[idx] = flattenRowAtIdx(executedPerSec[s], idx, volConfig);
+    }
+  }
+
+  function carryFlatExecutedAtBar(executedPerSec, shadowRowIdx, times, t) {
+    const time = times[t];
+    for (let s = 0; s < executedPerSec.length; s++) {
+      const idx = shadowRowIdx[s][t];
+      if (idx < 0) continue;
+      const item = executedPerSec[s];
+      const prev = idx > 0 ? item.rows[idx - 1] : item.rows[idx];
+      const cash = prev?.eq ?? prev?.cash ?? 0;
+      const close = prev?.close ?? 0;
+      const base = item.rows[idx];
+      item.rows[idx] = {
+        ...base,
+        time: base?.time ?? time,
+        pos: 0,
+        cash,
+        eq: cash,
+        buy: 0,
+        sell: 0,
+        open: close,
+        high: close,
+        low: close,
+        close
+      };
+    }
+  }
+
+  function runPauseOnDrawdownCore(executedPerSec, shadowPerSec, shadowRowIdx, times, shadowEq, volConfig, pct) {
+    const events = [];
+    let peak = Number.isFinite(shadowEq[0]) ? shadowEq[0] : null;
+    let paused = false;
+    let resumeAt = null;
+
+    for (let t = 0; t < times.length; t++) {
+      const time = times[t];
+      if (!paused) {
+        syncExecutedFromShadowAtBar(executedPerSec, shadowPerSec, shadowRowIdx, t);
+        const eq = shadowEq[t];
+        if (!Number.isFinite(eq)) continue;
+        if (!Number.isFinite(peak)) peak = eq;
+        peak = Math.max(peak, eq);
+        const dd = peak > 0 ? ((peak - eq) / peak) * 100 : 0;
+        if (dd >= pct) {
+          flattenExecutedAtBar(executedPerSec, shadowRowIdx, t, volConfig);
+          paused = true;
+          resumeAt = peak;
+          events.push({
+            kind: "pause",
+            time,
+            equity: eq,
+            peak,
+            resumeAt,
+            drawdownPct: dd
+          });
+        }
+      } else {
+        carryFlatExecutedAtBar(executedPerSec, shadowRowIdx, times, t);
+        const eqSh = shadowEq[t];
+        if (Number.isFinite(eqSh) && Number.isFinite(resumeAt) && eqSh >= resumeAt) {
+          syncExecutedFromShadowAtBar(executedPerSec, shadowPerSec, shadowRowIdx, t);
+          paused = false;
+          peak = eqSh;
+          events.push({ kind: "resume", time, equity: eqSh, resumeAt });
+        }
+      }
+    }
+    return events;
+  }
+
+  /** @@PauseOnDrawdown: пауза исполнения при % просадке от пика, тень = полная симуляция. */
+  function applyPauseOnDrawdown(perSec, times, volConfig, cfg) {
+    const events = [];
+    if (!cfg?.enabled || !perSec?.length || !times?.length) {
+      return { perSec, recoveryStop: { events } };
+    }
+    const pct = Math.max(0.01, Math.min(99, +cfg.drawdownPct || 1));
+    const shadowPerSec = perSec;
+    const executedPerSec = clonePerSecRows(perSec);
+    const shadowRowIdx = buildPerSecRowIdxAtTimes(shadowPerSec, times);
+    const shadowEq = buildPortfolioEquitySeries(shadowPerSec, times).total;
+    const pauseEvents = runPauseOnDrawdownCore(
+      executedPerSec,
+      shadowPerSec,
+      shadowRowIdx,
+      times,
+      shadowEq,
+      volConfig,
+      pct
+    );
+
+    for (const p of executedPerSec) recomputePerSecTotals(p);
+    return { perSec: executedPerSec, recoveryStop: { events: pauseEvents } };
+  }
+
+  /** Асинхронный @@PauseOnDrawdown (yield между барами — не блокирует форму). */
+  async function applyPauseOnDrawdownAsync(perSec, times, volConfig, cfg, progressOpts) {
+    const opts = progressOpts || {};
+    const events = [];
+    if (!cfg?.enabled || !perSec?.length || !times?.length) {
+      return { perSec, recoveryStop: { events } };
+    }
+    const yieldUi = !!opts.yieldUi;
+    const tick = () => (yieldUi ? delay(0) : Promise.resolve());
+    const onProgress = opts.onProgress;
+    const pct = Math.max(0.01, Math.min(99, +cfg.drawdownPct || 1));
+    const shadowPerSec = perSec;
+    const executedPerSec = clonePerSecRows(perSec);
+    const shadowRowIdx = buildPerSecRowIdxAtTimes(shadowPerSec, times);
+    const shadowEq = buildPortfolioEquitySeries(shadowPerSec, times).total;
+    let peak = Number.isFinite(shadowEq[0]) ? shadowEq[0] : null;
+    let paused = false;
+    let resumeAt = null;
+    const total = times.length;
+
+    for (let t = 0; t < total; t++) {
+      if (typeof opts.shouldCancel === "function" && opts.shouldCancel()) {
+        return { perSec: executedPerSec, recoveryStop: { events }, cancelled: true };
+      }
+      const time = times[t];
+      if (!paused) {
+        syncExecutedFromShadowAtBar(executedPerSec, shadowPerSec, shadowRowIdx, t);
+        const eq = shadowEq[t];
+        if (Number.isFinite(eq)) {
+          if (!Number.isFinite(peak)) peak = eq;
+          peak = Math.max(peak, eq);
+          const dd = peak > 0 ? ((peak - eq) / peak) * 100 : 0;
+          if (dd >= pct) {
+            flattenExecutedAtBar(executedPerSec, shadowRowIdx, t, volConfig);
+            paused = true;
+            resumeAt = peak;
+            events.push({
+              kind: "pause",
+              time,
+              equity: eq,
+              peak,
+              resumeAt,
+              drawdownPct: dd
+            });
+          }
+        }
+      } else {
+        carryFlatExecutedAtBar(executedPerSec, shadowRowIdx, times, t);
+        const eqSh = shadowEq[t];
+        if (Number.isFinite(eqSh) && Number.isFinite(resumeAt) && eqSh >= resumeAt) {
+          syncExecutedFromShadowAtBar(executedPerSec, shadowPerSec, shadowRowIdx, t);
+          paused = false;
+          peak = eqSh;
+          events.push({ kind: "resume", time, equity: eqSh, resumeAt });
+        }
+      }
+      if (onProgress) onProgress(t + 1, total, time);
+      if (yieldUi && t % 32 === 0) await tick();
+    }
+
+    for (const p of executedPerSec) recomputePerSecTotals(p);
+    return { perSec: executedPerSec, recoveryStop: { events } };
+  }
+
   /** @returns {boolean} true — хвост пересчитан; false — позиции не было, пересчёт не нужен */
   function flattenAndResimTail(perSecItem, candles, spec, triggerTime, endTime, params, volConfig, runOptions) {
     const rowIdx = findRowIdxAtOrBefore(perSecItem.rows, triggerTime);
@@ -4748,6 +5089,12 @@
       }
     }
 
+    let recoveryStop = { events: [] };
+    if (!shouldAbortRun(opts) && opts.recoveryStopConfig?.enabled && perSec.length && times?.length) {
+      const rd = applyPauseOnDrawdown(perSec, times, volConfig, opts.recoveryStopConfig);
+      for (let i = 0; i < rd.perSec.length; i++) perSec[i] = rd.perSec[i];
+      recoveryStop = rd.recoveryStop;
+    }
     const preStopperAgg = aggregateFinresp(perSec);
     let stopper = { events: [] };
     if (!shouldAbortRun(opts) && cfg && perSec.length) {
@@ -4796,6 +5143,7 @@
       agg,
       preStopperAgg,
       stopper,
+      recoveryStop,
       cancelled: shouldAbortRun(opts),
       a: aRef,
       b: bRef,
@@ -4940,6 +5288,27 @@
       }
     }
 
+    let recoveryStop = { events: [] };
+    if (!shouldAbortRun(opts) && opts.recoveryStopConfig?.enabled && perSec.length && times?.length) {
+      const rd = await applyPauseOnDrawdownAsync(perSec, times, volConfig, opts.recoveryStopConfig, {
+        yieldUi: true,
+        shouldCancel: opts.shouldCancel,
+        onProgress: (done, total, candleTime) => {
+          void emitRunProgressAsync(
+            opts,
+            lerpCalcProgress(
+              CALC_PROGRESS.FINRESP_MAX,
+              cfg ? CALC_PROGRESS.FINRESP_MAX : CALC_PROGRESS.RUN_MAX,
+              done / Math.max(1, total)
+            ),
+            `PauseOnDrawdown: ${done}/${total}`,
+            { phase: "recovery-stop", done, total, candleTime }
+          );
+        }
+      });
+      for (let i = 0; i < rd.perSec.length; i++) perSec[i] = rd.perSec[i];
+      recoveryStop = rd.recoveryStop;
+    }
     const preStopperAgg = aggregateFinresp(perSec);
     let stopper = { events: [] };
     if (!shouldAbortRun(opts) && cfg && perSec.length && !deferStopper) {
@@ -4992,6 +5361,7 @@
       agg,
       preStopperAgg,
       stopper,
+      recoveryStop,
       cancelled: shouldAbortRun(opts),
       deferredStopper: !!(deferStopper && cfg && perSec.length),
       a: aRef,
@@ -5041,6 +5411,8 @@
     runMultiAsync,
     runMultiPlan,
     applyPortfolioStopperAsync,
+    applyPauseOnDrawdown,
+    applyPauseOnDrawdownAsync,
     resolveStopperProgressText,
     aggregateFinresp,
     buildPortfolioEquityRows,
@@ -5086,6 +5458,8 @@
     cmaSeries,
     tradeMarkersFromBar,
     swapLogicExecHits,
+    bakeConjugateLogicLine,
+    conjugateLogicLineVariants,
     tradeSignalHint,
     createIndicatorCache,
     collectChartIndicatorsForSpecs

@@ -180,6 +180,8 @@ h2:first-child{margin-top:0;}
 label .at-token{font-family:Consolas,Monaco,monospace;font-weight:700;color:#1d4ed8;display:inline-block;min-width:2.75em;}
 label .at-token-global{font-family:Consolas,Monaco,monospace;font-weight:800;color:#9a3412;display:inline-block;min-width:3.25em;}
 .calc-at-params{border-radius:10px;transition:border-color .2s ease,background .2s ease,box-shadow .2s ease;}
+#control-params-panel .calc-at-params{margin-top:.35rem;border:none;background:transparent;box-shadow:none;}
+#control-params-panel .calc-at-global{margin-top:0;}
 .calc-at-global{
   border:1px solid #e2e8f0;border-radius:10px;padding:.65rem .75rem .7rem;margin:.15rem 0 0;
   background:linear-gradient(180deg,#fff7ed 0%,#fff 55%);
@@ -217,6 +219,7 @@ label .at-token-global{font-family:Consolas,Monaco,monospace;font-weight:800;col
   color:#9a3412;font-weight:800;box-shadow:0 2px 12px rgba(217,119,6,.24);
 }
 .calc-reverse-toggle-btn--on:hover{background:linear-gradient(180deg,#fed7aa 0%,#ffedd5 100%);}
+#control-params-panel #position-sl-hint{margin:.65rem 0 0;}
 details.logic-editor{border:1px solid var(--border);border-radius:10px;padding:.5rem .85rem;margin:1rem 0;background:#fafbfc;}
 details.logic-editor[open]{background:#fff;border-color:#c7d2fe;box-shadow:0 1px 6px rgba(37,99,235,.08);}
 .calc-panels-row{display:flex;flex-direction:column;gap:0;margin:1rem 0;}
@@ -270,7 +273,7 @@ button.extra-params-toggle{border:none;background:none;padding:0;font:inherit;cu
 .logic-line-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.35rem .65rem;margin-bottom:.25rem;}
 .logic-line-head label{font-size:.82rem;color:var(--muted);margin:0;font-weight:600;}
 .logic-line-actions{display:flex;flex-wrap:wrap;gap:.35rem;}
-.logic-line-copy-btn,.logic-line-delete-btn,.logic-line-export-btn,.logic-line-help-btn,.logic-line-import-btn,.logic-lines-add-btn,.logic-lines-io-btn{padding:.28rem .55rem;font-size:.78rem;min-height:auto;}
+.logic-line-copy-btn,.logic-line-conjugate-btn,.logic-line-delete-btn,.logic-line-export-btn,.logic-line-help-btn,.logic-line-import-btn,.logic-lines-add-btn,.logic-lines-io-btn{padding:.28rem .55rem;font-size:.78rem;min-height:auto;}
 .logic-line-help-btn{min-width:2rem;padding:.28rem .4rem;font-weight:600;font-style:italic;}
 .logic-line-delete-btn{color:#991b1b;border-color:#fecaca;}
 .logic-lines-toolbar{display:flex;flex-wrap:wrap;gap:.5rem;margin:.35rem 0 .55rem;}
@@ -364,6 +367,13 @@ body.calc-running .live-trading-panel--active .live-trading-toolbar{
   color:#9a3412;font-weight:700;box-shadow:0 2px 12px rgba(217,119,6,.24);
 }
 .live-auto-reverses-row{align-items:center;}
+.live-recovery-stop-banner{
+  margin:0 0 .85rem;padding:.65rem .85rem;border-radius:8px;border:2px solid #b45309;
+  background:linear-gradient(180deg,#fffbeb 0%,#fef3c7 100%);color:#92400e;font-size:.86rem;line-height:1.4;
+}
+.live-recovery-stop-banner strong{color:#78350f;}
+.live-recovery-stop-row{align-items:center;}
+.calc-recovery-stop-grid{margin-bottom:.35rem;}
 .live-candle-source-hint{font-size:.74rem;font-weight:600;color:#b45309;margin-left:.15rem;}
 .live-trading-panel--sandbox .live-ob-trend-panel-toggle{background:#f0fdf4;border-color:#86efac;}
 .live-trading-panel--sandbox .live-reverse-panel-toggle:not(.live-reverse-panel-toggle--on){background:#f0fdf4;border-color:#86efac;}

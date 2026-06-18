@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-live-auto-reverses-ui-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-collapsible-control-params-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -481,6 +481,7 @@
 
   /** «Тех. информация», доп. параметры, T-Bank — до полной инициализации (повторный вызов безопасен). */
   function bindCoreCollapsibleToggles() {
+    bindCollapsibleToggle("control-params-panel", "control-params-toggle");
     bindCollapsibleToggle("tech-info-panel", "tech-info-toggle");
     bindCollapsibleToggle("logic-catalog-panel", "logic-catalog-toggle");
     bindCollapsibleToggle("extra-params", "extra-params-toggle");
@@ -941,6 +942,7 @@
     equityConfigMarkers: [],
     lastEquityConfigFp: null,
     lastEquityChartCtx: null,
+    equityRunsCache: null,
     prevSelectCount: 0,
     runGeneration: 0,
     runCancelRequested: false,
@@ -1033,7 +1035,16 @@
       positionsMenuIdx: null,
       manualPriceSec: "",
       tradeHistory: [],
-      brokerOperations: []
+      brokerOperations: [],
+      recoveryStop: {
+        paused: false,
+        peakEquity: null,
+        resumeAt: null,
+        pausedAt: null,
+        userIntent: false,
+        pauseCount: 0,
+        lastNotifyKey: null
+      }
     },
     optim: {
       active: null,
@@ -1277,6 +1288,8 @@
         autoReverses: !!$("param-auto-reverses")?.checked,
         autoLookback: $("param-auto-reverses-lookback")?.value || "",
         autoStep: $("param-auto-reverses-step")?.value || "",
+        pauseOnDrawdown: !!$("param-pause-on-drawdown")?.checked,
+        drawdownPct: $("param-drawdown-pct")?.value || "",
         sandboxMatchMode: $("live-sandbox-match-mode")?.value || "fifo"
       },
       stopper: {
@@ -1498,6 +1511,10 @@
       setValueIfExists("param-auto-reverses-lookback", cfg.params?.autoLookback);
       setValueIfExists("param-auto-reverses-step", cfg.params?.autoStep);
       if ($("param-auto-reverses")) $("param-auto-reverses").checked = !!(cfg.params?.autoReverses ?? cfg.params?.AutoReverses);
+      if ($("param-pause-on-drawdown")) {
+        $("param-pause-on-drawdown").checked = !!(cfg.params?.pauseOnDrawdown ?? cfg.params?.PauseOnDrawdown);
+      }
+      setValueIfExists("param-drawdown-pct", cfg.params?.drawdownPct ?? cfg.params?.DrawdownPct);
       if ($("param-reverse")) {
         $("param-reverse").checked = !!(cfg.params?.reverseSides ?? cfg.params?.ReverseSides ?? cfg.params?.reverse ?? cfg.params?.Reverse);
       }
@@ -2032,7 +2049,9 @@
       ReverseSignals: !!$("param-reverse-signals")?.checked,
       AutoReverses: !!$("param-auto-reverses")?.checked,
       AutoLookback: Math.max(50, Math.round(+$("param-auto-reverses-lookback")?.value || 220)),
-      AutoStep: Math.max(1, Math.round(+$("param-auto-reverses-step")?.value || 30))
+      AutoStep: Math.max(1, Math.round(+$("param-auto-reverses-step")?.value || 30)),
+      PauseOnDrawdown: !!$("param-pause-on-drawdown")?.checked,
+      DrawdownPct: Math.max(0.01, Math.min(99, +($("param-drawdown-pct")?.value || 1) || 1))
     };
   }
 
@@ -2068,6 +2087,7 @@
     get params() { return params; },
     get volConfig() { return volConfig; },
     get stopperConfig() { return stopperConfig; },
+    get recoveryStopConfig() { return recoveryStopConfig; },
     get commissionPctValue() { return commissionPctValue; },
     noteLiveTech, noteTechError, noteBrokerTech, updateTechInfo, saveConfig,
     get selectedInstruments() { return selectedInstruments; },
@@ -2182,7 +2202,7 @@
   }
 
   /** Подпрограмма `finrespRunOptions`. */
-  function finrespRunOptions() {
+  function finrespRunOptions(extra) {
     const signalPacks = signalPacksForCalc();
     const reverseSignals = !!$("param-reverse-signals")?.checked;
     const opts = {
@@ -2194,7 +2214,18 @@
     if (state.ctgSpotPacks && Object.keys(state.ctgSpotPacks).length) {
       opts.ctgSpotPacks = state.ctgSpotPacks;
     }
+    if (!extra?.forEquity) {
+      opts.recoveryStopConfig = recoveryStopConfig();
+    }
     return opts;
+  }
+
+  /** @@PauseOnDrawdown / @@DrawdownPct для расчёта и live. */
+  function recoveryStopConfig() {
+    return {
+      enabled: !!$("param-pause-on-drawdown")?.checked,
+      drawdownPct: Math.max(0.01, Math.min(99, +($("param-drawdown-pct")?.value || 1) || 1))
+    };
   }
 
   /** Синхронизация UI/state: `syncPageVersionBadge`. */
@@ -2747,6 +2778,7 @@
 
   /** Сброс состояния: `resetFinrespDisplay`. */
   function resetFinrespDisplay() {
+    invalidateEquityRunsCache();
     /* Процедура: очистить FINRESP, графики инструментов и lastResult без пересчёта. */
     syncChartBox($("calc-chart"), "");
     syncChartBox($("calc-chart-equity"), "");
@@ -2897,8 +2929,10 @@
   /** Запуск расчёта: `runMultiInWorker`. */
   function runMultiInWorker(packs, spec, a, b, params, volConfig, sc, randomPriceShift, runOptions) {
     const ro = runOptions || {};
+    const finOpts = finrespRunOptions();
     const worker = getCalcWorker();
     const progressOpts = {
+      ...finOpts,
       ...(randomPriceShift ? { signalPacks: E.applyRandomPriceShift(packs) } : {}),
       ...(ro.ctgSpotPacks ? { ctgSpotPacks: ro.ctgSpotPacks } : {}),
       ...(ro.tradingPeriods ? { tradingPeriods: ro.tradingPeriods, calcTf: ro.calcTf } : {}),
@@ -2937,9 +2971,10 @@
       worker.postMessage({
         id, packs, spec, startIdx: a, endIdx: b, params, volConfig, stopperConfig: sc,
         randomPriceShift: !!randomPriceShift,
-        ctgSpotPacks: ro.ctgSpotPacks || undefined,
-        tradingPeriods: ro.tradingPeriods || undefined,
-        calcTf: ro.calcTf || undefined
+        ctgSpotPacks: ro.ctgSpotPacks || finOpts.ctgSpotPacks || undefined,
+        tradingPeriods: ro.tradingPeriods || finOpts.tradingPeriods || undefined,
+        calcTf: ro.calcTf || finOpts.calcTf || undefined,
+        recoveryStopConfig: finOpts.recoveryStopConfig || undefined
       });
     });
   }
@@ -3052,10 +3087,10 @@
         ...(ro.silent ? {} : { onProgress: buildRunProgressHandler(ro) })
       });
     }
-    const { perSec, agg, preStopperAgg, stopper, skipped } = workerOut;
+    const { perSec, agg, preStopperAgg, stopper, recoveryStop, skipped } = workerOut;
     state.windowSkipped = skipped || [];
     if (!perSec?.length) return null;
-    return { perSec, agg, preStopperAgg, stopper, a, b, skipped };
+    return { perSec, agg, preStopperAgg, stopper, recoveryStop, a, b, skipped };
   }
 
   /** Применение настроек/результата: `applyUiLocks`. */
@@ -3219,12 +3254,12 @@
     const indicators = optimCtx?.indicators ?? indicatorSelection();
     const spec = resolveCalcLogicSpec(p, indicators);
     if (!spec) return null;
-    const { perSec, agg, preStopperAgg, stopper, skipped } = E.runMulti(
+    const { perSec, agg, preStopperAgg, stopper, recoveryStop, skipped } = E.runMulti(
       state.packs, spec, a, b, p, volConfig(), sc, finrespRunOptions()
     );
     state.windowSkipped = skipped || [];
     if (!perSec.length) return null;
-    return { perSec, agg, preStopperAgg, stopper, a, b, skipped };
+    return { perSec, agg, preStopperAgg, stopper, recoveryStop, a, b, skipped };
   }
 
   /** Подпрограмма `optimLoop`. */
@@ -3832,6 +3867,56 @@
     addUserLogicLine(state.customLines[srcKey] || "", srcKey);
   }
 
+  /** Вставить пользовательскую логику сразу после srcKey в каталоге. */
+  function insertUserLogicLineAfter(srcKey, lineText, label) {
+    const key = allocNextUserLogicKey();
+    state.customLines[key] = String(lineText || "").trim();
+    state.logicLabels[key] = label || key;
+    const idx = state.logicLineKeys.indexOf(srcKey);
+    const at = idx >= 0 ? idx + 1 : state.logicLineKeys.length;
+    state.logicLineKeys.splice(at, 0, key);
+    return key;
+  }
+
+  /** Сопряжённые логики: 3 угла ReverseSides/ReverseSignals, дедуп по формуле. */
+  function generateConjugateLogics(srcKey) {
+    if (!srcKey) return;
+    readLogicEditor();
+    const line = state.customLines[srcKey] || logicLineText(srcKey);
+    const spec = E.resolveLogicSpec(srcKey, state.customLines, params(), indicatorSelection());
+    if (!spec || spec.type !== "logic_line") {
+      setCalcStatus("Сопряжённые логики — только для строк Op/Cl (L1…L5, FTS, пользовательские).");
+      return;
+    }
+    const variants = E.conjugateLogicLineVariants(line);
+    if (!variants.length) {
+      setCalcStatus(`«${logicDisplayName(srcKey)}»: все сопряжённые варианты совпадают с исходной формулой.`);
+      return;
+    }
+    const baseName = logicDisplayName(srcKey);
+    const created = [];
+    const idx = state.logicLineKeys.indexOf(srcKey);
+    const at = idx >= 0 ? idx + 1 : state.logicLineKeys.length;
+    for (const v of variants) {
+      const key = allocNextUserLogicKey();
+      state.customLines[key] = v.line.trim();
+      state.logicLabels[key] = `${baseName} (${v.labelSuffix})`;
+      created.push(key);
+    }
+    state.logicLineKeys.splice(at, 0, ...created);
+    invalidateEquityRunsCache();
+    fillLogicEditor();
+    fillLogicSelect();
+    for (const key of created) selectLogicInCalc(key);
+    saveConfig();
+    invalidateFormChange();
+    const panel = $("logic-catalog-panel");
+    if (panel && !panel.open) panel.open = true;
+    syncCollapsibleToggleLabel(panel, "logic-catalog-toggle");
+    setCalcStatus(`Добавлено сопряжённых логик: ${created.length} (рядом с «${baseName}»).`);
+    updatePositionSlHint();
+  }
+
   /** Удалить логику из каталога, выбора и equity; в каталоге должна остаться ≥1 логика. */
   function deleteLogicLine(key) {
     if (!key) return;
@@ -3949,6 +4034,8 @@
       volume: vol,
       logicSpec: spec,
       agg: result.agg || null,
+      preStopperAgg: result.preStopperAgg || null,
+      recoveryStop: result.recoveryStop || { events: [] },
       eventsTotal,
       perSec
     };
@@ -5097,6 +5184,36 @@
   }
 
   /** Галочка @@AutoReverses в блоке «Реальная торговля» (окно/шаг только в доп. параметрах). */
+  function syncPauseOnDrawdownUi(skipSource) {
+    const on = !!$("param-pause-on-drawdown")?.checked;
+    const panel = $("live-pause-on-drawdown-panel");
+    if (panel && skipSource !== "live-pause-on-drawdown-panel" && panel.checked !== on) {
+      panel.checked = on;
+    }
+    const panelWrap = $("live-pause-on-drawdown-panel-wrap");
+    if (panelWrap) panelWrap.classList.toggle("live-reverse-panel-toggle--on", on);
+  }
+
+  function bindLivePauseOnDrawdownPanelUi() {
+    const panel = $("live-pause-on-drawdown-panel");
+    if (!panel || panel.dataset.pauseOnDrawdownBound) return;
+    panel.dataset.pauseOnDrawdownBound = "1";
+    panel.addEventListener("change", () => {
+      const main = $("param-pause-on-drawdown");
+      if (main) main.checked = panel.checked;
+      syncPauseOnDrawdownUi("live-pause-on-drawdown-panel");
+      renderFromParams();
+      saveConfig();
+    });
+    $("param-pause-on-drawdown")?.addEventListener("change", () => {
+      syncPauseOnDrawdownUi();
+      renderFromParams();
+      saveConfig();
+    });
+    $("param-drawdown-pct")?.addEventListener("change", () => { renderFromParams(); saveConfig(); });
+    syncPauseOnDrawdownUi();
+  }
+
   function bindLiveAutoReversesPanelUi() {
     const panel = $("live-auto-reverses-panel");
     if (!panel || panel.dataset.autoReversesBound) return;
@@ -5143,9 +5260,12 @@
     const pTp = $("stopper-tp-mult")?.value ?? "—";
     const pAtr = $("stopper-atr-len")?.value ?? "—";
     const pRef = $("stopper-ref")?.value ?? "—";
+    const rdOn = $("param-pause-on-drawdown")?.checked ? "вкл" : "выкл";
+    const rdPct = $("param-drawdown-pct")?.value ?? "1";
     if (globalEl) {
       globalEl.textContent =
-        `@@ReverseSides=${reverse} @@ReverseSignals=${reverseSignals} @@AutoReverses=${autoRev} @@AutoLookback=${autoLookback} @@AutoStep=${autoStep} `
+        `@@PauseOnDrawdown=${rdOn} @@DrawdownPct=${rdPct}% `
+        + `@@ReverseSides=${reverse} @@ReverseSignals=${reverseSignals} @@AutoReverses=${autoRev} @@AutoLookback=${autoLookback} @@AutoStep=${autoStep} `
         + `@@MaxPos=${maxPos} плечо=${levText} `
         + `@@SL=${pSl} @@TP=${pTp} @@ATR=${pAtr} база=${pRef} ₽`;
     }
@@ -5255,6 +5375,16 @@
       helpBtn.textContent = "i.";
       helpBtn.setAttribute("aria-label", "Справка по логике");
       actions.appendChild(helpBtn);
+      const rowSpec = E.resolveLogicSpec(key, state.customLines, params(), indicatorSelection());
+      if (rowSpec?.type === "logic_line") {
+        const conjugateBtn = document.createElement("button");
+        conjugateBtn.type = "button";
+        conjugateBtn.className = "calc-btn calc-btn-secondary logic-line-conjugate-btn";
+        conjugateBtn.dataset.conjugateLogic = key;
+        conjugateBtn.title = "Сгенерировать до 3 сопряжённых логик (⇄ стороны, ↔ сигналы, ⇄↔ оба) — как AutoReverses, формула запекается в строку";
+        conjugateBtn.textContent = "Сгенерировать сопряжённые логики";
+        actions.appendChild(conjugateBtn);
+      }
       const copyBtn = document.createElement("button");
       copyBtn.type = "button";
       copyBtn.className = "calc-btn calc-btn-secondary logic-line-copy-btn";
@@ -5929,6 +6059,35 @@ ${markers}
   const EQUITY_RUN_TYPES = new Set(["logic_line", "sma_spread", "sma_corridor"]);
   const EQUITY_STOPPER_OFF = { useSl: false, useTp: false, slMult: 0, tpMult: 0, atrLen: 14, refEquity: 0 };
 
+  /** Сброс кэша справочного equity (полный пересчёт каталога логик). */
+  function invalidateEquityRunsCache() {
+    state.equityRunsCache = null;
+  }
+
+  /**
+   * Fingerprint справочного equity-каталога.
+   * @@PauseOnDrawdown не входит — справочные кривые без recovery stop.
+   */
+  function equityRunsCacheFingerprint(a, b) {
+    const p = params();
+    const {
+      PauseOnDrawdown: _po,
+      DrawdownPct: _dp,
+      ...paramsForEquity
+    } = p;
+    return JSON.stringify({
+      a,
+      b,
+      periodKey: state.lastLoadMeta?.periodKey || "",
+      packLen: state.packs.length,
+      keys: equitySimLogicKeys(),
+      params: paramsForEquity,
+      vol: volConfig(),
+      indicators: selectedIndicatorKeys().slice().sort(),
+      customLines: state.customLines
+    });
+  }
+
   /** Все логики каталога для блока equity, порядок как в «Логика». */
   function equityCatalogLogicKeys() {
     ensureLogicLineKeys();
@@ -5948,12 +6107,14 @@ ${markers}
     return logicDisplayName(key);
   }
 
-  /** Ключи логик для симуляции equity — весь каталог (справочные графики ниже). */
+  /** Ключи логик для симуляции equity — только выбранные в «Логика». */
   function equitySimLogicKeys() {
     const keys = [];
     const indicators = indicatorSelection();
     const p = params();
+    const selected = new Set(selectedLogicIds());
     for (const key of equityCatalogLogicKeys()) {
+      if (!selected.has(key)) continue;
       const spec = E.resolveLogicSpec(key, state.customLines, p, indicators);
       if (!spec || spec.disabled || !EQUITY_RUN_TYPES.has(spec.type)) continue;
       keys.push(key);
@@ -5961,10 +6122,9 @@ ${markers}
     return keys;
   }
 
-  /** Выбранные в «Логика» — справочная сумма @@ и подсветка на графиках. */
+  /** Выбранные логики для equity (alias). */
   function selectedEquityLogicKeys() {
-    const selected = new Set(selectedLogicIds());
-    return equitySimLogicKeys().filter((key) => selected.has(key));
+    return equitySimLogicKeys();
   }
 
   /** Подпрограмма `totalEquityTitle`. */
@@ -6600,7 +6760,7 @@ ${svg}
     for (const key of equitySimLogicKeys()) {
       const spec = E.resolveLogicSpec(key, state.customLines, p, indicators);
       if (!spec || spec.disabled || !EQUITY_RUN_TYPES.has(spec.type)) continue;
-      const { perSec } = E.runMulti(state.packs, spec, a, b, p, vol, EQUITY_STOPPER_OFF, finrespRunOptions());
+      const { perSec } = E.runMulti(state.packs, spec, a, b, p, vol, EQUITY_STOPPER_OFF, finrespRunOptions({ forEquity: true }));
       const rows = E.buildPortfolioEquityRows(perSec, times);
       runs[key] = { rows, finresp: rows.length ? rows.at(-1).eq : 0 };
     }
@@ -6612,6 +6772,14 @@ ${svg}
     if (!state.packs.length) return null;
     const pack = refPack();
     if (!pack.length) return null;
+    const cacheFp = equityRunsCacheFingerprint(a, b);
+    if (state.equityRunsCache?.fp === cacheFp && state.equityRunsCache.data) {
+      const keys = Object.keys(state.equityRunsCache.data.runs || {});
+      if (onProgress && keys.length) {
+        onProgress(keys.length, keys.length, "кэш");
+      }
+      return state.equityRunsCache.data;
+    }
     const p = params();
     const vol = volConfig();
     const times = pack.slice(a, b + 1).map((c) => c.time).filter(Boolean);
@@ -6624,12 +6792,25 @@ ${svg}
       if (onProgress) onProgress(i, keys.length, key);
       await yieldToUi();
       const spec = E.resolveLogicSpec(key, state.customLines, p, indicators);
-      const { perSec } = E.runMulti(state.packs, spec, a, b, p, vol, EQUITY_STOPPER_OFF, finrespRunOptions());
+      if (!spec || spec.disabled || !EQUITY_RUN_TYPES.has(spec.type)) continue;
+      const { perSec } = await E.runMultiAsync(
+        state.packs,
+        spec,
+        a,
+        b,
+        p,
+        vol,
+        EQUITY_STOPPER_OFF,
+        { ...finrespRunOptions({ forEquity: true }), yieldUi: true }
+      );
       const rows = E.buildPortfolioEquityRows(perSec, times);
       runs[key] = { rows, finresp: rows.length ? rows.at(-1).eq : 0 };
+      if (onProgress) onProgress(i + 1, keys.length, key);
       await yieldToUi();
     }
-    return { runs, times };
+    const result = { runs, times };
+    state.equityRunsCache = { fp: cacheFp, data: result };
+    return result;
   }
 
   /** Построение структуры данных: `buildTotalEquityRows`. */
@@ -6677,9 +6858,9 @@ ${svg}
     if (!state.packs.length) {
       return { ok: false, box, html: "", clearCtx: true };
     }
-    const catalogKeys = equityCatalogLogicKeys();
-    const activeKeys = selectedEquityLogicKeys();
-    const selectedSet = new Set(activeKeys);
+    const catalogKeys = equitySimLogicKeys();
+    const activeKeys = catalogKeys.slice();
+    const selectedSet = new Set(catalogKeys);
     if (!data) {
       return { ok: false, box, html: "", clearCtx: true };
     }
@@ -7288,6 +7469,9 @@ ${referenceBlock}
     }
     if (stopper?.events?.length) status += ` | Stopper: ${stopper.events.length} сраб.`;
     else if (stopperConfig().useSl || stopperConfig().useTp) status += " | Stopper вкл.";
+    const rdEv = result.recoveryStop?.events;
+    if (rdEv?.length) status += ` | PauseOnDrawdown: ${rdEv.length} событ.`;
+    else if (recoveryStopConfig().enabled) status += " | PauseOnDrawdown вкл.";
     if (randomPriceShiftEnabled()) status += " | сдвиг индикаторов ±0,1%";
     if (params().ReverseSides) status += " | Реверс сторон вкл.";
     if (opts.optimNote) {
@@ -7899,6 +8083,11 @@ ${referenceBlock}
       copyLogicLine(copyBtn.getAttribute("data-copy-logic"));
       return;
     }
+    const conjugateBtn = ev.target?.closest?.("[data-conjugate-logic]");
+    if (conjugateBtn) {
+      generateConjugateLogics(conjugateBtn.getAttribute("data-conjugate-logic"));
+      return;
+    }
     const delBtn = ev.target?.closest?.("[data-delete-logic]");
     if (delBtn && !delBtn.disabled) {
       deleteLogicLine(delBtn.getAttribute("data-delete-logic"));
@@ -7932,6 +8121,7 @@ ${referenceBlock}
   bindObTrendConfirmUi();
   bindLiveReversePanelUi();
   bindLiveReverseSignalsPanelUi();
+  bindLivePauseOnDrawdownPanelUi();
   bindLiveAutoReversesPanelUi();
   $("calc-tf").addEventListener("change", () => {
     const n = selectedInstrumentCount();

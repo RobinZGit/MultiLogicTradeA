@@ -25,12 +25,29 @@
 
 <app-finresp-logics></app-finresp-logics>
 
+</div>
+
+<div class="calc-panels-row">
+
+<details class="logic-editor" id="control-params-panel">
+<summary class="extra-params-head">
+<span class="extra-params-title">Параметры управления</span>
+<a href="#" class="extra-params-toggle" id="control-params-toggle" role="button">Развернуть</a>
+</summary>
+
 <div class="calc-at-params" id="calc-at-params">
-<p class="extra-params-title calc-at-main-title">Параметры управления</p>
 <div class="calc-at-divider" role="separator"><span>@@ — действуют на все логики независимо от выбранной строки Op/Cl</span></div>
 <div class="calc-at-global" id="calc-at-global">
 <input type="checkbox" id="param-reverse" hidden>
 <input type="checkbox" id="param-reverse-signals" hidden>
+<div class="calc-grid calc-recovery-stop-grid">
+<div class="calc-field calc-field--full"><label for="param-pause-on-drawdown"><span class="at-token-global">@@PauseOnDrawdown</span> — стоп-лосс с восстановлением</label>
+<div class="calc-field-opt-row">
+<label class="calc-sec-select-all" style="margin:0"><input id="param-pause-on-drawdown" type="checkbox"> Включить</label>
+</div></div>
+<div class="calc-field"><label for="param-drawdown-pct"><span class="at-token-global">@@DrawdownPct</span> — просадка, %</label>
+<input id="param-drawdown-pct" type="number" value="1" min="0.01" max="99" step="0.01" title="При просадке портфеля от пика на этот % — закрыть все позиции и ждать восстановления модели"></div>
+</div>
 <div class="calc-reverse-bar">
 <button type="button" id="param-reverse-toggle" class="calc-reverse-toggle-btn" aria-pressed="false">
 Реверс сторон <span class="calc-reverse-bracket">(Long ↔ Short)</span> — <span class="calc-reverse-toggle-label">Включить</span>
@@ -126,9 +143,7 @@
 </div>
 </div>
 <p class="note" id="position-sl-hint" hidden></p>
-</div>
-
-<div class="calc-panels-row">
+</details>
 
 <details class="logic-editor" id="extra-params">
 <summary class="extra-params-head">

@@ -51,7 +51,7 @@
   imp("MultiLogic_FinrespCalculator.engine.js");
 
   self.onmessage = async (e) => {
-    const { id, packs, spec, startIdx, endIdx, params, volConfig, stopperConfig, randomPriceShift, ctgSpotPacks, tradingPeriods, calcTf } = e.data || {};
+    const { id, packs, spec, startIdx, endIdx, params, volConfig, stopperConfig, randomPriceShift, ctgSpotPacks, tradingPeriods, calcTf, recoveryStopConfig } = e.data || {};
     try {
       const E = self.MultiLogicFinrespEngine;
       if (!E?.runMulti) throw new Error("engine not loaded in worker");
@@ -59,6 +59,7 @@
         ...(randomPriceShift ? { signalPacks: E.applyRandomPriceShift(packs) } : {}),
         ...(ctgSpotPacks ? { ctgSpotPacks } : {}),
         ...(tradingPeriods ? { tradingPeriods, calcTf } : {}),
+        ...(recoveryStopConfig ? { recoveryStopConfig } : {}),
         onProgress: (pct, text, detail) => {
           self.postMessage({ id, type: "progress", pct, text, detail: detail || null });
         }
