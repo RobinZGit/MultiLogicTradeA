@@ -3517,18 +3517,6 @@
       if (api?.putChunk) await api.putChunk(payload);
       cachedArchivedTrades = null;
       cachedArchivedSessionId = null;
-      try {
-        const html = await buildStandaloneProtocolHtml(payload);
-        const sid = (state.live.sessionId || "sess").replace(/[^\w-]+/g, "").slice(0, 24);
-        const filename = `multilogic_protocol_${sid}_part${part}.html`;
-        const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(url);
-      } catch (_) { /* download optional */ }
       noteLiveTech(
         "live-protocol-archive",
         `part=${part} trades=${trades.length}`,
@@ -3587,31 +3575,135 @@
   }
 
   const PROTOCOL_STORAGE_KEY = "multilogic.trade-protocol.v1";
+  const PROTOCOL_HTML_SHELL = `<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MultiLogic — протокол истории сделок</title>
+<style>
+:root{--bg:#f4f6fa;--paper:#fff;--text:#1a1d26;--muted:#5c6370;--border:#dde2eb;--accent:#b45309;--accent-soft:#fffbeb;--fin-pos:#166534;--fin-neg:#991b1b;--fake:#ecfdf5;--real:#fdf2f8;}
+*{box-sizing:border-box;}
+body{margin:0;font-family:Segoe UI,system-ui,sans-serif;background:var(--bg);color:var(--text);line-height:1.55;font-size:15px;}
+a{color:#2563eb;}
+.proto-hdr{background:linear-gradient(180deg,#fff 0%,var(--accent-soft) 100%);border-bottom:2px solid #fcd34d;padding:1.25rem 1.5rem 1rem;}
+.proto-hdr h1{margin:0 0 .35rem;font-size:1.5rem;color:#7c2d12;}
+.proto-sub{margin:.15rem 0;color:var(--muted);font-size:.88rem;}
+.proto-toc{margin-top:.65rem;font-size:.9rem;}
+.proto-main{max-width:1100px;margin:0 auto;padding:1rem 1rem 2.5rem;}
+.proto-section{background:var(--paper);border:1px solid var(--border);border-radius:10px;padding:1rem 1.15rem 1.2rem;margin-bottom:1rem;box-shadow:0 1px 3px rgba(0,0,0,.04);}
+.proto-section h2{margin:0 0 .75rem;font-size:1.12rem;border-bottom:2px solid #fcd34d;padding-bottom:.3rem;color:#7c2d12;}
+.proto-table{width:100%;border-collapse:collapse;font-size:.86rem;}
+.proto-table th,.proto-table td{border:1px solid var(--border);padding:.35rem .45rem;text-align:left;vertical-align:top;}
+.proto-table th{background:#f8fafc;font-weight:600;}
+.proto-table-compact{font-size:.8rem;}
+.proto-hint{font-size:.78rem;color:var(--muted);max-width:28rem;}
+.proto-formula{margin:.65rem 0 0;font-size:.82rem;font-weight:600;color:#92400e;}
+.proto-scroll{overflow:auto;max-height:28rem;}
+.close-card,.open-lot-card{border:1px solid #fde68a;border-radius:8px;padding:.65rem .75rem;margin:.55rem 0;background:#fffbeb;}
+.close-card h3,.open-lot-card h3{margin:0 0 .35rem;font-size:.95rem;}
+.close-meta{margin:.2rem 0;font-size:.82rem;color:var(--muted);}
+.trade-link{font-weight:600;text-decoration:none;}
+.trade-link:hover{text-decoration:underline;}
+.fin{color:var(--fin-pos);font-weight:700;}
+.neg{color:var(--fin-neg);font-weight:600;}
+tr.row-fake{background:var(--fake);}
+tr.row-real{background:var(--real);}
+.proto-empty,.proto-empty-state{color:var(--muted);font-size:.92rem;}
+.proto-empty-state{max-width:520px;margin:3rem auto;padding:1.5rem;background:var(--paper);border-radius:10px;border:1px solid var(--border);text-align:center;}
+.proto-ftr{text-align:center;padding:1.25rem;color:var(--muted);font-size:.82rem;border-top:1px solid var(--border);}
+code{font-family:Consolas,monospace;font-size:.82em;}
+</style>
+</head>
+<body>
+<div id="protocol-root"><p class="proto-empty-state">Загрузка протокола…</p></div>
+<script src="MultiLogic_TradeHistoryProtocol.render.js"></script>
+<script>MLTradeProtocol.boot();</script>
+</body>
+</html>`;
+
+  function protocolAssetsStore() {
+    if (!root.__mlFinrespProtocolAssets) {
+      root.__mlFinrespProtocolAssets = { htmlTpl: "", renderJs: "", ready: null };
+    }
+    return root.__mlFinrespProtocolAssets;
+  }
+
+  function isSpaFallbackHtml(text) {
+    const t = String(text || "").slice(0, 8000);
+    if (!t.trim()) return true;
+    if (t.includes("<app-root")) return true;
+    if (t.includes("калькулятор FINRESP Angular")) return true;
+    if (t.includes("runtime.") && t.includes("polyfills.") && t.includes("main.")) return true;
+    return false;
+  }
+
+  function validProtocolRenderJs(text) {
+    return typeof text === "string"
+      && text.includes("MLTradeProtocol")
+      && text.includes("renderSessionEvents")
+      && !isSpaFallbackHtml(text);
+  }
+
+  function validProtocolHtmlTpl(text) {
+    return typeof text === "string"
+      && text.includes("protocol-root")
+      && !isSpaFallbackHtml(text);
+  }
+
+  async function fetchProtocolAssetText(rel) {
+    try {
+      const res = await fetch(assetUrl(rel), { cache: "no-store" });
+      if (!res.ok) return "";
+      const ct = String(res.headers.get("content-type") || "").toLowerCase();
+      if (ct.includes("text/html") && !rel.endsWith(".html")) return "";
+      const text = await res.text();
+      return text;
+    } catch (_) {
+      return "";
+    }
+  }
+
+  async function ensureProtocolExportAssets() {
+    const store = protocolAssetsStore();
+    if (store.ready) return store.ready;
+    store.ready = (async () => {
+      if (!validProtocolRenderJs(store.renderJs)) {
+        const js = await fetchProtocolAssetText("MultiLogic_TradeHistoryProtocol.render.js");
+        if (validProtocolRenderJs(js)) store.renderJs = js;
+      }
+      if (!validProtocolHtmlTpl(store.htmlTpl)) {
+        const html = await fetchProtocolAssetText("MultiLogic_TradeHistoryProtocol.html");
+        if (validProtocolHtmlTpl(html)) store.htmlTpl = html;
+      }
+      if (!validProtocolHtmlTpl(store.htmlTpl)) store.htmlTpl = PROTOCOL_HTML_SHELL;
+    })();
+    return store.ready;
+  }
 
   /** Собрать автономный HTML-файл протокола (данные встроены, render.js инлайн). */
   async function buildStandaloneProtocolHtml(payload) {
+    await ensureProtocolExportAssets();
+    const store = protocolAssetsStore();
     const dataJson = JSON.stringify(payload).replace(/</g, "\\u003c");
-    let renderJs = "";
-    try {
-      const res = await fetch(assetUrl("MultiLogic_TradeHistoryProtocol.render.js"), { cache: "no-store" });
-      if (res.ok) renderJs = await res.text();
-    } catch (_) { /* file:// или офлайн */ }
-    let htmlTpl = "";
-    try {
-      const res = await fetch(assetUrl("MultiLogic_TradeHistoryProtocol.html"), { cache: "no-store" });
-      if (res.ok) htmlTpl = await res.text();
-    } catch (_) { /* ignore */ }
-    if (htmlTpl && renderJs) {
-      const dataScript = `<script type="application/json" id="ml-protocol-data">${dataJson}</script>`;
+    const renderJs = validProtocolRenderJs(store.renderJs) ? store.renderJs : "";
+    const htmlTpl = validProtocolHtmlTpl(store.htmlTpl) ? store.htmlTpl : PROTOCOL_HTML_SHELL;
+    const dataScript = `<script type="application/json" id="ml-protocol-data">${dataJson}</script>`;
+    const marker = '<script src="MultiLogic_TradeHistoryProtocol.render.js"></script>\n<script>MLTradeProtocol.boot();</script>';
+    if (renderJs && htmlTpl.includes(marker)) {
       return htmlTpl.replace(
-        '<script src="MultiLogic_TradeHistoryProtocol.render.js"></script>\n<script>MLTradeProtocol.boot();</script>',
+        marker,
         `<script>${renderJs}</script>\n${dataScript}\n<script>MLTradeProtocol.boot();</script>`
       );
     }
+    const renderBlock = renderJs
+      ? `<script>${renderJs}</script>`
+      : `<script>document.getElementById("protocol-root").innerHTML="<p class=\\"proto-empty-state\\">Не удалось загрузить render.js. Обновите страницу (Ctrl+F5) и сохраните протокол снова. JSON данных встроен ниже.</p>";</script>`;
     return `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>MultiLogic — протокол</title></head><body>
-<script type="application/json" id="ml-protocol-data">${dataJson}</script>
-<script>${renderJs || "document.body.textContent='render.js unavailable';"}</script>
-<script>MLTradeProtocol.boot();</script></body></html>`;
+<div id="protocol-root"><p class="proto-empty-state">Загрузка протокола…</p></div>
+${dataScript}
+${renderBlock}
+<script>try { MLTradeProtocol.boot(); } catch (_) { /* render missing */ }</script></body></html>`;
   }
 
   /** Открыть HTML-протокол и скачать автономный .html-файл (без брокера и без перезагрузки SPA). */
@@ -10545,6 +10637,8 @@ ${referenceBlock}
       }
     });
   }
+
+    void ensureProtocolExportAssets();
 
     return {
       isLiveMode,

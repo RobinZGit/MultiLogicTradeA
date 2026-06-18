@@ -370,7 +370,7 @@ test('conjugate logics: engine export + UI button between help and copy', () => 
   assert.match(bootSrc, /logic-line-help-btn[\s\S]*logic-line-conjugate-btn[\s\S]*logic-line-copy-btn/);
 });
 
-test('trade protocol export: blob preview, not SPA protocol html url', () => {
+test('trade protocol export: blob preview, SPA guard, no archive auto-download', () => {
   const liveSrc = fs.readFileSync(livePath, 'utf8');
   const block = liveSrc.match(/async function exportTradeHistoryProtocolFile\(\)[\s\S]*?^  \}/m)?.[0] || '';
   assert.ok(block.length > 40, 'exportTradeHistoryProtocolFile body');
@@ -378,6 +378,11 @@ test('trade protocol export: blob preview, not SPA protocol html url', () => {
   assert.match(block, /createObjectURL/);
   assert.match(block, /window\.open\(url/);
   assert.match(liveSrc, /function buildProtocolOpenLots/);
+  assert.match(liveSrc, /function isSpaFallbackHtml/);
+  assert.match(liveSrc, /PROTOCOL_HTML_SHELL/);
+  assert.match(liveSrc, /ensureProtocolExportAssets/);
+  const archiveBlock = liveSrc.match(/async function archiveEvictedLiveData\([\s\S]*?^  \}/m)?.[0] || '';
+  assert.doesNotMatch(archiveBlock, /a\.download/);
 });
 
 test('logic pause equity decor on per-logic charts', () => {
