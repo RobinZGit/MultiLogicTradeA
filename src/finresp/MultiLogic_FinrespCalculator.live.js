@@ -871,6 +871,7 @@
       resetBrokerOpsInFlight(`broker-change ${from} → ${to}`);
       persistBrokerDepositFromDom(from);
       persistLiveUiToRuntime(from);
+      persistLiveSessionToStorage({ brokerId: from, sandbox: isLiveSandbox() });
       noteBrokerTech("broker-change", `${from} → ${to}`);
       clearLiveRuntimeBroker(from);
       clearBrokerSessionTokens(`broker-change ${from} → ${to}`);
@@ -883,6 +884,7 @@
       resetDepositToDefaultProvisional();
     }
     hydrateLiveUiFromRuntime(to);
+    if (isLiveMode()) tryRestoreLiveSessionFromStorage({ brokerId: to, onlyIfEmpty: true });
     saveConfig();
     syncBrokerSettingsPanels();
     syncAccountModeUi();
@@ -1951,6 +1953,7 @@
       instrumentId: meta.instrumentId,
       market: meta.market
     }, meta.tradeSource, meta.tradeSourceLabel), "real");
+    scheduleLiveSessionPersist();
   }
 
   /** Подпрограмма `markTradeHistoryCancelled`. */
@@ -3708,6 +3711,7 @@
       bindLivePanelCollapsibleToggles();
       bindLivePanelHeavyRenderOnOpen();
       bindTradeHistoryProtocolExport();
+      bindLiveSessionClearUi();
       bindLiveGoalUi();
       bindLiveNotifyUi();
       if (!shouldThrottleLiveGoalUi(options)) {
@@ -5205,6 +5209,7 @@
     };
     sb.ledger.push(fill);
     if (sb.ledger.length > 500) sb.ledger.splice(0, sb.ledger.length - 500);
+    scheduleLiveSessionPersist();
     return fill;
   }
 
@@ -5655,6 +5660,253 @@
     if (sb.ledger.length) rebuildSandboxFromLedger(sb);
   }
 
+  const LIVE_SESSION_STORE_KEY = "multilogic.live-session.v1";
+  const LIVE_SESSION_PERSIST_DEBOUNCE_MS = 2000;
+  const LIVE_SESSION_PERSIST_INTERVAL_MS = 45000;
+  let liveSessionPersistTimer = null;
+  let liveSessionPersistInterval = null;
+
+  function liveSessionSlot(brokerId, sandbox) {
+    return `${brokerId || "tbank"}:${sandbox ? "sandbox" : "real"}`;
+  }
+
+  function readLiveSessionStoreMap() {
+    try {
+      const raw = safeStorageGet(LIVE_SESSION_STORE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function writeLiveSessionStoreMap(map) {
+    try {
+      safeStorageSet(LIVE_SESSION_STORE_KEY, JSON.stringify(map));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function cloneTradeHistoryRow(h) {
+    return {
+      ...h,
+      tradeMatches: h.tradeMatches ? h.tradeMatches.map((m) => ({ ...m })) : undefined
+    };
+  }
+
+  function serializeSandboxForSession(sb) {
+    return {
+      startPortfolio: sb.startPortfolio,
+      cash: sb.cash,
+      cashDelta: sb.cashDelta,
+      commissionTotal: sb.commissionTotal,
+      nextLegId: sb.nextLegId || 0,
+      nextFillId: sb.nextFillId || 0,
+      open: snapshotSandboxOpen(sb.open),
+      openLegs: snapshotSandboxOpenLegs(sb.openLegs),
+      ledger: (sb.ledger || []).map((f) => ({
+        ...f,
+        tradeMatches: f.tradeMatches ? f.tradeMatches.map((m) => ({ ...m })) : null
+      })),
+      closed: (sb.closed || []).map((c) => ({ ...c })),
+      orders: (sb.orders || []).map((o) => ({
+        ...o,
+        revertSnap: undefined,
+        tradeMatches: o.tradeMatches ? o.tradeMatches.map((m) => ({ ...m })) : null
+      }))
+    };
+  }
+
+  function buildLiveSessionPayload(brokerId, sandbox) {
+    const id = brokerId || readBrokerIdFromUi();
+    const dep = +($("vol-deposit")?.value || 0) || null;
+    const accountId = activeBrokerState().selectedAccountId || activeBrokerState().portfolioId || "";
+    const hist = ensureLiveTradeHistory();
+    const payload = {
+      v: 1,
+      savedAt: new Date().toISOString(),
+      brokerId: id,
+      sandbox: !!sandbox,
+      accountId: String(accountId || ""),
+      volDeposit: dep,
+      tradingStartedAt: state.live.tradingStartedAt || null,
+      sessionStartedAt: state.live.sessionStartedAt || null,
+      sessionPositionBaseline: state.live.sessionPositionBaseline || null,
+      tradeHistory: [],
+      sandboxState: null,
+      openLots: null
+    };
+    if (sandbox) {
+      payload.sandboxState = serializeSandboxForSession(brokerSandboxState(id));
+      payload.tradeHistory = hist.filter((h) => h.fake || h.mode === "sandbox").map(cloneTradeHistoryRow);
+    } else {
+      persistLiveUiToRuntime(id);
+      payload.tradeHistory = hist.filter((h) => !h.fake && h.mode !== "sandbox").map(cloneTradeHistoryRow);
+      try {
+        payload.openLots = buildTradeHistoryProtocol().openLots || [];
+      } catch (_) { /* ignore during persist */ }
+    }
+    return payload;
+  }
+
+  function persistLiveSessionToStorage(opts) {
+    const options = opts || {};
+    if (!isLiveMode()) return false;
+    const sandbox = options.sandbox != null ? !!options.sandbox : isLiveSandbox();
+    const brokerId = options.brokerId || readBrokerIdFromUi();
+    try {
+      const map = readLiveSessionStoreMap();
+      map[liveSessionSlot(brokerId, sandbox)] = buildLiveSessionPayload(brokerId, sandbox);
+      return writeLiveSessionStoreMap(map);
+    } catch (err) {
+      noteLiveTech("live-session-persist", err.message || String(err));
+      return false;
+    }
+  }
+
+  function scheduleLiveSessionPersist() {
+    if (!isLiveMode()) return;
+    clearTimeout(liveSessionPersistTimer);
+    liveSessionPersistTimer = setTimeout(() => {
+      liveSessionPersistTimer = null;
+      persistLiveSessionToStorage();
+    }, LIVE_SESSION_PERSIST_DEBOUNCE_MS);
+  }
+
+  function startLiveSessionPersistInterval() {
+    if (liveSessionPersistInterval) return;
+    liveSessionPersistInterval = setInterval(() => {
+      if (!isLiveMode() || !state.live.active) return;
+      persistLiveSessionToStorage();
+    }, LIVE_SESSION_PERSIST_INTERVAL_MS);
+  }
+
+  function stopLiveSessionPersistInterval() {
+    if (liveSessionPersistInterval) {
+      clearInterval(liveSessionPersistInterval);
+      liveSessionPersistInterval = null;
+    }
+  }
+
+  function sessionPayloadMatchesContext(payload, brokerId, sandbox) {
+    if (!payload || payload.v !== 1) return false;
+    if (payload.brokerId !== (brokerId || readBrokerIdFromUi())) return false;
+    if (!!payload.sandbox !== !!sandbox) return false;
+    if (!sandbox) {
+      const curAcc = String(activeBrokerState().selectedAccountId || activeBrokerState().portfolioId || "");
+      const savedAcc = String(payload.accountId || "");
+      if (curAcc && savedAcc && curAcc !== savedAcc) return false;
+    }
+    return true;
+  }
+
+  function applyLiveSessionPayload(payload) {
+    if (!sessionPayloadMatchesContext(payload, payload.brokerId, payload.sandbox)) return false;
+    const sandbox = !!payload.sandbox;
+    const brokerId = payload.brokerId;
+    if (sandbox) {
+      const sb = brokerSandboxState(brokerId);
+      const snap = payload.sandboxState;
+      if (!snap || !Number.isFinite(snap.startPortfolio)) return false;
+      sb.startPortfolio = snap.startPortfolio;
+      restoreSandboxSnapshot(sb, snap);
+      sb.orders.length = 0;
+      sb.orders.push(...(snap.orders || []).map((o) => ({
+        ...o,
+        revertSnap: undefined
+      })));
+      const fakeHist = (payload.tradeHistory || []).filter((h) => h.fake || h.mode === "sandbox");
+      const otherHist = ensureLiveTradeHistory().filter((h) => !h.fake && h.mode !== "sandbox");
+      state.live.tradeHistory = [...fakeHist, ...otherHist];
+      if (!fakeHist.length && sb.ledger.length) {
+        for (const fill of sb.ledger) upsertTradeHistoryFromSandboxFill(fill);
+      }
+      state.live.commissionPaid = sb.commissionTotal || 0;
+    } else {
+      const realHist = (payload.tradeHistory || []).filter((h) => !h.fake && h.mode !== "sandbox");
+      const fakeHist = ensureLiveTradeHistory().filter((h) => h.fake || h.mode === "sandbox");
+      state.live.tradeHistory = [...realHist, ...fakeHist];
+      if (payload.sessionPositionBaseline) state.live.sessionPositionBaseline = payload.sessionPositionBaseline;
+      if (payload.tradingStartedAt) state.live.tradingStartedAt = payload.tradingStartedAt;
+      if (payload.sessionStartedAt) state.live.sessionStartedAt = payload.sessionStartedAt;
+      hydrateLiveUiFromRuntime(brokerId);
+    }
+    noteLiveTech("live-session-restore", `${brokerId} sandbox=${sandbox} trades=${(payload.tradeHistory || []).length}`);
+    return true;
+  }
+
+  function tryRestoreLiveSessionFromStorage(opts) {
+    const options = opts || {};
+    const brokerId = options.brokerId || readBrokerIdFromUi();
+    const sandbox = options.sandbox != null ? !!options.sandbox : isLiveSandbox();
+    const map = readLiveSessionStoreMap();
+    const payload = map[liveSessionSlot(brokerId, sandbox)];
+    if (!payload) return false;
+    if (options.onlyIfEmpty) {
+      if (sandbox) {
+        const sb = brokerSandboxState(brokerId);
+        if ((sb.ledger?.length || 0) > 0 || sb.open.size > 0) return false;
+      } else {
+        const realHist = ensureLiveTradeHistory().filter((h) => !h.fake && h.mode !== "sandbox");
+        if (realHist.length > 0) return false;
+      }
+    }
+    return applyLiveSessionPayload(payload);
+  }
+
+  async function clearLiveSessionCache(opts) {
+    const options = opts || {};
+    const brokerId = options.brokerId || readBrokerIdFromUi();
+    const sandbox = options.sandbox != null ? !!options.sandbox : isLiveSandbox();
+    const map = readLiveSessionStoreMap();
+    delete map[liveSessionSlot(brokerId, sandbox)];
+    writeLiveSessionStoreMap(map);
+    if (sandbox) {
+      const dep = +($("vol-deposit")?.value || 0) || defaultProvisionalDepositRub();
+      await resetSandboxLedgerToBaseline(dep);
+      await updateSandboxPortfolioDisplay();
+    } else {
+      state.live.tradeHistory = ensureLiveTradeHistory().filter((h) => h.fake || h.mode === "sandbox");
+      if (isLiveMode() && !isLiveSandbox()) {
+        try {
+          await refreshLiveOrders();
+          await refreshLiveOpenPositions();
+          await refreshLivePortfolioStats();
+        } catch (err) {
+          noteLiveTech("live-session-clear", err.message || String(err));
+        }
+      }
+    }
+    scheduleRenderLiveOrdersPanel(true);
+    scheduleRenderLivePositionsPanel(true);
+    syncLiveTradingUi();
+    noteLiveTech("live-session-clear", `${brokerId} sandbox=${sandbox}`);
+  }
+
+  function bindLiveSessionClearUi() {
+    const btn = $("live-session-clear-cache");
+    if (!btn || bindLiveSessionClearUi._bound) return;
+    bindLiveSessionClearUi._bound = true;
+    btn.addEventListener("click", () => {
+      const sandbox = isLiveSandbox();
+      const label = sandbox ? "песочницы (фейк)" : "кэша сделок";
+      const extra = sandbox
+        ? " Позиции и журнал песочницы будут сброшены к депозиту."
+        : " Позиции на бирже не затрагиваются — очищается только сохранённый журнал в браузере.";
+      if (!confirm(`Очистить сохранённый журнал ${label}?${extra}`)) return;
+      void clearLiveSessionCache();
+    });
+    if (!root.__mlLiveSessionUnloadBound) {
+      root.__mlLiveSessionUnloadBound = true;
+      root.addEventListener("beforeunload", () => {
+        if (isLiveMode()) persistLiveSessionToStorage();
+      });
+    }
+  }
+
   /** Процедура (async): закрыть фейк-позицию целиком по точному числу штук (без переворота в шорт). */
   async function closeSandboxPositionAtMarket(pos, opts) {
     const options = opts || {};
@@ -5791,6 +6043,7 @@
     sb.orders.unshift(order);
     if (sb.orders.length > 200) sb.orders.length = 200;
     compactSandboxOrderJournal(sb);
+    scheduleLiveSessionPersist();
     return orderId;
   }
 
@@ -6223,6 +6476,14 @@
     const targetStart = depositFallback > 0 && !provisional
       ? depositFallback
       : (depositFallback > 0 ? depositFallback : defaultRub);
+
+    if (tryRestoreLiveSessionFromStorage({ sandbox: true, onlyIfEmpty: true })) {
+      await updateSandboxPortfolioDisplay();
+      scheduleRenderLiveOrdersPanel(true);
+      scheduleRenderLivePositionsPanel(true);
+      noteLiveTech("live-sandbox", "restored-from-storage", `start=${sb.startPortfolio}`);
+      return;
+    }
 
     if (isLiveSandbox() && Number.isFinite(sb.startPortfolio) && sb.startPortfolio > 0) {
       if (!provisional && depositFallback > 0 && sb.startPortfolio !== depositFallback) {
@@ -8403,6 +8664,7 @@ ${referenceBlock}
     }
     if (!(await ensureTbankTokenUnlocked({ interactive: true, openUi: true, useModal: true }))) return;
     await ensureBrokerDepositLoaded();
+    tryRestoreLiveSessionFromStorage({ sandbox: false, onlyIfEmpty: true });
     await refreshLiveOrders();
     await refreshLivePortfolioStats();
     startLiveStatsPoll();
@@ -8418,6 +8680,8 @@ ${referenceBlock}
       return;
     }
     if (state.live.active) {
+      persistLiveSessionToStorage();
+      stopLiveSessionPersistInterval();
       state.live.active = false;
       state.live.tradingStartedAt = null;
       state.live.lastError = "";
@@ -8459,6 +8723,7 @@ ${referenceBlock}
     }
 
     ensureLiveChartSession();
+    tryRestoreLiveSessionFromStorage({ onlyIfEmpty: true });
     if (sandbox) {
       try {
         await prepareSandboxTradingSession();
@@ -8475,6 +8740,7 @@ ${referenceBlock}
       state.live.lastError = "";
       syncLiveTradingUi();
       notifyLiveTradingToggle(true);
+      startLiveSessionPersistInterval();
       if (!state.live.pollTimer) startLiveModePoll();
       const sb = ensureSandboxState();
       void (async () => {
@@ -8509,6 +8775,7 @@ ${referenceBlock}
     state.live.lastError = "";
     syncLiveTradingUi();
     notifyLiveTradingToggle(true);
+    startLiveSessionPersistInterval();
     if (!state.live.pollTimer) startLiveModePoll();
     void (async () => {
       try {
@@ -9273,6 +9540,7 @@ ${referenceBlock}
         });
       }
       if (state.accountMode === "live" && !sandbox) await connectTbankForLive();
+      if (state.accountMode === "live") tryRestoreLiveSessionFromStorage({ onlyIfEmpty: true });
     } else {
       const dep = $("vol-deposit");
       if (dep) delete dep.dataset.provisional;
@@ -9381,6 +9649,9 @@ ${referenceBlock}
       renderLiveOrdersPanel,
       exportTradeHistoryProtocolFile,
       buildTradeHistoryProtocol,
+      persistLiveSessionToStorage,
+      tryRestoreLiveSessionFromStorage,
+      clearLiveSessionCache,
       renderLivePositionsPanel,
       syncLiveManualOrderUi,
       syncLivePeriodControls,

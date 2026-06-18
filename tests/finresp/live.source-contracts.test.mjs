@@ -90,6 +90,11 @@ test('live goal panel: enabled header shows target date and percent', () => {
   assert.match(calcFormHtml, /id="trading-periods-toggle"/);
   assert.match(calcFormHtml, /id="trading-periods-master"/);
   assert.match(liveSrc, /liveTradingPeriodsBlocked/);
+  assert.match(liveSrc, /LIVE_SESSION_STORE_KEY/);
+  assert.match(liveSrc, /persistLiveSessionToStorage/);
+  assert.match(liveSrc, /tryRestoreLiveSessionFromStorage/);
+  assert.match(liveSrc, /clearLiveSessionCache/);
+  assert.match(html, /id="live-session-clear-cache"/);
   assert.match(liveSrc, /Цель установлена/);
 });
 
