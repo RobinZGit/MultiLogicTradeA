@@ -364,18 +364,9 @@ body.calc-running .live-trading-panel--active .live-trading-toolbar{
   color:#9a3412;font-weight:700;box-shadow:0 2px 12px rgba(217,119,6,.24);
 }
 .live-auto-reverses-row{align-items:center;}
-.live-auto-reverses-field{
-  display:flex;flex-direction:column;gap:.2rem;font-size:.78rem;font-weight:600;color:#7f1d1d;margin:0;
-}
-.live-auto-reverses-field input{
-  width:5.2rem;padding:.38rem .45rem;border:1px solid #d4a5a5;border-radius:7px;
-  background:#fff;color:#7f1d1d;font-weight:600;font-size:.86rem;
-}
 .live-candle-source-hint{font-size:.74rem;font-weight:600;color:#b45309;margin-left:.15rem;}
 .live-trading-panel--sandbox .live-ob-trend-panel-toggle{background:#f0fdf4;border-color:#86efac;}
 .live-trading-panel--sandbox .live-reverse-panel-toggle:not(.live-reverse-panel-toggle--on){background:#f0fdf4;border-color:#86efac;}
-.live-trading-panel--sandbox .live-auto-reverses-field{color:#166534;}
-.live-trading-panel--sandbox .live-auto-reverses-field input{border-color:#86efac;color:#14532d;}
 .live-sandbox-label{display:inline-flex;align-items:center;gap:.4rem;font-size:.88rem;font-weight:600;color:#374151;cursor:pointer;user-select:none;}
 .live-sandbox-label input{width:1rem;height:1rem;cursor:pointer;}
 .live-trading-panel--sandbox{

@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-wallet-two-modes-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-live-auto-reverses-ui-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -5066,22 +5066,12 @@
 
   function syncAutoReversesUi(skipSource) {
     const on = !!$("param-auto-reverses")?.checked;
-    const lookback = $("param-auto-reverses-lookback")?.value ?? "220";
-    const step = $("param-auto-reverses-step")?.value ?? "30";
     const panel = $("live-auto-reverses-panel");
     if (panel && skipSource !== "live-auto-reverses-panel" && panel.checked !== on) {
       panel.checked = on;
     }
     const panelWrap = $("live-auto-reverses-panel-wrap");
     if (panelWrap) panelWrap.classList.toggle("live-reverse-panel-toggle--on", on);
-    const liveLookback = $("live-auto-reverses-lookback");
-    if (liveLookback && skipSource !== "live-auto-reverses-lookback" && liveLookback.value !== lookback) {
-      liveLookback.value = lookback;
-    }
-    const liveStep = $("live-auto-reverses-step");
-    if (liveStep && skipSource !== "live-auto-reverses-step" && liveStep.value !== step) {
-      liveStep.value = step;
-    }
   }
 
   /** Галочка @@ReverseSides в блоке «Реальная торговля» (= param-reverse). */
@@ -5106,7 +5096,7 @@
     syncReverseSignalsUi();
   }
 
-  /** @@AutoReverses и окно/шаг в блоке «Реальная торговля». */
+  /** Галочка @@AutoReverses в блоке «Реальная торговля» (окно/шаг только в доп. параметрах). */
   function bindLiveAutoReversesPanelUi() {
     const panel = $("live-auto-reverses-panel");
     if (!panel || panel.dataset.autoReversesBound) return;
@@ -5118,24 +5108,7 @@
       renderFromParams();
       saveConfig();
     });
-    const bindNum = (liveId, mainId) => {
-      const el = $(liveId);
-      if (!el) return;
-      const apply = () => {
-        const mainEl = $(mainId);
-        if (mainEl) mainEl.value = el.value;
-        syncAutoReversesUi(liveId);
-        renderFromParams();
-        saveConfig();
-      };
-      el.addEventListener("change", apply);
-      el.addEventListener("input", apply);
-    };
-    bindNum("live-auto-reverses-lookback", "param-auto-reverses-lookback");
-    bindNum("live-auto-reverses-step", "param-auto-reverses-step");
     $("param-auto-reverses")?.addEventListener("change", () => syncAutoReversesUi());
-    $("param-auto-reverses-lookback")?.addEventListener("change", () => syncAutoReversesUi());
-    $("param-auto-reverses-step")?.addEventListener("change", () => syncAutoReversesUi());
     syncAutoReversesUi();
   }
 

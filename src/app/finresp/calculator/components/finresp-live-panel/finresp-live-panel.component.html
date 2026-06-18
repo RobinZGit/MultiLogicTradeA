@@ -62,14 +62,10 @@
 </label>
 </div>
 <div class="live-panel-toggles-row live-auto-reverses-row">
-<label class="indicator-toggle live-reverse-panel-toggle" id="live-auto-reverses-panel-wrap" for="live-auto-reverses-panel" title="Автовыбор лучшей комбинации @@ReverseSides / @@ReverseSignals на скользящем окне (@@AutoReverses)">
+<label class="indicator-toggle live-reverse-panel-toggle" id="live-auto-reverses-panel-wrap" for="live-auto-reverses-panel" title="Автоподбор лучшей из четырёх сопряжённых комбинаций @@ReverseSides / @@ReverseSignals (@@AutoReverses); окно и шаг — в доп. параметрах">
 <input type="checkbox" id="live-auto-reverses-panel">
-<span><code>@@AutoReverses</code> — автопереключение 4 вариантов</span>
+<span>Автоподбор четырёх сопряжённых логик</span>
 </label>
-<label class="live-auto-reverses-field" for="live-auto-reverses-lookback"><span><code>@@AutoLookback</code></span>
-<input id="live-auto-reverses-lookback" type="number" value="220" min="50" max="20000" step="1" title="Сколько последних свечей учитывать при выборе лучшей комбинации реверсов"></label>
-<label class="live-auto-reverses-field" for="live-auto-reverses-step"><span><code>@@AutoStep</code></span>
-<input id="live-auto-reverses-step" type="number" value="30" min="1" max="20000" step="1" title="Как часто (в свечах) пересматривать лучший вариант и переключать реверсы"></label>
 </div>
 <div class="live-trading-stats">
 <div class="live-trading-stat"><b id="live-portfolio-label" title="Свободные деньги + открытые позиции по текущим ценам свечей">Портфель всего, ₽</b><span id="live-portfolio-value">{{ live.portfolioText }}</span></div>

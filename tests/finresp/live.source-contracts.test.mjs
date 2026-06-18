@@ -167,6 +167,40 @@ test('wallet select has only fictitious and live modes', () => {
   assert.match(liveSrc, /normalizeAccountMode/);
 });
 
+test('live auto-reverses: checkbox only in panel, lookback/step in extra params', () => {
+  const liveHtmlPath = path.join(
+    root,
+    'src',
+    'app',
+    'finresp',
+    'calculator',
+    'components',
+    'finresp-live-panel',
+    'finresp-live-panel.component.html',
+  );
+  const extraHtmlPath = path.join(
+    root,
+    'src',
+    'app',
+    'finresp',
+    'calculator',
+    'components',
+    'finresp-calc-form',
+    'finresp-calc-form.component.html',
+  );
+  const bootSrc = fs.readFileSync(bootPath, 'utf8');
+  const liveHtml = fs.readFileSync(liveHtmlPath, 'utf8');
+  const extraHtml = fs.readFileSync(extraHtmlPath, 'utf8');
+  assert.match(liveHtml, /id="live-auto-reverses-panel"/);
+  assert.match(liveHtml, /Автоподбор четырёх сопряжённых логик/);
+  assert.doesNotMatch(liveHtml, /live-auto-reverses-lookback/);
+  assert.doesNotMatch(liveHtml, /live-auto-reverses-step/);
+  assert.match(extraHtml, /param-auto-reverses-lookback/);
+  assert.match(extraHtml, /param-auto-reverses-step/);
+  assert.match(extraHtml, /автоподбор четырёх сопряжённых логик/);
+  assert.doesNotMatch(bootSrc, /live-auto-reverses-lookback/);
+});
+
 test('Angular account mode notifies legacy live boot when DOM already matches', () => {
   const formPath = path.join(root, 'src', 'app', 'finresp', 'finresp-form.service.ts');
   const src = fs.readFileSync(formPath, 'utf8');
