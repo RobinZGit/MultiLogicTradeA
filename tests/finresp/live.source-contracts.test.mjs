@@ -146,6 +146,27 @@ test('live panels defer heavy work on expand (goal, notify, journal, positions)'
   assert.ok(goalToggle, 'goal panel expand schedules async sync');
 });
 
+test('wallet select has only fictitious and live modes', () => {
+  const htmlPath = path.join(
+    root,
+    'src',
+    'app',
+    'finresp',
+    'calculator',
+    'components',
+    'finresp-title-bar',
+    'finresp-title-bar.component.html',
+  );
+  const html = fs.readFileSync(htmlPath, 'utf8');
+  const liveSrc = fs.readFileSync(livePath, 'utf8');
+  const walletBlock = html.match(/id="account-mode"[\s\S]*?<\/select>/);
+  assert.ok(walletBlock, 'account-mode select');
+  assert.match(walletBlock[0], /value="paper"/);
+  assert.match(walletBlock[0], /value="live"/);
+  assert.doesNotMatch(walletBlock[0], /value="tbank"/);
+  assert.match(liveSrc, /normalizeAccountMode/);
+});
+
 test('Angular account mode notifies legacy live boot when DOM already matches', () => {
   const formPath = path.join(root, 'src', 'app', 'finresp', 'finresp-form.service.ts');
   const src = fs.readFileSync(formPath, 'utf8');

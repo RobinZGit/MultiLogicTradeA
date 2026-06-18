@@ -903,10 +903,8 @@
 
   function syncBrokerModeOptionLabels() {
     const label = brokerLabel();
-    const dep = document.querySelector('#account-mode option[value="tbank"]');
     const live = document.querySelector('#account-mode option[value="live"]');
-    if (dep) dep.textContent = `${label} — торговый счёт (депозит)`;
-    if (live) live.textContent = `Реальная торговля ${label}`;
+    if (live) live.textContent = `Реальная торговля (${label})`;
   }
 
   function setAlorStatus(message, isError = false) {
@@ -1272,26 +1270,24 @@
       : stored ? "токен сохранён локально, нужен пароль" : "не подключено";
   }
 
+  /** Нормализация режима кошелька: только paper | live (tbank — legacy → paper). */
+  function normalizeAccountMode(mode) {
+    const v = String(mode || "paper").toLowerCase();
+    return v === "live" ? "live" : "paper";
+  }
+
   /** Проверка булева условия: `isLiveMode`. */
   function isLiveMode() {
-    const v = $("account-mode")?.value;
-    if (v === "live" || v === "tbank" || v === "paper") return v === "live";
-    return state.accountMode === "live";
+    return normalizeAccountMode($("account-mode")?.value || state.accountMode) === "live";
   }
   /** Проверка булева условия: `isTbankBackedMode`. */
   function isTbankBackedMode() {
-    const v = $("account-mode")?.value;
-    if (v === "live" || v === "tbank") return true;
-    if (v === "paper") return false;
-    return state.accountMode === "tbank" || state.accountMode === "live";
+    return isLiveMode();
   }
 
   /** Чтение из формы/state: `readAccountModeFromUi`. */
   function readAccountModeFromUi() {
-    const v = $("account-mode")?.value || "paper";
-    if (v === "tbank") return "tbank";
-    if (v === "live") return "live";
-    return "paper";
+    return normalizeAccountMode($("account-mode")?.value || state.accountMode);
   }
 
   /** Live-торговля: `liveOrderDirectionLabel`. */
@@ -9188,15 +9184,13 @@ ${referenceBlock}
   function syncAccountModeUi() {
     syncBrokerSettingsPanels();
     state.accountMode = readAccountModeFromUi();
-    const isTbank = state.accountMode === "tbank";
     const isLive = isLiveMode();
-    const isTbankBacked = isTbankBackedMode();
     const bl = brokerLabel();
     const deposit = $("vol-deposit");
     if (deposit) {
-      deposit.readOnly = isTbankBacked;
-      const prov = isTbankBacked && !activeBrokerState().depositLoaded;
-      deposit.title = isTbankBacked
+      deposit.readOnly = isLive;
+      const prov = isLive && !activeBrokerState().depositLoaded;
+      deposit.title = isLive
         ? (prov
           ? `Условный депозит до подключения счёта ${bl} (введите пароль).`
           : `Депозит загружен со счёта ${bl}.`)
@@ -9217,22 +9211,8 @@ ${referenceBlock}
             : `Режим реальной торговли (${bl}). Условный депозит ${fmt(+deposit.value || 0, 0)} ₽ — введите пароль для загрузки со счёта.`
         );
       }
-    } else if (isTbank) {
-      const stored = !!safeStorageGet(brokerTokenStoreKey());
-      if (stored && !activeBrokerState().token) {
-        setBrokerConnectionStatus(
-          `Режим ${bl} активен. Токен сохранён — введите пароль в блоке брокера и нажмите «Расшифровать и подключить».`,
-          true
-        );
-      } else {
-        setBrokerConnectionStatus(
-          activeBrokerState().depositLoaded
-            ? `Режим ${bl} активен. Депозит взят со счёта: ${fmt(+deposit.value || 0, 0)} ₽.`
-            : `Режим ${bl} активен. Условный депозит ${fmt(+deposit.value || 0, 0)} ₽ — введите пароль для загрузки со счёта.`
-        );
-      }
     } else {
-      setBrokerConnectionStatus("Фиктивный кошелёк активен. Поле депозита работает вручную, как раньше.");
+      setBrokerConnectionStatus("Фиктивная торговля: депозит задаётся вручную, только расчёт FINRESP.");
     }
     syncTbankSettingsState();
     syncAlorSettingsState();
@@ -9746,7 +9726,7 @@ ${referenceBlock}
       noteBrokerTech("account-mode", `${prevMode} → ${state.accountMode}`);
     }
     saveConfig();
-    if (state.accountMode === "tbank" || state.accountMode === "live") {
+    if (state.accountMode === "live") {
       const sandbox = state.accountMode === "live" && !!$("live-sandbox-mode")?.checked;
       if (!sandbox && !activeBrokerState().depositLoaded) {
         applyProvisionalDeposit();
@@ -9773,7 +9753,7 @@ ${referenceBlock}
       if (dep) delete dep.dataset.provisional;
     }
     syncAccountModeUi();
-    if (state.accountMode !== "tbank" && state.accountMode !== "live") {
+    if (state.accountMode !== "live") {
       if (state.packs.length && (!isTbankBackedMode() || activeBrokerState().depositLoaded)) invalidateFinrespResult();
     }
   }

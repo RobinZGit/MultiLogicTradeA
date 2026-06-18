@@ -132,7 +132,7 @@ export class FinrespFormService implements OnDestroy {
     }
 
     if (snapshot.accountMode != null) {
-      this.accountMode.setValue(snapshot.accountMode, { emitEvent: false });
+      this.accountMode.setValue(this.normalizeAccountMode(snapshot.accountMode), { emitEvent: false });
     }
     if (Object.keys(patch).length) {
       this.form.patchValue(patch, { emitEvent: false });
@@ -167,7 +167,7 @@ export class FinrespFormService implements OnDestroy {
     );
 
     if (mode) {
-      this.accountMode.setValue(mode.value || 'paper', { emitEvent: false });
+      this.accountMode.setValue(this.normalizeAccountMode(mode.value || 'paper'), { emitEvent: false });
     }
 
     this.syncWindowFromDom();
@@ -272,6 +272,10 @@ export class FinrespFormService implements OnDestroy {
     this.setValue('calc-till', v.till);
     this.pushInstrumentsToDom();
     this.pushLogicsToDom();
+  }
+
+  private normalizeAccountMode(mode: string): 'paper' | 'live' {
+    return mode === 'live' ? 'live' : 'paper';
   }
 
   /** @returns true если значение в DOM было обновлено (change уйдёт в preboot). */

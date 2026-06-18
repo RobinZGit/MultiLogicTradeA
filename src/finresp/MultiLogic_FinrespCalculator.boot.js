@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-account-mode-live-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-wallet-two-modes-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -861,6 +861,12 @@
     document.querySelector("label.account-mode")?.classList.toggle("account-mode--live", isLive);
   }
 
+  /** Режим кошелька: paper | live (tbank в старых config → paper). */
+  function normalizeAccountMode(mode) {
+    const v = String(mode || "paper").toLowerCase();
+    return v === "live" ? "live" : "paper";
+  }
+
   /** Подпрограмма `bootstrapRestoreAccountModeFromStorage`. */
   function bootstrapRestoreAccountModeFromStorage() {
     try {
@@ -868,9 +874,7 @@
       if (!raw) return;
       const cfg = JSON.parse(raw);
       const modeEl = document.getElementById("account-mode");
-      if (modeEl && (cfg.accountMode === "live" || cfg.accountMode === "tbank" || cfg.accountMode === "paper")) {
-        modeEl.value = cfg.accountMode;
-      }
+      if (modeEl) modeEl.value = normalizeAccountMode(cfg.accountMode);
       const sb = document.getElementById("live-sandbox-mode");
       if (sb && cfg.live?.sandboxMode != null) sb.checked = !!cfg.live.sandboxMode;
     } catch (_) { /* ignore */ }
@@ -1384,8 +1388,8 @@
     if (!cfg) return false;
     state.restoringConfig = true;
     try {
-      if (cfg.accountMode === "tbank" || cfg.accountMode === "paper" || cfg.accountMode === "live") {
-        $("account-mode").value = cfg.accountMode;
+      if (cfg.accountMode != null) {
+        $("account-mode").value = normalizeAccountMode(cfg.accountMode);
       }
       setValueIfExists("broker-provider", resolveBrokerProviderFromConfig(cfg));
       if (cfg.alor?.portfolioId != null) setValueIfExists("alor-portfolio-id", cfg.alor.portfolioId);
@@ -8048,7 +8052,7 @@ ${referenceBlock}
         timeframe: cfg.timeframe || "60",
         from: cfg.from || "",
         till: cfg.till || "",
-        accountMode: cfg.accountMode || "paper"
+        accountMode: normalizeAccountMode(cfg.accountMode || "paper")
       });
       syncMonthInputFromDates();
       api.applyFormSnapshot({ month: $("calc-month")?.value || "" });
