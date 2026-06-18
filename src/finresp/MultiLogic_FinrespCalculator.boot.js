@@ -12,7 +12,7 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-17-collapsible-control-params-v1";
+  const CALC_PAGE_VERSION = "2026-06-17-stop-monitor-sandbox-v1";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -1015,6 +1015,7 @@
       positionsUpdatedAt: null,
       positionsError: "",
       statsTimer: null,
+      stopPollTimer: null,
       orderBookTimer: null,
       orderBookBusy: false,
       journalPanelBusy: false,
@@ -2174,7 +2175,8 @@
     initLiveNotify, bindLiveNotifyUi, onLiveConfigSavedForNotify, unstickLiveUi,
     noteLiveFinrespSkipped, tryLiveFinrespCalc, startLiveModePoll, stopLiveModePoll,
     queueLiveCandleRefreshIfNeeded,
-    startLiveStatsPoll, stopLiveStatsPoll, startLiveOrderBookPoll, stopLiveOrderBookPoll,
+    startLiveStopPoll, stopLiveStopPoll, startLiveStatsPoll, stopLiveStatsPoll,
+    runLiveStopMonitorTick, startLiveOrderBookPoll, stopLiveOrderBookPoll,
     startLivePositionsPoll, stopLivePositionsPoll, fillLiveTradingInstrumentSelects,
     refreshLiveOrderBook, scheduleRefreshLiveOrderBook, hideLivePositionsMenu, onLivePositionsMenuAction,
     onLivePositionsTableContextMenu, onLivePositionsPointerDown, onLivePositionsPointerEnd,

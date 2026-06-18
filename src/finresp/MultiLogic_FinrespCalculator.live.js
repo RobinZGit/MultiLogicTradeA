@@ -17,6 +17,8 @@
     const state = d.state;
     const E = d.E;
     const $ = d.$;
+    const SM = root.MultiLogicFinrespStopMonitor;
+    const LIVE_STOP_POLL_MS = SM?.DEFAULT_POLL_MS ?? 8000;
 
     function bridgeSetStatus(text) {
       const api = root.__mlFinrespBridge;
@@ -1185,40 +1187,9 @@
     );
   }
 
-  /** Проверка портфельного stopper (песочница и реал) + e-mail. */
+  /** Проверка портфельного stopper (legacy entry — делегирует в stop-monitor poll). */
   function checkPortfolioStopperNotify() {
-    if (!isLiveMode()) return;
-    const cfg = stopperConfig();
-    if (!cfg.useSl && !cfg.useTp) return;
-    const pv = state.live.portfolioValue;
-    if (!Number.isFinite(pv)) return;
-    const watch = ensureSandboxStopperWatch();
-    if (!watch) return;
-
-    const time = state.live.lastCandleBarTime || new Date().toISOString();
-    if (watch.lastBarTime === time && watch.equityHistory.length) {
-      watch.equityHistory[watch.equityHistory.length - 1].equity = pv;
-    } else {
-      watch.equityHistory.push({ equity: pv, time });
-      watch.lastBarTime = time;
-      if (watch.equityHistory.length > 400) watch.equityHistory.shift();
-    }
-
-    let ref = portfolioStopperReferenceForWatch(cfg, watch);
-    if (ref == null && watch.equityHistory.length >= 1) {
-      ref = watch.equityHistory[0].equity;
-      watch.referenceEquity = ref;
-    }
-
-    const hit = E.checkPortfolioStopperTrigger(watch.equityHistory, cfg, ref);
-    if (!hit) return;
-
-    const notifyKey = `${hit.kind}:${hit.time}:${Math.round(hit.equity)}`;
-    if (watch.lastNotifyKey === notifyKey) return;
-    watch.lastNotifyKey = notifyKey;
-
-    notifyPortfolioStopperHit(hit);
-    watch.referenceEquity = hit.equity;
+    void runLiveStopMonitorTick({ source: "legacy-portfolio" });
   }
 
   function notifyPortfolioStopperHit(hit) {
@@ -1466,28 +1437,129 @@
     return true;
   }
 
-  function checkPauseOnDrawdownLive() {
-    if (!pauseOnDrawdownEnabled() || !isLiveMode()) {
-      syncRecoveryStopBanner();
-      return;
+  async function triggerPortfolioStopperSandbox(hit, watch) {
+    if (!hit || !isLiveSandbox() || state.live.portfolioStopperInFlight) return;
+    state.live.portfolioStopperInFlight = true;
+    state.live.tradingActionBusy = true;
+    cancelQueuedLiveChartsRefresh();
+    try {
+      const isSl = hit.kind === "sl";
+      const { sent, failed } = await closeAllSandboxPositionsLive({ tradeSource: "portfolio-stopper" });
+      await updateSandboxPortfolioDisplay({ skipCharts: true, fetchPrices: false });
+      renderLiveOrdersPanel();
+      if (watch) {
+        watch.referenceEquity = hit.equity;
+        watch.lastStopperEvent = { ...hit, closedAt: new Date().toISOString(), positionsClosed: sent };
+      }
+      const kindLabel = isSl ? "stop-loss" : "take-profit";
+      setCalcStatus(
+        `Портфельный ${kindLabel} (песочница): закрыто ${sent} поз., база SL/TP = ${fmt(hit.equity, 0)} ₽`
+        + (failed.length ? ` · ${failed.join("; ")}` : "")
+      );
+      notifyPortfolioStopperHit(hit);
+      showSandboxStopperNotification(hit);
+      noteLiveTech(
+        "portfolio-stopper-exec",
+        `${hit.kind} sandbox close=${sent}`,
+        `eq=${fmt(hit.equity, 0)} ref=${fmt(hit.referenceEquity, 0)}`
+      );
+    } finally {
+      state.live.portfolioStopperInFlight = false;
+      state.live.tradingActionBusy = false;
     }
+  }
+
+  function buildLiveStopMonitorCtx(source) {
     const rs = ensureRecoveryStopState();
-    if (rs.paused) {
+    return {
+      source: source || "poll",
+      recoveryEnabled: pauseOnDrawdownEnabled(),
+      recoveryPaused: !!rs.paused,
+      tradingActive: !!state.live.active,
+      equity: activeView().portfolioValue,
+      peakEquity: rs.peakEquity,
+      drawdownPct: recoveryStopConfig().drawdownPct,
+      resumeAt: rs.resumeAt,
+      modelEquity: liveModelPortfolioEquityRub(),
+      stopperConfig: stopperConfig(),
+      time: state.live.lastCandleBarTime || new Date().toISOString(),
+      portfolioWatch: ensureSandboxStopperWatch() || {},
+      perSec: state.lastResult?.perSec || null,
+      includePositionStops: !!state.live.active
+    };
+  }
+
+  async function applyLiveStopEvaluation(evalOut) {
+    if (!evalOut || !isLiveMode()) return;
+    const rs = ensureRecoveryStopState();
+    const watch = ensureSandboxStopperWatch();
+
+    const rec = evalOut.recovery;
+    if (!pauseOnDrawdownEnabled()) {
+      syncRecoveryStopBanner();
+    } else if (rec?.action === "track_peak" && Number.isFinite(rec.nextPeakEquity)) {
+      rs.peakEquity = rec.nextPeakEquity;
+      syncRecoveryStopBanner();
+    } else if (rec?.action === "resume") {
+      await tryRecoveryResumeLive();
+    } else if (rec?.action === "pause" && rec.meta) {
+      await triggerRecoveryPauseLive(rec.meta);
+    } else if (rec?.action === "hold_paused" || rs.paused) {
       void tryRecoveryResumeLive();
       syncRecoveryStopBanner();
+    } else {
+      syncRecoveryStopBanner();
+    }
+
+    const port = evalOut.portfolio;
+    if (watch && port?.watchPatch) {
+      Object.assign(watch, port.watchPatch);
+    }
+    if (port?.hit && watch) {
+      const notifyKey = port.notifyKey;
+      if (notifyKey && watch.lastNotifyKey !== notifyKey) {
+        watch.lastNotifyKey = notifyKey;
+        if (isLiveSandbox()) {
+          await triggerPortfolioStopperSandbox(port.hit, watch);
+        } else {
+          notifyPortfolioStopperHit(port.hit);
+          watch.referenceEquity = port.hit.equity;
+        }
+      }
+    }
+
+    for (const hit of evalOut.positions || []) {
+      if (!hit?.notifyKey || wasLiveNotifySent(hit.notifyKey)) continue;
+      markLiveNotifySent(hit.notifyKey);
+      const ps = hit.kind === SM?.STOP_KIND?.POSITION_SL ? "sl" : "tp";
+      sendLiveNotify(
+        ps === "sl" ? "position_sl" : "position_tp",
+        `MultiLogic: позиционный ${ps === "sl" ? "stop-loss" : "take-profit"} · ${hit.sec}`,
+        `${hit.sec}: ${ps === "sl" ? "Stop-loss" : "Take-profit"} на баре ${hit.barTime}. Close=${fmt(hit.close, 2)}.`
+      );
+    }
+  }
+
+  /** Единый poll/candle тик всех live-стопов (фаза 2). */
+  async function runLiveStopMonitorTick(opts) {
+    if (!isLiveMode()) {
+      syncRecoveryStopBanner();
       return;
     }
-    if (!state.live.active) return;
-    const eq = activeView().portfolioValue;
-    if (!Number.isFinite(eq)) return;
-    if (!Number.isFinite(rs.peakEquity) || eq > rs.peakEquity) rs.peakEquity = eq;
-    const peak = rs.peakEquity;
-    if (!Number.isFinite(peak) || peak <= 0) return;
-    const dd = ((peak - eq) / peak) * 100;
-    const pct = recoveryStopConfig().drawdownPct;
-    if (dd >= pct) {
-      void triggerRecoveryPauseLive({ peak, equity: eq, drawdownPct: dd });
+    if (!SM || typeof SM.evaluatePollStopTick !== "function") {
+      syncRecoveryStopBanner();
+      return;
     }
+    const ctx = buildLiveStopMonitorCtx(opts?.source);
+    if (opts?.perSec) ctx.perSec = opts.perSec;
+    if (opts?.includePositionStops != null) ctx.includePositionStops = !!opts.includePositionStops;
+    const evalOut = SM.evaluatePollStopTick(ctx);
+    await applyLiveStopEvaluation(evalOut);
+  }
+
+  /** @deprecated — используйте runLiveStopMonitorTick */
+  function checkPauseOnDrawdownLive() {
+    void runLiveStopMonitorTick({ source: "legacy-recovery", includePositionStops: false });
   }
 
   // === T-Bank: токен, счета, статус подключения ===
@@ -1621,6 +1693,8 @@
     if (source === "manual") return "Ручная заявка";
     if (source === "close-position") return "Закрытие позиции";
     if (source === "sell-all") return "Закрыть все";
+    if (source === "portfolio-stopper") return "Портфельный Stopper";
+    if (source === "recovery-pause") return "Пауза по просадке";
     if (source === "broker") return "Брокер";
     if (source) return String(source);
     return "—";
@@ -3915,23 +3989,11 @@
   }
 
   function checkPositionSlTpNotify(result) {
-    if (!isLiveMode() || !state.live.active) return;
-    for (const p of result?.perSec || []) {
-      const last = p.rows?.at(-1);
-      if (!last) continue;
-      const ps = last.posStop;
-      if (ps !== "sl" && ps !== "tp") continue;
-      const barTime = last.time || state.live.lastCandleBarTime || "";
-      const key = `pos-sltp:${p.sec}:${ps}:${barTime}`;
-      if (wasLiveNotifySent(key)) continue;
-      markLiveNotifySent(key);
-      const eventId = ps === "sl" ? "position_sl" : "position_tp";
-      sendLiveNotify(
-        eventId,
-        `MultiLogic: позиционный ${ps === "sl" ? "stop-loss" : "take-profit"} · ${p.sec}`,
-        `${p.sec}: ${ps === "sl" ? "Stop-loss" : "Take-profit"} на баре ${barTime}. Close=${fmt(last.close, 2)}.`
-      );
-    }
+    void runLiveStopMonitorTick({
+      source: "finresp-bar",
+      perSec: result?.perSec || null,
+      includePositionStops: true
+    });
   }
 
   let liveNotifyFormParamsSnapshot = "";
@@ -4226,22 +4288,44 @@
     stopLiveModePoll();
   }
 
-  /** Остановка периодического опроса: `stopLiveStatsPoll`. */
-  function stopLiveStatsPoll() {
+  /** Остановка единого опроса стопов / портфеля. */
+  function stopLiveStopPoll() {
+    if (state.live.stopPollTimer) clearInterval(state.live.stopPollTimer);
+    state.live.stopPollTimer = null;
     if (state.live.statsTimer) clearInterval(state.live.statsTimer);
     state.live.statsTimer = null;
   }
 
-  /** Запуск периодического опроса: `startLiveStatsPoll`. */
+  async function tickLiveStopPoll() {
+    if (!isLiveMode()) {
+      stopLiveStopPoll();
+      return;
+    }
+    try {
+      await refreshLivePortfolioStats();
+      await runLiveStopMonitorTick({ source: "poll", includePositionStops: true });
+    } catch (err) {
+      noteLiveTech("live-stop-poll", err?.message || String(err));
+    }
+  }
+
+  /** Запуск единого опроса стопов (портфель + @@PauseOnDrawdown + позиционные notify). */
+  function startLiveStopPoll() {
+    stopLiveStopPoll();
+    state.live.stopPollTimer = setInterval(() => {
+      void tickLiveStopPoll();
+    }, LIVE_STOP_POLL_MS);
+    void tickLiveStopPoll();
+  }
+
+  /** @deprecated alias */
+  function stopLiveStatsPoll() {
+    stopLiveStopPoll();
+  }
+
+  /** @deprecated alias */
   function startLiveStatsPoll() {
-    stopLiveStatsPoll();
-    state.live.statsTimer = setInterval(() => {
-      if (!isLiveMode()) {
-        stopLiveStatsPoll();
-        return;
-      }
-      refreshLivePortfolioStats();
-    }, 8000);
+    startLiveStopPoll();
   }
 
   /** Остановка периодического опроса: `stopLiveTradingOnModeChange`. */
@@ -4250,7 +4334,7 @@
     clearRecoveryStopOnManualStop();
     resetLiveTradingBusyFlags();
     endLiveChartSession();
-    stopLiveStatsPoll();
+    stopLiveStopPoll();
     stopLiveOrderBookPoll();
     stopLiveOrderBookActivePoll();
     stopLivePositionsPoll();
@@ -7132,7 +7216,7 @@
           await resetLiveSessionPositionBaseline();
           await refreshLivePortfolioStats();
           await refreshLiveOrders();
-          startLiveStatsPoll();
+          startLiveStopPoll();
           state.live.lastError = "";
           try {
             await liveTradingReconcile();
@@ -7387,8 +7471,6 @@
       }
       cp.style.color = "#b91c1c";
     }
-    checkSandboxPortfolioStopperNotify();
-    checkPauseOnDrawdownLive();
   }
 
   /** Обновление данных с источника: `refreshLivePortfolioStats`. */
@@ -9096,7 +9178,7 @@ ${referenceBlock}
     if (!ok) return false;
     if (liveFinrespReady()) {
       refreshLiveChartsUi();
-      if (pauseOnDrawdownEnabled()) checkPauseOnDrawdownLive();
+      await runLiveStopMonitorTick({ source: "candle", includePositionStops: true });
     }
     if (state.live.active && liveFinrespReady() && !state.live.tradingActionBusy) {
       await liveTradingReconcile();
@@ -9160,7 +9242,7 @@ ${referenceBlock}
     tryRestoreLiveSessionFromStorage({ sandbox: false, onlyIfEmpty: true });
     await refreshLiveOrders();
     await refreshLivePortfolioStats();
-    startLiveStatsPoll();
+    startLiveStopPoll();
     syncLiveTradingUi();
   }
 
@@ -9302,7 +9384,9 @@ ${referenceBlock}
   }
 
   /** Закрытие позиции/заявки: `closeAllSandboxPositionsLive`. */
-  async function closeAllSandboxPositionsLive() {
+  async function closeAllSandboxPositionsLive(options = {}) {
+    const tradeSource = options.tradeSource || "sell-all";
+    const tradeSourceLabel = options.tradeSourceLabel || resolveTradeSourceLabel(tradeSource);
     const sb = ensureSandboxState();
     let sent = 0;
     const failed = [];
@@ -9311,7 +9395,11 @@ ${referenceBlock}
       if (!pos) break;
       const key = sandboxPosKey(pos.market || (pos.isFuture ? "futures" : "shares"), pos.ticker || pos.sec);
       try {
-        const ok = await closeSandboxPositionAtMarket(pos, { skipUiRefresh: true, tradeSource: "sell-all" });
+        const ok = await closeSandboxPositionAtMarket(pos, {
+          skipUiRefresh: true,
+          tradeSource,
+          tradeSourceLabel
+        });
         if (!ok) {
           failed.push(`${pos.ticker}: не удалось закрыть`);
           sb.open.delete(key);
@@ -9508,14 +9596,14 @@ ${referenceBlock}
     syncLiveTradingUi();
     if (isLive) {
       try {
-        if (activeBrokerState().token) startLiveStatsPoll();
+        if (activeBrokerState().token) startLiveStopPoll();
       } catch (err) {
         noteLiveTech("live-chart-session", err?.message || String(err));
         syncLiveTradingUi();
       }
     } else {
       endLiveChartSession();
-      stopLiveStatsPoll();
+      stopLiveStopPoll();
     }
   }
 
@@ -10169,8 +10257,11 @@ ${referenceBlock}
       startLiveModePoll,
       stopLiveModePoll,
       queueLiveCandleRefreshIfNeeded,
+      startLiveStopPoll,
+      stopLiveStopPoll,
       startLiveStatsPoll,
       stopLiveStatsPoll,
+      runLiveStopMonitorTick,
       startLiveOrderBookPoll,
       stopLiveOrderBookPoll,
       startLivePositionsPoll,

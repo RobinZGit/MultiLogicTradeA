@@ -292,6 +292,33 @@ test('collapsible calc panels: control params outside main calc, three uniform d
   assert.match(html, /class="calc-panels-row"[\s\S]*id="control-params-panel"[\s\S]*id="extra-params"[\s\S]*id="logic-catalog-panel"/);
 });
 
+test('stop monitor: module + unified live stop poll', () => {
+  const stopPath = path.join(root, 'src', 'finresp', 'MultiLogic_FinrespCalculator.stop-monitor.js');
+  const liveSrc = fs.readFileSync(livePath, 'utf8');
+  const scripts = fs.readFileSync(
+    path.join(root, 'src', 'app', 'finresp', 'finresp-engine-scripts.ts'),
+    'utf8',
+  );
+  assert.ok(fs.existsSync(stopPath));
+  assert.match(scripts, /MultiLogic_FinrespCalculator\.stop-monitor\.js/);
+  assert.match(liveSrc, /function runLiveStopMonitorTick/);
+  assert.match(liveSrc, /function startLiveStopPoll/);
+  assert.match(liveSrc, /function tickLiveStopPoll/);
+  assert.doesNotMatch(
+    liveSrc.match(/function renderLivePortfolioStats\(\)[\s\S]*?^  \}/m)?.[0] || '',
+    /checkPauseOnDrawdownLive/
+  );
+});
+
+test('portfolio stopper: sandbox closes positions, real notify only', () => {
+  const liveSrc = fs.readFileSync(livePath, 'utf8');
+  assert.match(liveSrc, /function triggerPortfolioStopperSandbox/);
+  assert.match(liveSrc, /tradeSource: "portfolio-stopper"/);
+  assert.match(liveSrc, /if \(isLiveSandbox\(\)\) \{[\s\S]*await triggerPortfolioStopperSandbox/);
+  assert.match(liveSrc, /source === "portfolio-stopper"/);
+  assert.match(liveSrc, /showSandboxStopperNotification\(hit\)/);
+});
+
 test('conjugate logics: engine export + UI button between help and copy', () => {
   const engineSrc = fs.readFileSync(
     path.join(root, 'src', 'finresp', 'MultiLogic_FinrespCalculator.engine.js'),

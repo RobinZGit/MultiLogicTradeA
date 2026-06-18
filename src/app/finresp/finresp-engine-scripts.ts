@@ -49,6 +49,7 @@ export const FINRESP_ENGINE_SCRIPTS = [
   'trading-periods.js',
   'live-protocol-archive.js',
   'MultiLogic_FinrespCalculator.engine.js',
+  'MultiLogic_FinrespCalculator.stop-monitor.js',
   'MultiLogic_FinrespCalculator.charts.js',
   'MultiLogic_FinrespCalculator.live.js',
 ] as const;

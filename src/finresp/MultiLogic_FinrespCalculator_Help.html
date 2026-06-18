@@ -89,6 +89,7 @@ th{background:#f8fafc;width:28%;}
 <p>Калькулятор — Angular-маршрут <code>/finresp</code> и скрипты в <code>assets/finresp/</code>:</p>
 <ul>
 <li><code>MultiLogic_FinrespCalculator.engine.js</code> — расчёт FINRESP и симуляция</li>
+<li><code>MultiLogic_FinrespCalculator.stop-monitor.js</code> — единая оценка стопов (портфель, @@PauseOnDrawdown, позиционные SL/TP) для live</li>
 <li><code>MultiLogic_FinrespCalculator.charts.js</code> — интерактивные графики по инструментам (свечи, pan/zoom)</li>
 <li><code>MultiLogic_FinrespCalculator.live.js</code> — T-Bank и блок «Реальная торговля»</li>
 </ul>
@@ -134,9 +135,10 @@ th{background:#f8fafc;width:28%;}
 <tr><td><strong>Отобрать FINRESP ≥ 0</strong></td><td>После расчёта оставить в списке только инструменты с неотрицательным FINRESP в текущем окне</td></tr>
 </table>
 <p class="note" id="calc-date-hint-ref">Серая подсказка под датами — лимит дней для выбранного ТФ и числа бумаг.</p>
+<p class="note"><strong>Разметка формы (17.06.2026):</strong> карточка <strong>«Основной расчёт»</strong> — инструменты, период, кнопки «Рассчитать», список выбранных логик. Ниже в один ряд три <strong>сворачиваемых</strong> блока (по умолчанию свёрнуты): <strong>«Параметры управления»</strong> (@@ и @), <strong>«Дополнительные параметры»</strong> (объём, Stopper-оптимизация, индикаторы, кэш), <strong>«Логики»</strong> (каталог строк Op/Cl). Блок результатов, ползунки и графики — ещё ниже.</p>
 
-<h2 id="atparams">5.1. Параметры @ (основной блок)</h2>
-<p>В синей карточке «Основной расчёт», сразу под выбором логики — поля подстановки в строку Op/Cl. Символ <code>@</code> — плейсхолдер; при «Рассчитать» и «Применить» числа подставляются в <code>SL[@SL]</code>, <code>LinReg(@LR;K=@K)</code>, <code>Strict(@Strict)</code> и т.д.</p>
+<h2 id="atparams">5.1. Параметры @ и @@</h2>
+<p>Поля @ и @@ — в сворачиваемом блоке <strong>«Параметры управления»</strong> (не в «Основном расчёте»). Символ <code>@</code> — плейсхолдер в строке логики; <code>@@</code> — глобальные параметры портфеля.</p>
 <table>
 <tr><th>Поле</th><th>Назначение</th></tr>
 <tr><td><strong>@SL</strong> — стоп, ×ATR</td><td>Кратность ATR для stop-loss позиции; 0 — выкл. Не абсолютная цена</td></tr>
@@ -152,9 +154,10 @@ th{background:#f8fafc;width:28%;}
 <tr><td><strong>@ObMinLots</strong> — мин. ликвидность</td><td>Минимальная сумма лотов на top-D уровнях для <code>OB.Depth</code> (по умолчанию 100)</td></tr>
 </table>
 <h3 id="atparams-global">5.2. Параметры @@ (управление портфелем)</h3>
-<p>Блок <strong>«Параметры управления»</strong> — действуют на все логики независимо от строки Op/Cl.</p>
+<p>Верхняя часть блока <strong>«Параметры управления»</strong> — действуют на все логики независимо от строки Op/Cl.</p>
 <table>
 <tr><th>Поле</th><th>Назначение</th></tr>
+<tr><td><strong>@@PauseOnDrawdown</strong> + <strong>@@DrawdownPct</strong></td><td><strong>Стоп-лосс с восстановлением:</strong> при просадке портфельной equity от <em>пика</em> на заданный % (поле «просадка») — закрыть все позиции и <strong>не открывать новые</strong>, пока <em>модельная</em> equity (полная симуляция FINRESP без паузы) не вернётся к уровню пика. В расчёте «Рассчитать» — отдельный проход <code>applyPauseOnDrawdown</code> после основной симуляции; на графике equity — события паузы. В live — дублирующая галочка в toolbar блока «Реальная торговля»; при срабатывании — баннер «Торговля остановлена», закрытие позиций (в песочнице — фейк, на реале — рыночные заявки). Возобновление — автоматически при восстановлении модели или вручную после снятия паузы</td></tr>
 <tr><td><strong>Реверс сторон</strong> <span class="calc-reverse-bracket">(Long ↔ Short)</span> <code>@@ReverseSides</code></td><td><strong>Своп сторон стратегии</strong>: меняются местами все сигналы Op/Cl. То есть <code>Op(Long)↔Op(Short)</code> и <code>Cl(Long)↔Cl(Short)</code> (включая условия, SL/TP и «flip-выход» через <code>Op</code> противоположной стороны). Практически: любая «лонговая» логика превращается в её шорт-эквивалент и наоборот. В live при переключении — сначала закрытие всех позиций по рынку</td></tr>
 <tr><td><strong>Реверс сигналов</strong> <span class="calc-reverse-bracket">(инверсия условий)</span> <code>@@ReverseSignals</code></td><td>Инвертирует сами условия внутри Op/Cl, не меняя «сторону блока» Long/Short. Примеры: <code>Ab↔Bl</code>, <code>AbUp↔BlLo</code>, <code>AbLinK↔BlLinK</code>, <code>AbRegK↔BlRegK</code>, а также сравнения индикаторов. Для осцилляторов 0…100 (<code>Stoch K</code>, <code>RSI</code>) инверсия делает «низ↔верх»: <code>K&lt;=20 → K&gt;=80</code>, <code>K&gt;=80 → K&lt;=20</code> (правило \(v→100-v\) + инверсия знака). Это как раз позволяет получать тренд/контртренд‑вариант из одной строки</td></tr>
 <tr><td><strong>Максимальное количество позиций</strong> <code>@@MaxPos</code></td><td>Макс. число «слотов» позиций по портфелю (по умолчанию 10). <strong>Плечо</strong> = <code>@@MaxPos × Volume% / 100</code>. Лимит gross = <code>депозит × @@MaxPos × Volume%</code></td></tr>
@@ -386,18 +389,24 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 <h3>9.4. Общепортфельный Stopper</h3>
 <table>
 <tr><th>Поле</th><th>Назначение</th></tr>
-<tr><td><strong>SL / TP кратность ATR</strong> + Оптимизировать</td><td>Стопы по суммарному equity портфеля</td></tr>
+<tr><td><strong>@@SL / @@TP / @@ATR</strong> + «База SL/TP»</td><td>Стопы по суммарной equity портфеля (поля в «Параметрах управления» §5.2). Кнопки ⚡ — оптимизация в доп. параметрах</td></tr>
+<tr><td><strong>SL / TP кратность ATR</strong> + Оптимизировать</td><td>Дублируют @@SL/@@TP в блоке «Доп. параметры» (историческая вкладка Stopper)</td></tr>
 <tr><td><strong>Длина ATR портфеля</strong> + Оптимизировать</td><td>N свечей для ATR<sub>порт</sub> = mean(|Δequity|)</td></tr>
 <tr><td><strong>Предыдущая сумма (база SL/TP)</strong></td><td>0 — авто: equity на первой свече окна</td></tr>
 </table>
-<p>При срабатывании — закрытие всех позиций по всем инструментам, обновление базы.</p>
+<p><strong>Бэктест («Рассчитать»):</strong> при срабатывании — закрытие всех позиций по всем инструментам, обновление базы SL/TP на equity в момент события (<code>applyPortfolioStopper</code>).</p>
+<p><strong>Live:</strong> модуль <code>stop-monitor.js</code> + единый опрос каждые <strong>8 с</strong> (<code>startLiveStopPoll</code>): портфельный Stopper, @@PauseOnDrawdown и уведомления по позиционным SL/TP одним проходом. Дополнительно проверка на закрытии свечи (<code>runLiveStopMonitorTick</code>).</p>
+<ul>
+<li><strong>Песочница (фейк):</strong> при @@SL/@@TP — <em>закрытие всех фейк-позиций</em>, обновление базы <code>referenceEquity</code>, запись в журнал с источником <code>portfolio-stopper</code>, уведомление и строка статуса.</li>
+<li><strong>Реальный счёт:</strong> только <strong>уведомление</strong> (без автозакрытия позиций на бирже); база watch обновляется для следующих порогов.</li>
+</ul>
 
 <h3>9.5. Используемые индикаторы</h3>
 <p>Чекбоксы SMA, ATR, Stoch, LinReg, Bollinger, VWAP, CCI, MACD, Momentum. Отключённые удаляются из Op/Cl перед расчётом. SL/TP позиции не зависят от этого списка.</p>
 <p><strong>Оптимизировать</strong> (индикаторы) — перебор непустых комбинаций, остаётся набор с лучшим FINRESP.</p>
 
 <h3>9.6. Каталог логик — все встроенные стратегии по умолчанию</h3>
-<p>В блоке «Логики» (каталог) перечислены готовые строки Op/Cl/Regime — те же, что в роботе MultiLogic. Параметры <code>@SL</code>, <code>@TP</code>, <code>@LR</code>, <code>@K</code>, <code>@Strict</code>, <code>@SmaCorridor</code>, <code>@CmaLen</code>, <code>@CmaPow</code>, <code>@ObDepth</code>, <code>@ObThr</code>, <code>@ObSpr</code>, <code>@ObMinLots</code> подставляются из основного блока при «Рассчитать» и «Применить». Маркер <code>@OBT</code> в строку добавляется <em>вручную</em> (legacy-фильтр — §9.3); атомы <code>OB.Imb</code> / <code>OB.Spr</code> / <code>OB.Depth</code> — в каталоге <code>OB_SMA</code> и <code>OB_ONLY</code> (§<a href="#ob-dsl">9.3.1</a>).</p>
+<p>В сворачиваемом блоке <strong>«Логики»</strong> — готовые строки Op/Cl/Regime (те же, что в роботе MultiLogic). У каждой строки: кнопка <strong>«i.»</strong> (справка), <strong>«Сгенерировать сопряжённые логики»</strong> (до трёх вариантов с запечёнными <code>@@ReverseSides</code> / <code>@@ReverseSignals</code>: ⇄ стороны, ↔ сигналы, ⇄↔ оба; дубликаты по формуле отбрасываются), <strong>«Копировать»</strong>, «Применить». Параметры <code>@SL</code>, … подставляются из «Параметров управления» при «Рассчитать» и «Применить».</p>
 
 <h4>Общие принципы</h4>
 <ul>
@@ -583,10 +592,10 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 <p>Блок <strong>«Тех. информация»</strong> внизу формы: после открытия графиков — строки <code>chart.ТИКЕР: …</code> (число входов/выходов, posStop, линия FINRESP). Скопируйте и пришлите при сбое отображения.</p>
 
 <h4>Файлы и версия</h4>
-<p>Интерактивная отрисовка — <code>MultiLogic_FinrespCalculator.charts.js</code> (рядом с <code>engine.js</code> и <code>live.js</code>). Версия страницы — бейдж <code>pageVersion</code> на форме (например <code>2026-06-17-live-panels-async-v1</code>). После обновления — <strong>Ctrl+Shift+R</strong> (скрипты с параметром <code>?v=</code> в URL).</p>
+<p>Интерактивная отрисовка — <code>MultiLogic_FinrespCalculator.charts.js</code> (рядом с <code>engine.js</code>, <code>stop-monitor.js</code> и <code>live.js</code>). Версия страницы — бейдж <code>pageVersion</code> на форме (например <code>2026-06-17-stop-monitor-sandbox-v1</code>). После обновления — <strong>Ctrl+Shift+R</strong> (скрипты с параметром <code>?v=</code> в URL).</p>
 
 <h3>10.2. Equity портфеля (<code>calc-chart-equity</code>)</h3>
-<p>Отдельный блок ниже ползунков: кривая equity выбранного стека, справочные кривые по логикам каталога, портфельный стоппер. Формат — линия по equity, без свечей и без pan/zoom.</p>
+<p>Отдельный блок ниже ползунков: кривая equity <strong>только по выбранным в списке «Логика»</strong> стратегиям (не по всему каталогу), справочные кривые — тоже только для отмеченных логик, портфельный стоппер. Формат — линия по equity, без свечей и без pan/zoom.</p>
 <p>Над блоком — примечание: превращения FINRESP под каждым equity-графиком считаются за <strong>тот же таймфрейм</strong>, что поле «Таймфрейм» расчёта (1 мин … 1 день). Полоска баров Δ: зелёный — рост за свечу/период, розовый — просадка; на неактивных логиках — синие оттенки. Кнопка <strong>«Копировать график»</strong> — PNG кривой и полоски Δ.</p>
 
 <h2 id="tbank">11. Реальный счёт T-Bank и Алор</h2>
@@ -608,7 +617,9 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 <tr><td><strong>Песочница (фейк)</strong></td><td>Галочка под заголовком «Реальная торговля», по умолчанию выключена. Включена — спокойная <em>зелёная</em> тема блока; робот и ручные заявки <strong>не уходят на биржу</strong>, а симулируются: портфель меняется от суммы счёта на момент включения, комиссия — по полю <strong>Commission, %</strong> калькулятора. Продажа без лонга открывает <strong>шорт</strong>. Действует <strong>портфельный лимит gross</strong> (§9.1.1). В «Позициях» — открытые и закрытые фейк-позиции с пометкой <code>(фейк)</code>. Снятие галочки — все фейк-позиции и фейк-заявки удаляются, портфель снова показывает <strong>текущую реальную</strong> сумму T-Bank</td></tr>
 <tr><td><strong>Бейдж «Логики»</strong></td><td>Рядом со статусом — краткий список выбранных логик (<code>UT → L5 +2</code>). <strong>Клик</strong> раскрывает полный порядок приоритета (как в блоке «Логика» калькулятора). Обновляется при смене выбора</td></tr>
 <tr><td>Бейдж статуса</td><td>«остановлена» / «торговля активна» / «внимание» (оранжевый) / «ошибка» (красный, в т.ч. в зелёной песочнице); в песочнице — «· песочница (фейк)». При старте — <strong>подготовка: свечи … и FINRESP N/M…</strong> (прогресс <code>liveFinrespBootstrap</code> в тех. информации)</td></tr>
-<tr><td><strong>Бейдж версии</strong> (<code>pageVersion</code>)</td><td>Справа от статуса — версия страницы калькулятора (для проверки обновления после Ctrl+Shift+R). Актуальная: <code>2026-06-17-live-panels-async-v1</code></td></tr>
+<tr><td><strong>Бейдж версии</strong> (<code>pageVersion</code>)</td><td>Справа от статуса — версия страницы калькулятора (для проверки обновления после Ctrl+Shift+R). Актуальная: <code>2026-06-17-stop-monitor-sandbox-v1</code></td></tr>
+<tr><td><strong>@@PauseOnDrawdown</strong> (toolbar)</td><td>Галочка в панели live — синхронизируется с «Параметрами управления»; при просадке — пауза торговли и закрытие позиций (§5.2)</td></tr>
+<tr><td><strong>Монитор стопов</strong></td><td>Фоновый опрос ~8 с: портфельный @@SL/@@TP, @@PauseOnDrawdown, позиционные SL/TP (уведомления). В песочнице портфельный Stopper <em>закрывает</em> фейк-позиции; на реале — только notify (§9.4)</td></tr>
 <tr><td><strong>Плечо</strong></td><td>То же значение, что в доп. параметрах</td></tr>
 <tr><td><strong>Свечи live</strong></td><td><strong>Брокер (если токен)</strong> — по умолчанию: свежие бары с API <em>выбранного</em> брокера (T-Bank или Алор). <strong>Только брокер</strong> — то же, без MOEX. <strong>Только MOEX ISS</strong> — бесплатно, но часто отстаёт на 10–20 мин. История для индикаторов: при первом «Начать торговлю» без «Рассчитать» подгружается MOEX/кэш, хвост обновляется брокером</td></tr>
 <tr><td><strong>Начать / Остановить торговлю</strong></td><td>Достаточно выбранных инструментов, логики и объёмов; <strong>«Рассчитать» не обязателен</strong> — нижний блок только для теоретической оценки на истории. При активной торговле: опрос свечей → хвост FINRESP по каждому тикеру → <strong>reconcile (сделки) раньше</strong>, чем отрисовка десятков мини-графиков; форма остаётся кликабельной (кнопка «Остановить торговлю» всегда доступна). Интервал опроса: 1м ≈ 30 с, 5м ≈ 45 с…</td></tr>
@@ -630,9 +641,15 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 <p class="note">При live без предварительного «Рассчитать» или при расхождении окон свечей возможно предупреждение <strong>«FINRESP пустой»</strong> / <code>windowSkipped</code> — свечи и опрос продолжаются, <strong>торговля не останавливается</strong>; сузьте выбор или нажмите «Рассчитать» для согласования с нижним блоком.</p>
 
 <h2 id="changelog">13. Изменения (2026-06-17)</h2>
-<p>Сводка доработок калькулятора и live-торговли за 17.06.2026. Актуальная сборка: <code>pageVersion=2026-06-17-live-panels-async-v1</code>.</p>
+<p>Сводка доработок калькулятора и live-торговли за 17.06.2026. Актуальная сборка: <code>pageVersion=2026-06-17-stop-monitor-sandbox-v1</code>.</p>
 <table>
 <tr><th>Тема</th><th>Что сделано</th></tr>
+<tr><td><strong>Разметка формы</strong></td><td>«Основной расчёт» отделён от трёх сворачиваемых панелей: <strong>Параметры управления</strong> (@@ и @), <strong>Доп. параметры</strong>, <strong>Каталог логик</strong></td></tr>
+<tr><td><strong>@@PauseOnDrawdown</strong></td><td>Стоп с восстановлением: галочка и <code>@@DrawdownPct</code> в параметрах управления; в расчёте — <code>applyPauseOnDrawdown</code>; в live — закрытие позиций, баннер паузы, возобновление при восстановлении модельной equity</td></tr>
+<tr><td><strong>Equity-графики</strong></td><td>Кривые equity и справочные линии — <strong>только по выбранным логикам</strong> в списке «Логика», не по всему каталогу</td></tr>
+<tr><td><strong>Сопряжённые логики</strong></td><td>Кнопка «Сгенерировать сопряжённые логики» в каталоге (⇄ / ↔ / ⇄↔); <code>bakeConjugateLogicLine</code> в <code>engine.js</code></td></tr>
+<tr><td><strong>stop-monitor.js</strong></td><td>Чистые функции оценки стопов; в live — единый poll <strong>8 с</strong> (<code>startLiveStopPoll</code>): портфель, PauseOnDrawdown, позиционные notify</td></tr>
+<tr><td><strong>Портфельный Stopper в live</strong></td><td><strong>Песочница:</strong> при @@SL/@@TP — закрытие всех фейк-позиций, обновление базы, журнал <code>portfolio-stopper</code>. <strong>Реал:</strong> только уведомление</td></tr>
 <tr><td><strong>CtgStoch</strong></td><td>В логиках <strong>FTS, FTT, FTS_S, FTT_S</strong> индикатор <code>TotStoch</code> заменён на <strong>CtgStoch</strong>: стохастик по ряду контанго (OHLC фьючерса − spot с MOEX). Модули <code>indicators/ctg/</code>, загрузка spot-паков в <code>engine.js</code>, тесты <code>ctg-stoch.test.mjs</code></td></tr>
 <tr><td><strong>Мультиброкер</strong></td><td>В шапке — выбор <strong>T-Bank / Алор</strong>; отдельные депозиты, токены и песочница; при смене брокера сброс операций уходящего брокера. Метки «Свечи live»: «Брокер (если токен)» вместо жёсткого «T-Bank»</td></tr>
 <tr><td><strong>Вход и пароль</strong></td><td>При открытии страницы в режиме live/tbank с сохранённым токеном снова запрашивается пароль (модальное окно после готовности формы). Исправлена регрессия, когда показывался только статус <code>unlock-needed</code> без диалога</td></tr>
@@ -641,7 +658,7 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 <tr><td><strong>Отзывчивость UI</strong></td><td>При старте с десятками инструментов: прогресс <code>FINRESP N/M</code>, уступки UI при загрузке MOEX и расчёте хвоста, reconcile <em>до</em> отложенной отрисовки графиков; во время активной торговли не запускается тяжёлый полный <code>calcResultAsync</code> по всему окну ползунков. При <strong>разворачивании</strong> блоков «Цель», «Рассылка», «История сделок», «Позиции», «Заявка», «Стакан» — сразу «загрузка…», тяжёлая работа в фоне (<code>yieldToUi</code>, чанки таблицы)</td></tr>
 <tr><td><strong>Песочница</strong></td><td>Фейк-торговля без заявок на биржу; стартовый портфель от депозита брокера или поля Volume. Проверки meta FINRESP (брокер/песочница/депозит) — только если уже был расчёт в нижнем блоке</td></tr>
 </table>
-<p class="note">Коммиты в репозитории: <code>8fa07f1</code> (CtgStoch + live bootstrap), <code>cdd1368</code> (отзывчивость UI при старте торговли), <code>9f1f008</code> (эта справка).</p>
+<p class="note">Тесты: <code>stop-monitor.test.mjs</code>, <code>engine.recovery-stop.test.mjs</code>, <code>engine.conjugate.test.mjs</code>, контракты в <code>live.source-contracts.test.mjs</code>.</p>
 
 <h2 id="tech">14. Тех. информация</h2>
 <p>Сворачиваемый блок внизу страницы. По умолчанию <strong>свёрнут</strong>; ссылка <strong>Развернуть</strong> / <strong>Свернуть</strong> в заголовке.</p>
@@ -652,7 +669,7 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 </table>
 <p>Содержит: версию страницы (<code>pageVersion</code>), режим кошелька, <code>brokerProvider</code>, ТФ, период, выбор инструментов, состояние кэша, live-поля (<code>liveFinrespBootstrap</code>, <code>liveCandleRefreshBusy</code>, <code>liveObTrendConfirm</code>, <code>logicUsesObTrend</code>, <code>logicUsesObSignals</code>, <code>liveOpenPositionsCount</code>, источник свечей), блок <code>liveApiForbidden</code> (тикер, sec, name, uid — запрещённые для API инструменты), <code>liveReconcile.*</code> (в т.ч. пропуски по <code>@OBT</code> и <code>OB.*</code>), журнал <code>errors:</code> со строками <code>live-forbidden-instrument:</code>, <code>live-obt-skip</code>, <code>live-orderbook</code> (до 128 строк), трассировка <code>brokerEvents</code> / <code>brokerTraceLocal</code>. Обновляется при старте, расчёте, live-торговле и ошибках брокера.</p>
 
-<p class="note">Версия справки: 2026-06-17 (CtgStoch, live без «Рассчитать», мультиброкер, отзывчивый UI) · синхронизирована с формой <code>2026-06-17-live-panels-async-v1</code> · при изменении контролов калькулятора обновляйте <code>MultiLogic_FinrespCalculator_Help.html</code></p>
+<p class="note">Версия справки: 2026-06-17 (stop-monitor, PauseOnDrawdown, сопряжённые логики, equity по выбору) · синхронизирована с формой <code>2026-06-17-stop-monitor-sandbox-v1</code> · при изменении контролов калькулятора обновляйте <code>MultiLogic_FinrespCalculator_Help.html</code></p>
 
 <div class="btn-row">
 <a class="calc-btn" href="../../finresp">Вернуться в калькулятор</a>
