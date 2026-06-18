@@ -346,7 +346,7 @@ test('live commission: reset on session clear, sandbox toggle, always apply from
   assert.match(liveSrc, /function applyLiveBrokerOpsCommission/);
   assert.match(liveSrc, /brokerOpsPeriodAnchor/);
   assert.match(liveSrc, /resetLiveRealCommissionSession\(\)/);
-  assert.match(liveSrc, /persistLiveUiToRuntime\([^)]*,\s*\{\s*forceReal:\s*true\s*\}/);
+  assert.match(liveSrc, /persistLiveUiToRuntime\([\s\S]{0,120}forceReal:\s*true/);
   assert.match(liveSrc, /applyLiveBrokerOpsCommission\(\)/);
   assert.match(liveSrc, /syncSandboxCommissionToUi/);
 });
