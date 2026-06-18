@@ -36,9 +36,13 @@ export interface FinrespBridgeApi {
     handler: (which: 'start' | 'end', start: number, end: number) => void,
   ) => void;
   registerLogicAppliedHandler: (handler: () => void) => void;
+  registerLogicChipsRefresh: (handler: () => void) => void;
+  refreshLogicChips: () => void;
   syncFormFromDom: () => void;
   onBootReady: () => void;
 }
+
+import './finresp-window.global';
 
 declare global {
   interface Window {
@@ -69,6 +73,7 @@ export class FinrespBridgeService {
     | ((which: 'start' | 'end', start: number, end: number) => void)
     | null = null;
   private logicAppliedHandler: (() => void) | null = null;
+  private logicChipsRefreshHandler: (() => void) | null = null;
   private windowSyncHandler: ((view: FinrespWindowViewModel) => void) | null = null;
 
   constructor(private readonly ngZone: NgZone) {}
@@ -97,6 +102,10 @@ export class FinrespBridgeService {
       registerLogicAppliedHandler: (handler) => {
         this.logicAppliedHandler = () => this.ngZone.run(() => handler());
       },
+      registerLogicChipsRefresh: (handler) => {
+        this.logicChipsRefreshHandler = () => this.ngZone.run(() => handler());
+      },
+      refreshLogicChips: () => this.ngZone.run(() => this.logicChipsRefreshHandler?.()),
       syncFormFromDom: () => this.ngZone.run(() => this.formSyncHandler?.()),
       onBootReady: () => this.ngZone.run(() => this.bootReadyHandler?.()),
     };
@@ -150,6 +159,14 @@ export class FinrespBridgeService {
 
   notifyLogicApplied(): void {
     this.logicAppliedHandler?.();
+  }
+
+  registerLogicChipsRefresh(handler: () => void): void {
+    this.logicChipsRefreshHandler = handler;
+  }
+
+  notifyLogicChipsRefresh(): void {
+    this.logicChipsRefreshHandler?.();
   }
 
   private patchResults(view: Partial<FinrespResultsViewModel>): void {

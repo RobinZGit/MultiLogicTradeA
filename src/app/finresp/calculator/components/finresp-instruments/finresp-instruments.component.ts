@@ -28,9 +28,11 @@ export class FinrespInstrumentsComponent implements OnInit, OnDestroy {
     this.sub = this.bridge.formCatalog$.subscribe((value) => {
       this.catalog = value;
       this.formService.setInstrumentOptions(value.instrumentOptions);
+      this.syncMarketCheckboxes();
       this.cdr.markForCheck();
     });
     this.idsSub = this.formService.form.controls.instrumentIds.valueChanges.subscribe(() => {
+      this.syncMarketCheckboxes();
       this.cdr.markForCheck();
     });
   }
@@ -38,6 +40,30 @@ export class FinrespInstrumentsComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.sub?.unsubscribe();
     this.idsSub?.unsubscribe();
+  }
+
+  private syncMarketCheckboxes(): void {
+    const ids = new Set(this.selectedIds());
+    this.applyMarketCheckbox('calc-sec-all-shares', 'shares', ids);
+    this.applyMarketCheckbox('calc-sec-all-futures', 'futures', ids);
+  }
+
+  private applyMarketCheckbox(
+    elId: string,
+    market: 'shares' | 'futures',
+    selected: Set<string>,
+  ): void {
+    const el = document.getElementById(elId) as HTMLInputElement | null;
+    if (!el) return;
+    const opts = this.catalog.instrumentOptions.filter((o) => o.market === market);
+    if (!opts.length) {
+      el.checked = false;
+      el.indeterminate = false;
+      return;
+    }
+    const n = opts.filter((o) => selected.has(o.id)).length;
+    el.indeterminate = n > 0 && n < opts.length;
+    el.checked = n > 0 && n === opts.length;
   }
 
   selectedIds(): string[] {

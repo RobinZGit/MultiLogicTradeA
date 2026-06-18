@@ -51,6 +51,7 @@ export class FinrespFormService implements OnDestroy {
     this.bridge.registerLogicIds(() => this.selectedLogicIds());
     this.bridge.registerApplyInstruments((ids) => this.applyInstrumentIds(ids));
     this.bridge.registerApplyLogics((ids, cleared) => this.applyLogicIds(ids, cleared));
+    this.bridge.registerLogicChipsRefresh(() => this.refreshLogicChips());
     this.bridge.registerWindowSync((view) => this.syncWindowFromBridge(view));
 
     this.subs.push(
@@ -64,10 +65,12 @@ export class FinrespFormService implements OnDestroy {
       this.form.controls.instrumentIds.valueChanges.subscribe(() => {
         this.pushInstrumentsToDom();
         this.refreshLogicChips();
+        window.__mlFinresp?.persistInstrumentSelection?.();
       }),
       this.form.controls.logicIds.valueChanges.subscribe(() => {
         this.pushLogicsToDom();
         this.refreshLogicChips();
+        window.__mlFinresp?.persistLogicSelection?.();
       }),
       this.windowForm.controls.start.valueChanges.subscribe(() => this.onWindowControlChange('start')),
       this.windowForm.controls.end.valueChanges.subscribe(() => this.onWindowControlChange('end')),
@@ -145,6 +148,7 @@ export class FinrespFormService implements OnDestroy {
     this.pushInstrumentsToDom();
     this.pushLogicsToDom();
     this.refreshLogicChips();
+    window.__mlFinrespBridge?.refreshLogicChips?.();
   }
 
   syncFromDom(): void {
@@ -246,8 +250,10 @@ export class FinrespFormService implements OnDestroy {
   private refreshLogicChips(): void {
     const catalog = this.bridge.formCatalog$.value;
     const ids = this.form.controls.logicIds.value;
+    const disabledSet = new Set(catalog.logicDrawdownDisabledIds || []);
     const chips: FinrespLogicChipView[] = ids.map((id, index) => {
       const opt = catalog.logicOptions.find((o) => o.id === id);
+      const drawdownDisabled = disabledSet.has(id);
       return {
         id,
         name: opt?.name ?? id,
@@ -255,6 +261,7 @@ export class FinrespFormService implements OnDestroy {
         order: index + 1,
         obProfile: opt?.obProfile ?? null,
         requiresOrderBook: opt?.requiresOrderBook ?? false,
+        drawdownDisabled,
       };
     });
     this.bridge.formCatalog$.next({

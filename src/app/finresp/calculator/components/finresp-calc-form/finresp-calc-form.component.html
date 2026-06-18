@@ -43,7 +43,8 @@
 <div class="calc-grid calc-recovery-stop-grid">
 <div class="calc-field calc-field--full"><label for="param-pause-on-drawdown"><span class="at-token-global">@@PauseOnDrawdown</span> — стоп-лосс с восстановлением</label>
 <div class="calc-field-opt-row">
-<label class="calc-sec-select-all" style="margin:0"><input id="param-pause-on-drawdown" type="checkbox"> Включить</label>
+<label class="calc-sec-select-all" style="margin:0"><input id="param-pause-on-drawdown" type="checkbox" title="Портфель: при просадке отключить все выбранные логики (live-сессия не останавливается)"> Портфель (все логики)</label>
+<label class="calc-sec-select-all" style="margin:0 0 0 .85rem"><input id="param-pause-on-drawdown-per-logic" type="checkbox" title="По логикам: отключать каждую выбранную логику отдельно"> Раздельно по логикам</label>
 </div></div>
 <div class="calc-field"><label for="param-drawdown-pct"><span class="at-token-global">@@DrawdownPct</span> — просадка, %</label>
 <input id="param-drawdown-pct" type="number" value="1" min="0.01" max="99" step="0.01" title="При просадке портфеля от пика на этот % — закрыть все позиции и ждать восстановления модели"></div>

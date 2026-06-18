@@ -141,16 +141,43 @@
 
   /** Live / sandbox poll-тик: единая оценка всех стопов. */
   function evaluatePollStopTick(ctx) {
-    const recovery = evalRecoveryDrawdown({
-      enabled: ctx.recoveryEnabled,
-      paused: ctx.recoveryPaused,
-      tradingActive: ctx.tradingActive,
-      equity: ctx.equity,
-      peakEquity: ctx.peakEquity,
-      drawdownPct: ctx.drawdownPct,
-      resumeAt: ctx.resumeAt,
-      modelEquity: ctx.modelEquity
-    });
+    const recoveryLogics = [];
+    let recovery = { action: null };
+
+    if (ctx.recoveryPerLogic && Array.isArray(ctx.logicKeys) && ctx.logicKeys.length) {
+      for (const logicKey of ctx.logicKeys) {
+        const ent = ctx.logicRecovery?.[logicKey] || {};
+        const modelEq = ctx.logicModelEquity?.[logicKey];
+        const peak = ent.peakEquity;
+        const resumeAt = ent.resumeAt;
+        const r = evalRecoveryDrawdown({
+          enabled: ctx.recoveryEnabled,
+          paused: !!ent.disabled,
+          tradingActive: ctx.tradingActive,
+          equity: modelEq,
+          peakEquity: peak,
+          drawdownPct: ctx.drawdownPct,
+          resumeAt,
+          modelEquity: modelEq
+        });
+        if (r.action && r.action !== "track_peak") {
+          recoveryLogics.push({ logicKey, ...r });
+        } else if (r.action === "track_peak" && Number.isFinite(r.nextPeakEquity)) {
+          recoveryLogics.push({ logicKey, action: "track_peak", nextPeakEquity: r.nextPeakEquity });
+        }
+      }
+    } else {
+      recovery = evalRecoveryDrawdown({
+        enabled: ctx.recoveryEnabled,
+        paused: !!ctx.portfolioDrawdownDisabled,
+        tradingActive: ctx.tradingActive,
+        equity: ctx.equity,
+        peakEquity: ctx.portfolioPeakEquity,
+        drawdownPct: ctx.drawdownPct,
+        resumeAt: ctx.portfolioResumeAt,
+        modelEquity: ctx.modelEquity
+      });
+    }
 
     const portfolio = evalPortfolioStopper({
       stopperConfig: ctx.stopperConfig,
@@ -167,6 +194,7 @@
       rhythm: RHYTHM.POLL,
       source: ctx.source || "poll",
       recovery,
+      recoveryLogics,
       portfolio,
       positions
     };
@@ -174,7 +202,7 @@
 
   /** Bar driver — расширение для фазы 4 (intrabar / унификация с engine). */
   function evaluateBarStopTick(_ctx) {
-    return { rhythm: RHYTHM.BAR, source: "bar", recovery: null, portfolio: null, positions: [] };
+    return { rhythm: RHYTHM.BAR, source: "bar", recovery: null, recoveryLogics: [], portfolio: null, positions: [] };
   }
 
   root.MultiLogicFinrespStopMonitor = {

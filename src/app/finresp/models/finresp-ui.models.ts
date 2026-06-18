@@ -114,6 +114,8 @@ export interface FinrespLogicChipView {
   order: number;
   obProfile?: 'mixed' | 'only' | null;
   requiresOrderBook?: boolean;
+  /** Временно выключена @@PauseOnDrawdown (live / расчёт с recovery). */
+  drawdownDisabled?: boolean;
 }
 
 export interface FinrespFormCatalogViewModel {
@@ -123,6 +125,8 @@ export interface FinrespFormCatalogViewModel {
   logicHintText: string;
   logicChips: FinrespLogicChipView[];
   logicSelectionCleared: boolean;
+  /** id логик, отключённых просадкой (@@PauseOnDrawdown). */
+  logicDrawdownDisabledIds: string[];
   instrumentsDisabled: boolean;
 }
 
@@ -133,6 +137,7 @@ export const EMPTY_FINRESP_FORM_CATALOG: FinrespFormCatalogViewModel = {
   logicHintText: 'Каталог редактируется в блоке «Логики» ниже (под доп. параметрами).',
   logicChips: [],
   logicSelectionCleared: false,
+  logicDrawdownDisabledIds: [],
   instrumentsDisabled: true,
 };
 

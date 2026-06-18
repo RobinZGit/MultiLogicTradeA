@@ -37,8 +37,12 @@ describe('liveRefreshMayProceed (зеркало live.js)', () => {
 });
 
 describe('liveCriticalToggleDisabled (песочница: стоп не блокируется)', () => {
-  it('«Начать» disabled при uiBusy, если торговля ещё не активна', () => {
+  it('«Начать» disabled при uiBusy в реальной торговле, если торговля ещё не активна', () => {
     assert.equal(liveCriticalToggleDisabled({ ...liveOn, uiBusy: true }), true);
+  });
+
+  it('«Начать» enabled при uiBusy в песочнице', () => {
+    assert.equal(liveCriticalToggleDisabled({ ...liveOn, uiBusy: true, sandbox: true }), false);
   });
 
   it('«Остановить» enabled при активной торговле, даже если uiBusy', () => {

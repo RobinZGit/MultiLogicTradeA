@@ -1,17 +1,5 @@
 import { Injectable } from '@angular/core';
 
-declare global {
-  interface Window {
-    __mlFinrespAssetBase?: string;
-    __mlFinresp?: {
-      preboot?: {
-        setTechPre?: (text: string) => void;
-        syncLivePanelFromMode?: () => void;
-      };
-    };
-  }
-}
-
 @Injectable()
 export class FinrespScriptLoaderService {
   readonly assetBase: string;

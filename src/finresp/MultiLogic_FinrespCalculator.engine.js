@@ -1866,6 +1866,7 @@
     let entryBarIdx = initial.entryBarIdx ?? null;
     let entryMid = initial.entryMid ?? null;
     let entryBeta = initial.entryBeta ?? null;
+    let openLogicId = initial.openLogicId ?? null;
     const rows = [];
     const stackWarmup = parsedList.length
       ? Math.max(...parsedList.map((x) => logicWarmupBars(x)), 1)
@@ -1891,6 +1892,7 @@
       entryBarIdx = null;
       entryMid = null;
       entryBeta = null;
+      openLogicId = null;
       portfolioSyncPos(opts, 0, price);
       return vol;
     };
@@ -1961,7 +1963,8 @@
           if (pos > 0) buy += lot;
           else sell += lot;
           activeIdx = si;
-          markerMeta.tradeInLogic = logicSpecs[si]?.logicId || opts.logicId || "?";
+          openLogicId = logicSpecs[si]?.logicId || opts.logicId || "?";
+          markerMeta.tradeInLogic = openLogicId;
           markerMeta.tradeInSignal = esig.longOpHit ? "op_long" : "op_short";
           markerMeta.tradeInExpr = markerOpExpr(parsedList[si], esig.longOpHit ? "long" : "short");
           const anchor = captureEntryAnchor(cache, parsedList[si], i);
@@ -1984,7 +1987,8 @@
         pos,
         cash,
         commission: commissionPaid,
-        eq: cash + pos * price
+        eq: cash + pos * price,
+        openLogicId: pos !== 0 ? openLogicId : null
       }, posBefore);
     }
 
@@ -1998,7 +2002,7 @@
       buys: rows.reduce((s, r) => s + (r.buy || 0), 0),
       sells: rows.reduce((s, r) => s + (r.sell || 0), 0),
       entryPrice,
-      simState: { activeIdx, entryBarIdx, entryMid, entryBeta }
+      simState: { activeIdx, entryBarIdx, entryMid, entryBeta, openLogicId }
     };
   }
 
@@ -2018,6 +2022,7 @@
     let entryBarIdx = initial.entryBarIdx ?? null;
     let entryMid = initial.entryMid ?? null;
     let entryBeta = initial.entryBeta ?? null;
+    let openLogicId = initial.openLogicId ?? (pos !== 0 ? logicId : null);
     let commissionPaid = initial.commission || 0;
     const rows = [];
     const w = Math.max(logicWarmupBars(parsed), 2);
@@ -2036,6 +2041,7 @@
       entryBarIdx = null;
       entryMid = null;
       entryBeta = null;
+      openLogicId = null;
       portfolioSyncPos(opts, 0, price);
       return vol;
     };
@@ -2105,6 +2111,7 @@
             entryBarIdx = anchor.entryBarIdx;
             entryMid = anchor.entryMid;
             entryBeta = anchor.entryBeta;
+            openLogicId = logicId;
             portfolioSyncPos(opts, pos, price);
           }
         }
@@ -2120,7 +2127,8 @@
         pos,
         cash,
         commission: commissionPaid,
-        eq: cash + pos * price
+        eq: cash + pos * price,
+        openLogicId: pos !== 0 ? openLogicId : null
       }, posBefore);
     }
 
@@ -2134,7 +2142,7 @@
       buys: rows.reduce((s, r) => s + (r.buy || 0), 0),
       sells: rows.reduce((s, r) => s + (r.sell || 0), 0),
       entryPrice,
-      simState: { entryBarIdx, entryMid, entryBeta }
+      simState: { entryBarIdx, entryMid, entryBeta, openLogicId }
     };
   }
 
@@ -3612,6 +3620,299 @@
     }
   }
 
+  function rowOpenLogicId(row) {
+    if (!row) return null;
+    return row.openLogicId || row.tradeInLogic || null;
+  }
+
+  function flattenExecutedForLogicAtBar(executedPerSec, shadowRowIdx, t, logicKey, volConfig) {
+    for (let s = 0; s < executedPerSec.length; s++) {
+      const idx = shadowRowIdx[s][t];
+      if (idx < 0) continue;
+      const row = executedPerSec[s].rows[idx];
+      if (row?.pos && rowOpenLogicId(row) === logicKey) {
+        executedPerSec[s].rows[idx] = flattenRowAtIdx(executedPerSec[s], idx, volConfig);
+      }
+    }
+  }
+
+  function syncExecutedFromShadowAtBarPerLogic(executedPerSec, shadowPerSec, shadowRowIdx, t, pausedLogics) {
+    for (let s = 0; s < executedPerSec.length; s++) {
+      const idx = shadowRowIdx[s][t];
+      if (idx < 0) continue;
+      const sh = shadowPerSec[s].rows[idx];
+      const logicId = rowOpenLogicId(sh);
+      const blocked = sh.pos !== 0 && logicId && pausedLogics.has(logicId);
+      if (blocked) {
+        const item = executedPerSec[s];
+        const prev = idx > 0 ? item.rows[idx - 1] : item.rows[idx];
+        const cash = prev?.eq ?? prev?.cash ?? 0;
+        const close = sh.close ?? prev?.close ?? 0;
+        const base = item.rows[idx] || sh;
+        item.rows[idx] = {
+          ...base,
+          time: sh.time,
+          pos: 0,
+          cash,
+          eq: cash,
+          buy: 0,
+          sell: 0,
+          open: close,
+          high: close,
+          low: close,
+          close,
+          openLogicId: null
+        };
+      } else {
+        executedPerSec[s].rows[idx] = { ...sh };
+      }
+    }
+  }
+
+  /** Isolated equity (как графики equity по логикам) для @@PauseOnDrawdownPerLogic. */
+  function buildIsolatedLogicEquityMap(packs, logicSpecs, startIdx, endIdx, params, volConfig, times, options) {
+    const map = {};
+    const baseOpts = { ...(options || {}), recoveryStopConfig: { enabled: false } };
+    for (const spec of logicSpecs || []) {
+      const key = spec?.logicId;
+      if (!key || spec.disabled) continue;
+      const { perSec } = runMulti(packs, spec, startIdx, endIdx, params, volConfig, null, baseOpts);
+      map[key] = buildPortfolioEquitySeries(perSec, times).total;
+    }
+    return map;
+  }
+
+  function runPauseOnDrawdownPerLogicCore(
+    executedPerSec,
+    shadowPerSec,
+    shadowRowIdx,
+    times,
+    isoEqByLogic,
+    logicKeys,
+    volConfig,
+    pct
+  ) {
+    const events = [];
+    const fsm = {};
+    const pausedSet = new Set();
+    for (const key of logicKeys || []) {
+      fsm[key] = { peak: null, paused: false, resumeAt: null };
+    }
+
+    const syncAtBar = (t) => {
+      if (!pausedSet.size) {
+        syncExecutedFromShadowAtBar(executedPerSec, shadowPerSec, shadowRowIdx, t);
+      } else {
+        syncExecutedFromShadowAtBarPerLogic(executedPerSec, shadowPerSec, shadowRowIdx, t, pausedSet);
+      }
+    };
+
+    for (let t = 0; t < times.length; t++) {
+      const time = times[t];
+      syncAtBar(t);
+
+      for (const key of logicKeys || []) {
+        const st = fsm[key];
+        if (!st) continue;
+        const eq = isoEqByLogic[key]?.[t];
+        if (!st.paused) {
+          if (!Number.isFinite(eq)) continue;
+          if (!Number.isFinite(st.peak)) st.peak = eq;
+          st.peak = Math.max(st.peak, eq);
+          const dd = st.peak > 0 ? ((st.peak - eq) / st.peak) * 100 : 0;
+          if (dd >= pct) {
+            flattenExecutedForLogicAtBar(executedPerSec, shadowRowIdx, t, key, volConfig);
+            st.paused = true;
+            st.resumeAt = st.peak;
+            pausedSet.add(key);
+            events.push({
+              kind: "pause",
+              logicKey: key,
+              time,
+              equity: eq,
+              peak: st.peak,
+              resumeAt: st.resumeAt,
+              drawdownPct: dd
+            });
+          }
+        } else if (Number.isFinite(eq) && Number.isFinite(st.resumeAt) && eq >= st.resumeAt) {
+          st.paused = false;
+          pausedSet.delete(key);
+          st.peak = eq;
+          events.push({
+            kind: "resume",
+            logicKey: key,
+            time,
+            equity: eq,
+            resumeAt: st.resumeAt
+          });
+          syncAtBar(t);
+        }
+      }
+    }
+    return events;
+  }
+
+  /** @@PauseOnDrawdownPerLogic: пауза по isolated equity каждой выбранной логики. */
+  function applyPauseOnDrawdownPerLogic(perSec, times, volConfig, cfg, recoveryCtx) {
+    const events = [];
+    if (!cfg?.enabled || !cfg?.perLogic || !perSec?.length || !times?.length) {
+      return { perSec, recoveryStop: { events } };
+    }
+    const logicKeys = (cfg.logicKeys || []).filter(Boolean);
+    if (!logicKeys.length) return { perSec, recoveryStop: { events } };
+
+    const pct = Math.max(0.01, Math.min(99, +cfg.drawdownPct || 1));
+    const shadowPerSec = perSec;
+    const executedPerSec = clonePerSecRows(perSec);
+    const shadowRowIdx = buildPerSecRowIdxAtTimes(shadowPerSec, times);
+    const isoEqByLogic = recoveryCtx?.isoEqByLogic
+      || (recoveryCtx?.packs && recoveryCtx.isoLogicSpecs
+        ? buildIsolatedLogicEquityMap(
+          recoveryCtx.packs,
+          recoveryCtx.isoLogicSpecs,
+          recoveryCtx.aRef ?? 0,
+          recoveryCtx.bRef ?? 0,
+          recoveryCtx.params,
+          volConfig,
+          times,
+          recoveryCtx.runOpts
+        )
+        : {});
+
+    const pauseEvents = runPauseOnDrawdownPerLogicCore(
+      executedPerSec,
+      shadowPerSec,
+      shadowRowIdx,
+      times,
+      isoEqByLogic,
+      logicKeys,
+      volConfig,
+      pct
+    );
+
+    for (const p of executedPerSec) recomputePerSecTotals(p);
+    return { perSec: executedPerSec, recoveryStop: { events: pauseEvents, perLogic: true } };
+  }
+
+  async function applyPauseOnDrawdownPerLogicAsync(perSec, times, volConfig, cfg, recoveryCtx, progressOpts) {
+    const opts = progressOpts || {};
+    const events = [];
+    if (!cfg?.enabled || !cfg?.perLogic || !perSec?.length || !times?.length) {
+      return { perSec, recoveryStop: { events } };
+    }
+    const logicKeys = (cfg.logicKeys || []).filter(Boolean);
+    if (!logicKeys.length) return { perSec, recoveryStop: { events } };
+
+    const yieldUi = !!opts.yieldUi;
+    const tick = () => (yieldUi ? delay(0) : Promise.resolve());
+    const onProgress = opts.onProgress;
+    const pct = Math.max(0.01, Math.min(99, +cfg.drawdownPct || 1));
+    const shadowPerSec = perSec;
+    const executedPerSec = clonePerSecRows(perSec);
+    const shadowRowIdx = buildPerSecRowIdxAtTimes(shadowPerSec, times);
+    let isoEqByLogic = recoveryCtx?.isoEqByLogic;
+    if (!isoEqByLogic && recoveryCtx?.packs && recoveryCtx.isoLogicSpecs) {
+      isoEqByLogic = buildIsolatedLogicEquityMap(
+        recoveryCtx.packs,
+        recoveryCtx.isoLogicSpecs,
+        recoveryCtx.aRef ?? 0,
+        recoveryCtx.bRef ?? 0,
+        recoveryCtx.params,
+        volConfig,
+        times,
+        recoveryCtx.runOpts
+      );
+      if (yieldUi) await tick();
+    }
+    isoEqByLogic = isoEqByLogic || {};
+
+    const fsm = {};
+    const pausedSet = new Set();
+    for (const key of logicKeys) fsm[key] = { peak: null, paused: false, resumeAt: null };
+
+    const syncAtBar = (t) => {
+      if (!pausedSet.size) {
+        syncExecutedFromShadowAtBar(executedPerSec, shadowPerSec, shadowRowIdx, t);
+      } else {
+        syncExecutedFromShadowAtBarPerLogic(executedPerSec, shadowPerSec, shadowRowIdx, t, pausedSet);
+      }
+    };
+
+    const total = times.length;
+    for (let t = 0; t < total; t++) {
+      if (typeof opts.shouldCancel === "function" && opts.shouldCancel()) {
+        return { perSec: executedPerSec, recoveryStop: { events, perLogic: true }, cancelled: true };
+      }
+      const time = times[t];
+      syncAtBar(t);
+
+      for (const key of logicKeys) {
+        const st = fsm[key];
+        if (!st) continue;
+        const eq = isoEqByLogic[key]?.[t];
+        if (!st.paused) {
+          if (!Number.isFinite(eq)) continue;
+          if (!Number.isFinite(st.peak)) st.peak = eq;
+          st.peak = Math.max(st.peak, eq);
+          const dd = st.peak > 0 ? ((st.peak - eq) / st.peak) * 100 : 0;
+          if (dd >= pct) {
+            flattenExecutedForLogicAtBar(executedPerSec, shadowRowIdx, t, key, volConfig);
+            st.paused = true;
+            st.resumeAt = st.peak;
+            pausedSet.add(key);
+            events.push({
+              kind: "pause",
+              logicKey: key,
+              time,
+              equity: eq,
+              peak: st.peak,
+              resumeAt: st.resumeAt,
+              drawdownPct: dd
+            });
+          }
+        } else if (Number.isFinite(eq) && Number.isFinite(st.resumeAt) && eq >= st.resumeAt) {
+          st.paused = false;
+          pausedSet.delete(key);
+          st.peak = eq;
+          events.push({
+            kind: "resume",
+            logicKey: key,
+            time,
+            equity: eq,
+            resumeAt: st.resumeAt
+          });
+          syncAtBar(t);
+        }
+      }
+      if (onProgress) onProgress(t + 1, total, time);
+      if (yieldUi && t % 32 === 0) await tick();
+    }
+
+    for (const p of executedPerSec) recomputePerSecTotals(p);
+    return { perSec: executedPerSec, recoveryStop: { events, perLogic: true } };
+  }
+
+  function buildRecoveryStopCtx(opts, packs, activePacks, activeSignalPacks, aRef, bRef, params) {
+    if (!opts?.recoveryStopConfig?.perLogic) return null;
+    return {
+      packs: activePacks?.length ? activePacks : packs,
+      aRef,
+      bRef,
+      params,
+      isoLogicSpecs: opts.isoLogicSpecs,
+      runOpts: {
+        signalPacks: activeSignalPacks?.length ? activeSignalPacks : opts.signalPacks,
+        ctgSpotPacks: opts.ctgSpotPacks,
+        tradingPeriods: opts.tradingPeriods,
+        calcTf: opts.calcTf,
+        reverseSignals: opts.reverseSignals,
+        reverse: opts.reverse,
+        shouldCancel: opts.shouldCancel
+      }
+    };
+  }
+
   function runPauseOnDrawdownCore(executedPerSec, shadowPerSec, shadowRowIdx, times, shadowEq, volConfig, pct) {
     const events = [];
     let peak = Number.isFinite(shadowEq[0]) ? shadowEq[0] : null;
@@ -3655,7 +3956,10 @@
   }
 
   /** @@PauseOnDrawdown: пауза исполнения при % просадке от пика, тень = полная симуляция. */
-  function applyPauseOnDrawdown(perSec, times, volConfig, cfg) {
+  function applyPauseOnDrawdown(perSec, times, volConfig, cfg, recoveryCtx) {
+    if (cfg?.enabled && cfg?.perLogic) {
+      return applyPauseOnDrawdownPerLogic(perSec, times, volConfig, cfg, recoveryCtx);
+    }
     const events = [];
     if (!cfg?.enabled || !perSec?.length || !times?.length) {
       return { perSec, recoveryStop: { events } };
@@ -3680,7 +3984,10 @@
   }
 
   /** Асинхронный @@PauseOnDrawdown (yield между барами — не блокирует форму). */
-  async function applyPauseOnDrawdownAsync(perSec, times, volConfig, cfg, progressOpts) {
+  async function applyPauseOnDrawdownAsync(perSec, times, volConfig, cfg, progressOpts, recoveryCtx) {
+    if (cfg?.enabled && cfg?.perLogic) {
+      return applyPauseOnDrawdownPerLogicAsync(perSec, times, volConfig, cfg, recoveryCtx, progressOpts);
+    }
     const opts = progressOpts || {};
     const events = [];
     if (!cfg?.enabled || !perSec?.length || !times?.length) {
@@ -5091,7 +5398,8 @@
 
     let recoveryStop = { events: [] };
     if (!shouldAbortRun(opts) && opts.recoveryStopConfig?.enabled && perSec.length && times?.length) {
-      const rd = applyPauseOnDrawdown(perSec, times, volConfig, opts.recoveryStopConfig);
+      const recoveryCtx = buildRecoveryStopCtx(opts, packs, activePacks, activeSignalPacks, aRef, bRef, params);
+      const rd = applyPauseOnDrawdown(perSec, times, volConfig, opts.recoveryStopConfig, recoveryCtx);
       for (let i = 0; i < rd.perSec.length; i++) perSec[i] = rd.perSec[i];
       recoveryStop = rd.recoveryStop;
     }
@@ -5290,6 +5598,7 @@
 
     let recoveryStop = { events: [] };
     if (!shouldAbortRun(opts) && opts.recoveryStopConfig?.enabled && perSec.length && times?.length) {
+      const recoveryCtx = buildRecoveryStopCtx(opts, packs, activePacks, activeSignalPacks, aRef, bRef, params);
       const rd = await applyPauseOnDrawdownAsync(perSec, times, volConfig, opts.recoveryStopConfig, {
         yieldUi: true,
         shouldCancel: opts.shouldCancel,
@@ -5305,7 +5614,7 @@
             { phase: "recovery-stop", done, total, candleTime }
           );
         }
-      });
+      }, recoveryCtx);
       for (let i = 0; i < rd.perSec.length; i++) perSec[i] = rd.perSec[i];
       recoveryStop = rd.recoveryStop;
     }
@@ -5413,6 +5722,9 @@
     applyPortfolioStopperAsync,
     applyPauseOnDrawdown,
     applyPauseOnDrawdownAsync,
+    applyPauseOnDrawdownPerLogic,
+    applyPauseOnDrawdownPerLogicAsync,
+    buildIsolatedLogicEquityMap,
     resolveStopperProgressText,
     aggregateFinresp,
     buildPortfolioEquityRows,

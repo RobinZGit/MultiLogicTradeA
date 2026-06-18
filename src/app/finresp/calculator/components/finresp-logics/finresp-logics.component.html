@@ -22,12 +22,16 @@
       class="calc-logic-chip"
       [class.calc-logic-chip--ob]="chip.requiresOrderBook"
       [class.calc-logic-chip--ob-only]="chip.obProfile === 'only'"
+      [class.calc-logic-chip--drawdown-disabled]="chip.drawdownDisabled"
       [style.--logic-color]="chip.color"
-      [title]="chip.name !== chip.id ? chip.id + ' — ' + chip.name : chip.id"
+      [title]="chip.drawdownDisabled
+        ? (chip.name !== chip.id ? chip.id + ' — ' + chip.name + ' · отключена (@@PauseOnDrawdown)' : chip.id + ' · отключена')
+        : (chip.name !== chip.id ? chip.id + ' — ' + chip.name : chip.id)"
     >
       <span class="calc-logic-chip-ord">{{ chip.order }}</span>
       <span class="calc-logic-chip-key">{{ chip.id }}</span>
       <span *ngIf="chip.name !== chip.id" class="calc-logic-chip-name">{{ chip.name }}</span>
+      <span *ngIf="chip.drawdownDisabled" class="calc-logic-chip-paused" aria-label="Логика отключена просадкой">отключена</span>
       <button
         type="button"
         class="calc-logic-chip-trash"
@@ -57,7 +61,8 @@
   [selected]="(pickerOpen ? draftIds : logicIds.value).includes(opt.id)"
   [class.calc-logic-opt--ob]="opt.requiresOrderBook && opt.obProfile !== 'only'"
   [class.calc-logic-opt--ob-only]="opt.obProfile === 'only'"
->{{ opt.name }}</option>
+  [class.calc-logic-opt--drawdown-disabled]="catalog.logicDrawdownDisabledIds.includes(opt.id)"
+>{{ opt.name }}{{ catalog.logicDrawdownDisabledIds.includes(opt.id) ? ' · отключена' : '' }}</option>
 </select>
 <select id="calc-logic" class="calc-logic-multi" multiple size="9" aria-label="Выбор логик" hidden tabindex="-1"></select>
 <div class="calc-logic-picker-actions">

@@ -474,6 +474,24 @@ body.calc-running .live-trading-panel--active .live-trading-toolbar{
 .calc-logic-chip-arrow{color:#94a3b8;font-weight:800;font-size:.95rem;line-height:1;flex:0 0 auto;}
 .calc-logic-chip--ob{border-style:dashed;}
 .calc-logic-chip--ob-only{font-style:italic;}
+.calc-logic-chip--drawdown-disabled{
+  opacity:.58;
+  border-style:dashed;
+  border-color:#cbd5e1;
+  background:#f8fafc;
+  filter:grayscale(.4);
+}
+.calc-logic-chip--drawdown-disabled .calc-logic-chip-ord{background:#94a3b8;}
+.calc-logic-chip--drawdown-disabled .calc-logic-chip-key,
+.calc-logic-chip--drawdown-disabled .calc-logic-chip-name{color:#64748b;}
+.calc-logic-chip-paused{
+  font-size:.72rem;
+  font-weight:700;
+  color:#b45309;
+  letter-spacing:.01em;
+  white-space:nowrap;
+}
+.calc-logic-opt--drawdown-disabled{color:#94a3b8!important;font-style:italic;}
 .calc-logic-opt--ob{color:#0d9488;font-weight:600;}
 .calc-logic-opt--ob-only{color:#0369a1;font-style:italic;font-weight:600;}
 .calc-logic-picker-edit{margin-left:auto;font-size:.8rem;color:var(--muted);font-weight:600;white-space:nowrap;}

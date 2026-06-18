@@ -228,6 +228,10 @@ test('pause on drawdown: equity catalog runs skip recovery stop (не N× applyP
 test('pause on drawdown: calc params, live banner, engine and live hooks', () => {
   const liveSrc = fs.readFileSync(livePath, 'utf8');
   const bootSrc = fs.readFileSync(bootPath, 'utf8');
+  const engineSrc = fs.readFileSync(
+    path.join(root, 'src', 'finresp', 'MultiLogic_FinrespCalculator.engine.js'),
+    'utf8',
+  );
   const calcHtml = fs.readFileSync(
     path.join(root, 'src', 'app', 'finresp', 'calculator', 'components', 'finresp-calc-form', 'finresp-calc-form.component.html'),
     'utf8',
@@ -241,13 +245,30 @@ test('pause on drawdown: calc params, live banner, engine and live hooks', () =>
     'utf8',
   );
   assert.match(calcHtml, /id="param-pause-on-drawdown"/);
+  assert.match(calcHtml, /id="param-pause-on-drawdown-per-logic"/);
   assert.match(calcHtml, /id="param-drawdown-pct"/);
   assert.match(liveHtml, /id="live-recovery-stop-banner"/);
+  assert.match(liveHtml, /id="live-recovery-stop-title"/);
   assert.match(liveHtml, /id="live-pause-on-drawdown-panel"/);
+  assert.match(liveHtml, /id="live-pause-on-drawdown-per-logic-panel"/);
   assert.match(css, /\.live-recovery-stop-banner/);
   assert.match(bootSrc, /recoveryStopConfig/);
-  assert.match(bootSrc, /bindLivePauseOnDrawdownPanelUi/);
-  assert.match(liveSrc, /checkPauseOnDrawdownLive/);
+  assert.match(bootSrc, /function resolveCalcLogicSpec/);
+  assert.match(bootSrc, /resolveLogicSpecStack\(selectedLogicIds\(\)/);
+  assert.match(bootSrc, /resolveEffectiveCalcLogicSpec/);
+  assert.match(bootSrc, /effectiveLogicIds\(\)/);
+  assert.match(liveSrc, /triggerDrawdownDisableLive/);
+  assert.match(liveSrc, /tryDrawdownResumeLive/);
+  assert.match(liveSrc, /effectiveLogicIds/);
+  assert.match(bootSrc, /snapshotDrawdownRecoveryForPersist/);
+  assert.match(bootSrc, /restoreDrawdownRecoveryFromSnapshot/);
+  assert.match(bootSrc, /drawdownRecovery/);
+  assert.match(bootSrc, /instrumentSelectAll/);
+  assert.match(bootSrc, /syncLogicChipDrawdownState/);
+  assert.match(css, /calc-logic-chip--drawdown-disabled/);
+  assert.match(liveSrc, /payload\.drawdownRecovery/);
+  assert.match(liveSrc, /keepDrawdownState/);
+  assert.match(liveSrc, /reconcileSandboxAfterDrawdownDisable/);
   assert.match(liveSrc, /triggerRecoveryPauseLive/);
   assert.match(liveSrc, /tryRecoveryResumeLive/);
   assert.match(liveSrc, /syncRecoveryStopBanner/);

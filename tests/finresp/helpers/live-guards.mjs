@@ -13,11 +13,12 @@ export function liveRefreshMayProceed(state, needsBootstrap) {
 }
 
 /**
- * Зеркало liveCriticalToggleDisabled: «Начать» блокируется на время расчёта; «Остановить» — нет.
+ * Зеркало liveCriticalToggleDisabled: «Начать» блокируется на время расчёта; в песочнице — нет.
  */
 export function liveCriticalToggleDisabled(state) {
   if (!state.isLiveMode) return true;
   if (state.active) return false;
+  if (state.sandbox) return false;
   return !!state.uiBusy;
 }
 

@@ -25,9 +25,10 @@
 <p class="live-trading-warn">Реальные заявки на бирже. Тот же счёт T-Bank и токен с правом торговли (не только чтение). Пароль запрашивается при подключении. При активной торговле свечи обновляются по выбранному источнику (T-Bank — актуальнее MOEX ISS); индикаторы и заявки пересчитываются на каждом цикле.</p>
 <p class="live-trading-candle-alert" id="live-candle-delay-alert" hidden role="alert"></p>
 <div class="live-recovery-stop-banner" id="live-recovery-stop-banner" hidden role="alert">
-<strong>Торговля остановлена</strong> — просадка портфеля превысила лимит (@@PauseOnDrawdown). Позиции закрыты, ожидаем восстановления модели до <span id="live-recovery-stop-target">—</span>.
+<strong id="live-recovery-stop-title">Логики отключены (@@PauseOnDrawdown)</strong>
+<span id="live-recovery-stop-body"> Ожидаем восстановления модели: <span id="live-recovery-stop-target">—</span>.</span>
 <span id="live-recovery-stop-progress"></span>
-<strong>Не закрывайте вкладку</strong> — возобновление произойдёт автоматически, когда модель восстановится.
+<strong> Не закрывайте вкладку</strong> — возобновление произойдёт автоматически, когда модель восстановится.
 </div>
 <div class="live-trading-toolbar">
 <div class="live-trading-actions">
@@ -53,9 +54,13 @@
 </div>
 </div>
 <div class="live-panel-toggles-row live-recovery-stop-row">
-<label class="indicator-toggle live-reverse-panel-toggle" id="live-pause-on-drawdown-panel-wrap" for="live-pause-on-drawdown-panel" title="@@PauseOnDrawdown — при просадке от пика закрыть позиции и ждать восстановления модели; % — в параметрах управления">
+<label class="indicator-toggle live-reverse-panel-toggle" id="live-pause-on-drawdown-panel-wrap" for="live-pause-on-drawdown-panel" title="@@PauseOnDrawdown — портфель: отключить все логики при просадке; % — в параметрах управления">
 <input type="checkbox" id="live-pause-on-drawdown-panel">
 <span>Стоп-лосс с восстановлением</span>
+</label>
+<label class="indicator-toggle live-reverse-panel-toggle" id="live-pause-on-drawdown-per-logic-panel-wrap" for="live-pause-on-drawdown-per-logic-panel" title="@@PauseOnDrawdownPerLogic — отключать логики по отдельности (isolated equity); торговля live не останавливается">
+<input type="checkbox" id="live-pause-on-drawdown-per-logic-panel">
+<span>По логикам отдельно</span>
 </label>
 </div>
 <div class="live-panel-toggles-row">

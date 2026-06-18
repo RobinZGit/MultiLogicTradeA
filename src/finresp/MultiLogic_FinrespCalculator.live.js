@@ -16,6 +16,7 @@
     // --- Зависимости из HTML (state, engine, UI-хелперы) ---
     const state = d.state;
     const E = d.E;
+    const LIVE_TRIM_MAX = 500;
     const $ = d.$;
     const SM = root.MultiLogicFinrespStopMonitor;
     const LIVE_STOP_POLL_MS = SM?.DEFAULT_POLL_MS ?? 8000;
@@ -81,6 +82,21 @@
     const volConfig = (...a) => d.volConfig(...a);
     const stopperConfig = (...a) => d.stopperConfig(...a);
     const recoveryStopConfig = (...a) => d.recoveryStopConfig(...a);
+    const effectiveLogicIds = (...a) => d.effectiveLogicIds(...a);
+    const drawdownDisabledLogicIds = (...a) => d.drawdownDisabledLogicIds(...a);
+    const snapshotDrawdownRecoveryForPersist = (...a) => d.snapshotDrawdownRecoveryForPersist(...a);
+    const restoreDrawdownRecoveryFromSnapshot = (...a) => d.restoreDrawdownRecoveryFromSnapshot(...a);
+    const syncLogicChipDrawdownState = (...a) => d.syncLogicChipDrawdownState(...a);
+    const disableLogicForDrawdown = (...a) => d.disableLogicForDrawdown(...a);
+    const enableLogicAfterDrawdown = (...a) => d.enableLogicAfterDrawdown(...a);
+    const disableAllLogicsForDrawdown = (...a) => d.disableAllLogicsForDrawdown(...a);
+    const enableAllLogicsAfterDrawdown = (...a) => d.enableAllLogicsAfterDrawdown(...a);
+    const logicModelEquityRub = (...a) => d.logicModelEquityRub(...a);
+    const portfolioDrawdownState = (...a) => d.portfolioDrawdownState(...a);
+    const logicRecoveryState = (...a) => d.logicRecoveryState(...a);
+    const logicSessionEventSink = d.logicSessionEventSink;
+    const isDrawdownRecoveryActive = (...a) => d.isDrawdownRecoveryActive(...a);
+    const clearDrawdownRecoveryState = (...a) => d.clearDrawdownRecoveryState(...a);
     const commissionPctValue = (...a) => d.commissionPctValue(...a);
     const noteLiveTech = (...a) => d.noteLiveTech(...a);
     const noteTechError = (...a) => d.noteTechError(...a);
@@ -97,6 +113,7 @@
     const primaryLogicId = (...a) => d.primaryLogicId(...a);
     const logicDisplayName = (...a) => d.logicDisplayName(...a);
     const resolveCalcLogicSpec = (...a) => d.resolveCalcLogicSpec(...a);
+    const resolveEffectiveCalcLogicSpec = (...a) => d.resolveEffectiveCalcLogicSpec(...a);
     const calcResultAsync = (...a) => d.calcResultAsync(...a);
     const yieldToUi = (...a) => d.yieldToUi(...a);
     const syncChartBox = (...a) => d.syncChartBox(...a);
@@ -649,6 +666,7 @@
 
   /** Перед стартом торговли в песочнице: депозит = vol-deposit, без «хвоста» от 1M. */
   async function prepareSandboxTradingSession() {
+    await yieldToUi();
     if (!isLiveSandbox()) return;
     const dep = +( $("vol-deposit")?.value || 0);
     if (!(dep > 0) || $("vol-deposit")?.dataset?.provisional === "1") return;
@@ -1219,12 +1237,6 @@
   function ensureRecoveryStopState() {
     if (!state.live.recoveryStop) {
       state.live.recoveryStop = {
-        paused: false,
-        peakEquity: null,
-        resumeAt: null,
-        pausedAt: null,
-        userIntent: false,
-        pauseCount: 0,
         lastNotifyKey: null
       };
     }
@@ -1250,58 +1262,102 @@
     return any ? sum : NaN;
   }
 
+  function drawdownPortfolioResumeReady() {
+    const pd = portfolioDrawdownState();
+    if (!pd.disabled || !Number.isFinite(pd.resumeAt)) return false;
+    const modelEq = liveModelPortfolioEquityRub();
+    return Number.isFinite(modelEq) && modelEq >= pd.resumeAt;
+  }
+
+  function drawdownLogicResumeReady(logicKey) {
+    const ent = logicRecoveryState()[logicKey];
+    if (!ent?.disabled || !Number.isFinite(ent.resumeAt)) return false;
+    const modelEq = logicModelEquityRub(logicKey);
+    return Number.isFinite(modelEq) && modelEq >= ent.resumeAt;
+  }
+
   function resetRecoveryStopPeak() {
     if (!pauseOnDrawdownEnabled()) return;
-    const rs = ensureRecoveryStopState();
-    if (rs.paused) return;
-    const eq = activeView().portfolioValue;
-    if (Number.isFinite(eq)) rs.peakEquity = eq;
+    const cfg = recoveryStopConfig();
+    if (!cfg.perLogic) {
+      const pd = portfolioDrawdownState();
+      if (pd.disabled) return;
+      const eq = activeView().portfolioValue;
+      if (Number.isFinite(eq)) pd.peakEquity = eq;
+      return;
+    }
+    for (const key of cfg.logicKeys) {
+      const ent = logicRecoveryState()[key];
+      if (!ent || ent.disabled) continue;
+      const eq = logicModelEquityRub(key);
+      if (Number.isFinite(eq)) ent.peakEquity = eq;
+    }
   }
 
   function clearRecoveryStopOnManualStop() {
-    const rs = ensureRecoveryStopState();
-    rs.paused = false;
-    rs.userIntent = false;
-    rs.resumeAt = null;
-    rs.pausedAt = null;
+    clearDrawdownRecoveryState();
   }
 
   function syncRecoveryStopBanner() {
     const banner = $("live-recovery-stop-banner");
+    const titleEl = $("live-recovery-stop-title");
     const targetEl = $("live-recovery-stop-target");
     const progressEl = $("live-recovery-stop-progress");
-    const rs = ensureRecoveryStopState();
-    const show = pauseOnDrawdownEnabled() && rs.paused && isLiveMode();
-    if (banner) banner.hidden = !show;
-    if (!show) {
-      if (progressEl) progressEl.textContent = "";
-      return;
-    }
-    const resumeAt = rs.resumeAt;
-    const modelEq = liveModelPortfolioEquityRub();
-    if (targetEl) {
-      targetEl.textContent = Number.isFinite(resumeAt) ? `${fmt(resumeAt, 0)} ₽` : "—";
-    }
-    if (progressEl) {
-      if (Number.isFinite(modelEq) && Number.isFinite(resumeAt)) {
-        const left = Math.max(0, resumeAt - modelEq);
-        progressEl.textContent = left > 0
-          ? ` Модель сейчас: ${fmt(modelEq, 0)} ₽ (осталось ${fmt(left, 0)} ₽).`
-          : " Модель восстановилась — можно возобновить торговлю.";
-      } else {
-        progressEl.textContent = " Модель пересчитывается…";
+    const disabled = drawdownDisabledLogicIds();
+    const show = pauseOnDrawdownEnabled() && disabled.length > 0 && isLiveMode();
+    try {
+      if (banner) banner.hidden = !show;
+      if (!show) {
+        if (progressEl) progressEl.textContent = "";
+        return;
       }
+      const cfg = recoveryStopConfig();
+      if (titleEl) {
+        titleEl.textContent = cfg.perLogic
+          ? "Часть логик отключена (@@PauseOnDrawdown) — торговля по остальным продолжается"
+          : "Все выбранные логики отключены (портфельный @@PauseOnDrawdown)";
+      }
+      if (!cfg.perLogic) {
+        const pd = portfolioDrawdownState();
+        const resumeAt = pd.resumeAt;
+        const modelEq = liveModelPortfolioEquityRub();
+        if (targetEl) {
+          targetEl.textContent = Number.isFinite(resumeAt) ? `${fmt(resumeAt, 0)} ₽` : "—";
+        }
+        if (progressEl) {
+          if (Number.isFinite(modelEq) && Number.isFinite(resumeAt)) {
+            const left = Math.max(0, resumeAt - modelEq);
+            progressEl.textContent = left > 0
+              ? ` Модель портфеля: ${fmt(modelEq, 0)} ₽ (до возобновления ${fmt(left, 0)} ₽). Позиции сведены к модели.`
+              : " Модель восстановилась — логики можно включить снова.";
+          } else {
+            progressEl.textContent = " Модель пересчитывается…";
+          }
+        }
+        return;
+      }
+      if (targetEl) {
+        targetEl.textContent = disabled.map(logicDisplayName).join(", ");
+      }
+      if (progressEl) {
+        const parts = disabled.map((key) => {
+          const ent = logicRecoveryState()[key];
+          const modelEq = logicModelEquityRub(key);
+          const resumeAt = ent?.resumeAt;
+          if (!Number.isFinite(modelEq) || !Number.isFinite(resumeAt)) return `${logicDisplayName(key)}: …`;
+          const left = Math.max(0, resumeAt - modelEq);
+          return left > 0
+            ? `${logicDisplayName(key)}: ${fmt(modelEq, 0)} / ${fmt(resumeAt, 0)} ₽`
+            : `${logicDisplayName(key)}: готово`;
+        });
+        progressEl.textContent = ` ${parts.join(" · ")} · позиции отключённых логик сводятся к модели.`;
+      }
+    } finally {
+      syncLogicChipDrawdownState();
     }
   }
 
-  function recoveryResumeReady() {
-    const rs = ensureRecoveryStopState();
-    if (!rs.paused || !Number.isFinite(rs.resumeAt)) return false;
-    const modelEq = liveModelPortfolioEquityRub();
-    return Number.isFinite(modelEq) && modelEq >= rs.resumeAt;
-  }
-
-  async function closeAllPositionsForRecoveryPause() {
+  async function closeAllPositionsForDrawdown() {
     if (!isLiveMode()) return;
     if (state.live.sellAllInFlight) return;
     state.live.sellAllInFlight = true;
@@ -1370,73 +1426,144 @@
     }
   }
 
-  async function triggerRecoveryPauseLive(meta) {
-    const rs = ensureRecoveryStopState();
-    if (rs.paused || state.live.recoveryPauseInFlight) return;
-    state.live.recoveryPauseInFlight = true;
+  async function refreshLiveFinrespForDrawdown() {
+    const result = await tryLiveFinrespCalc({ silent: true, redrawCharts: false, keepDrawdownState: true });
+    if (result?.perSec?.length) {
+      state.lastResult = result;
+      applyResult(result, { redrawCharts: false, liveSession: true, silent: true });
+      return true;
+    }
+    if (!effectiveLogicIds().length && drawdownDisabledLogicIds().length > 0 && state.lastResult?.perSec?.length) {
+      const flat = {
+        ...state.lastResult,
+        perSec: state.lastResult.perSec.map((p) => ({ ...p, pos: 0 }))
+      };
+      state.lastResult = flat;
+      applyResult(flat, { redrawCharts: false, liveSession: true, silent: true });
+      return true;
+    }
+    return false;
+  }
+
+  async function reconcileSandboxAfterDrawdownDisable() {
+    if (!isLiveSandbox() || !state.live.active) return;
+    if (state.live.reconcileBusy || state.live.tradingActionBusy) return;
     try {
-      rs.userIntent = !!state.live.active || rs.userIntent;
-      rs.paused = true;
-      rs.resumeAt = meta.peak;
-      rs.peakEquity = meta.peak;
-      rs.pausedAt = new Date().toISOString();
-      rs.pauseCount += 1;
-      state.live.active = false;
-      state.live.tradingStartedAt = null;
-      resetLiveTradingBusyFlags();
-      persistLiveSessionToStorage();
-      await closeAllPositionsForRecoveryPause();
+      await liveTradingReconcile();
+    } catch (err) {
+      noteLiveTech("drawdown-reconcile", err?.message || String(err));
+    }
+    if (!effectiveLogicIds().length && drawdownDisabledLogicIds().length > 0) {
+      const sb = ensureSandboxState();
+      if (sb.open?.size > 0) {
+        try {
+          await closeAllSandboxPositionsLive({ tradeSource: "recovery-pause" });
+        } catch (err) {
+          noteLiveTech("drawdown-close-all", err?.message || String(err));
+        }
+      }
+    }
+    syncSandboxPositionsTable();
+    renderSandboxPortfolioQuick();
+    renderLivePositionsPanel();
+    persistLiveSessionToStorage();
+  }
+
+  async function triggerDrawdownDisableLive(meta, logicKey) {
+    const cfg = recoveryStopConfig();
+    const rs = ensureRecoveryStopState();
+    if (state.live.drawdownDisableInFlight) return;
+    if (logicKey) {
+      const ent = logicRecoveryState()[logicKey];
+      if (ent?.disabled) return;
+    } else if (portfolioDrawdownState().disabled) {
+      return;
+    }
+    state.live.drawdownDisableInFlight = true;
+    try {
+      if (logicKey) {
+        disableLogicForDrawdown(logicKey, meta);
+      } else {
+        disableAllLogicsForDrawdown(meta);
+        await closeAllPositionsForDrawdown();
+      }
+      if (state.live.active) {
+        await refreshLiveFinrespForDrawdown();
+        await reconcileSandboxAfterDrawdownDisable();
+      }
       const pct = meta.drawdownPct;
+      const label = logicKey ? logicDisplayName(logicKey) : "портфель";
       setCalcStatus(
-        `Пауза @@PauseOnDrawdown: просадка ${fmt(pct, 2)} % — позиции закрыты. Ожидаем модель ≥ ${fmt(meta.peak, 0)} ₽.`
+        `@@PauseOnDrawdown: ${label} отключён (просадка ${fmt(pct, 2)} %) — торговля остальных логик продолжается.`
       );
-      const notifyKey = `pause:${rs.pausedAt}:${Math.round(meta.peak)}`;
+      const notifyKey = `disable:${logicKey || "all"}:${Date.now()}:${Math.round(meta.peak || 0)}`;
       if (rs.lastNotifyKey !== notifyKey) {
         rs.lastNotifyKey = notifyKey;
         sendLiveNotify(
           "recovery_pause",
-          "MultiLogic: пауза по просадке",
-          `Просадка ${fmt(pct, 2)} % · портфель ${fmt(meta.equity, 0)} ₽ · цель восстановления ${fmt(meta.peak, 0)} ₽`
+          `MultiLogic: логика отключена (${label})`,
+          `Просадка ${fmt(pct, 2)} % · цель восстановления ${fmt(meta.peak ?? meta.resumeAt, 0)} ₽`
         );
       }
-      noteLiveTech("recovery-pause", `dd=${fmt(pct, 2)}%`, `resumeAt=${fmt(meta.peak, 0)}`);
+      noteLiveTech("drawdown-disable", logicKey || "portfolio", `dd=${fmt(pct, 2)}%`);
       syncRecoveryStopBanner();
       syncLiveTradingUi();
-      updateTechInfo("recovery-pause");
+      updateTechInfo("drawdown-disable");
     } finally {
-      state.live.recoveryPauseInFlight = false;
+      state.live.drawdownDisableInFlight = false;
     }
   }
 
-  async function tryRecoveryResumeLive() {
-    const rs = ensureRecoveryStopState();
-    if (!rs.paused || !pauseOnDrawdownEnabled()) return false;
-    if (!recoveryResumeReady()) return false;
-    const modelEq = liveModelPortfolioEquityRub();
-    rs.paused = false;
-    rs.peakEquity = modelEq;
-    rs.resumeAt = null;
-    rs.pausedAt = null;
-    setCalcStatus(`Восстановление: модель ${fmt(modelEq, 0)} ₽ — торговля возобновляется.`);
+  /** @deprecated alias */
+  async function triggerRecoveryPauseLive(meta) {
+    await triggerDrawdownDisableLive(meta, null);
+  }
+
+  async function tryDrawdownResumeLive(logicKey) {
+    if (!pauseOnDrawdownEnabled()) return false;
+    const cfg = recoveryStopConfig();
+    if (logicKey) {
+      if (!drawdownLogicResumeReady(logicKey)) return false;
+      enableLogicAfterDrawdown(logicKey, { equity: logicModelEquityRub(logicKey) });
+      setCalcStatus(`Восстановление: ${logicDisplayName(logicKey)} снова в стеке.`);
+    } else {
+      if (!drawdownPortfolioResumeReady()) return false;
+      const modelEq = liveModelPortfolioEquityRub();
+      enableAllLogicsAfterDrawdown({ equity: modelEq });
+      setCalcStatus(`Восстановление портфеля: модель ${fmt(modelEq, 0)} ₽ — все логики снова в стеке.`);
+    }
+    if (state.live.active && liveFinrespReady()) {
+      await refreshLiveFinrespForDrawdown();
+      await reconcileSandboxAfterDrawdownDisable();
+    }
     sendLiveNotify(
       "recovery_resume",
-      "MultiLogic: торговля возобновлена",
-      `Модель ${fmt(modelEq, 0)} ₽ достигла цели восстановления.`
+      "MultiLogic: логика возобновлена",
+      logicKey ? logicDisplayName(logicKey) : "все выбранные логики"
     );
-    noteLiveTech("recovery-resume", `model=${fmt(modelEq, 0)}`);
-    if (rs.userIntent && isLiveMode() && state.live.chartSession) {
-      state.live.active = true;
-      if (!state.live.tradingStartedAt) state.live.tradingStartedAt = new Date().toISOString();
-      if (!state.live.pollTimer) startLiveModePoll();
-      startLiveSessionPersistInterval();
-      if (liveFinrespReady() && !state.live.tradingActionBusy) {
-        await liveTradingReconcile();
-      }
-    }
+    noteLiveTech("drawdown-resume", logicKey || "portfolio");
     syncRecoveryStopBanner();
     syncLiveTradingUi();
-    updateTechInfo("recovery-resume");
+    updateTechInfo("drawdown-resume");
     return true;
+  }
+
+  async function tryRecoveryResumeLive() {
+    const cfg = recoveryStopConfig();
+    if (cfg.perLogic) {
+      let any = false;
+      for (const key of drawdownDisabledLogicIds()) {
+        if (await tryDrawdownResumeLive(key)) any = true;
+      }
+      return any;
+    }
+    return tryDrawdownResumeLive(null);
+  }
+
+  function recoveryResumeReady() {
+    const cfg = recoveryStopConfig();
+    if (!cfg.perLogic) return drawdownPortfolioResumeReady();
+    return cfg.logicKeys.some((key) => drawdownLogicResumeReady(key));
   }
 
   async function triggerPortfolioStopperSandbox(hit, watch) {
@@ -1472,16 +1599,21 @@
   }
 
   function buildLiveStopMonitorCtx(source) {
-    const rs = ensureRecoveryStopState();
+    const cfg = recoveryStopConfig();
+    const pd = portfolioDrawdownState();
     return {
       source: source || "poll",
       recoveryEnabled: pauseOnDrawdownEnabled(),
-      recoveryPaused: !!rs.paused,
+      recoveryPerLogic: !!cfg.perLogic,
+      logicKeys: cfg.logicKeys,
+      logicRecovery: logicRecoveryState(),
+      logicModelEquity: state.logicModelEquity || {},
+      portfolioDrawdownDisabled: !!pd.disabled,
+      portfolioPeakEquity: pd.peakEquity,
+      portfolioResumeAt: pd.resumeAt,
       tradingActive: !!state.live.active,
       equity: activeView().portfolioValue,
-      peakEquity: rs.peakEquity,
-      drawdownPct: recoveryStopConfig().drawdownPct,
-      resumeAt: rs.resumeAt,
+      drawdownPct: cfg.drawdownPct,
       modelEquity: liveModelPortfolioEquityRub(),
       stopperConfig: stopperConfig(),
       time: state.live.lastCandleBarTime || new Date().toISOString(),
@@ -1495,22 +1627,39 @@
     if (!evalOut || !isLiveMode()) return;
     const rs = ensureRecoveryStopState();
     const watch = ensureSandboxStopperWatch();
+    const cfg = recoveryStopConfig();
 
-    const rec = evalOut.recovery;
     if (!pauseOnDrawdownEnabled()) {
       syncRecoveryStopBanner();
-    } else if (rec?.action === "track_peak" && Number.isFinite(rec.nextPeakEquity)) {
-      rs.peakEquity = rec.nextPeakEquity;
-      syncRecoveryStopBanner();
-    } else if (rec?.action === "resume") {
-      await tryRecoveryResumeLive();
-    } else if (rec?.action === "pause" && rec.meta) {
-      await triggerRecoveryPauseLive(rec.meta);
-    } else if (rec?.action === "hold_paused" || rs.paused) {
-      void tryRecoveryResumeLive();
+    } else if (cfg.perLogic && evalOut.recoveryLogics?.length) {
+      for (const item of evalOut.recoveryLogics) {
+        if (item.action === "track_peak" && item.logicKey) {
+          const ent = logicRecoveryState()[item.logicKey];
+          if (ent && !ent.disabled && Number.isFinite(item.nextPeakEquity)) {
+            ent.peakEquity = item.nextPeakEquity;
+          }
+        } else if (item.action === "resume" && item.logicKey) {
+          await tryDrawdownResumeLive(item.logicKey);
+        } else if (item.action === "pause" && item.meta && item.logicKey) {
+          await triggerDrawdownDisableLive(item.meta, item.logicKey);
+        }
+      }
       syncRecoveryStopBanner();
     } else {
-      syncRecoveryStopBanner();
+      const rec = evalOut.recovery;
+      if (rec?.action === "track_peak" && Number.isFinite(rec.nextPeakEquity)) {
+        const pd = portfolioDrawdownState();
+        if (!pd.disabled) pd.peakEquity = rec.nextPeakEquity;
+      } else if (rec?.action === "resume") {
+        await tryDrawdownResumeLive(null);
+      } else if (rec?.action === "pause" && rec.meta) {
+        await triggerDrawdownDisableLive(rec.meta, null);
+      } else if (rec?.action === "hold_paused" || isDrawdownRecoveryActive()) {
+        void tryRecoveryResumeLive();
+        syncRecoveryStopBanner();
+      } else {
+        syncRecoveryStopBanner();
+      }
     }
 
     const port = evalOut.portfolio;
@@ -1670,6 +1819,107 @@
     return state.live.tradeHistory;
   }
 
+  /** Журнал событий стека/паузы логик для протокола сделок. */
+  function ensureLiveSessionEvents() {
+    if (!Array.isArray(state.live.sessionEvents)) state.live.sessionEvents = [];
+    return state.live.sessionEvents;
+  }
+
+  function cloneSessionEventRow(ev) {
+    return {
+      ...ev,
+      logicKeys: ev.logicKeys ? ev.logicKeys.slice() : undefined,
+      stackBefore: ev.stackBefore ? ev.stackBefore.slice() : undefined,
+      stackAfter: ev.stackAfter ? ev.stackAfter.slice() : undefined,
+      meta: ev.meta && typeof ev.meta === "object" ? { ...ev.meta } : undefined
+    };
+  }
+
+  function sessionEventReasonLabel(reason) {
+    const map = {
+      drawdown: "@@PauseOnDrawdown (просадка)",
+      recovery: "восстановление модели",
+      user_selection: "выбор в форме",
+      live_badge_remove: "удаление из live-бейджа"
+    };
+    return map[reason] || String(reason || "—");
+  }
+
+  function sessionEventActionLabel(action, scope) {
+    if (action === "disable" && scope === "portfolio") return "отключены все логики (портфель)";
+    if (action === "enable" && scope === "portfolio") return "включены все логики (портфель)";
+    if (action === "disable") return "отключена";
+    if (action === "enable") return "включена";
+    if (action === "add") return "добавлена в стек";
+    if (action === "remove") return "убрана из стека";
+    if (action === "reorder") return "изменён порядок стека";
+    return String(action || "—");
+  }
+
+  function recordLogicSessionEvent(raw) {
+    if (!isLiveMode() || !raw) return;
+    const evt = raw || {};
+    const stackAfter = evt.stackAfter || selectedLogicIds();
+    const logicKey = evt.logicKey != null ? String(evt.logicKey) : null;
+    const row = {
+      eventId: evt.eventId || `sev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      when: evt.when || new Date().toISOString(),
+      kind: "logic",
+      action: evt.action || "info",
+      scope: evt.scope || (logicKey ? "logic" : "stack"),
+      logicKey,
+      logicName: logicKey ? logicDisplayName(logicKey) : null,
+      logicKeys: Array.isArray(evt.logicKeys) ? evt.logicKeys.slice() : null,
+      reason: evt.reason || null,
+      reasonLabel: sessionEventReasonLabel(evt.reason),
+      actionLabel: sessionEventActionLabel(evt.action, evt.scope),
+      stackBefore: Array.isArray(evt.stackBefore) ? evt.stackBefore.slice() : null,
+      stackAfter: stackAfter.slice(),
+      effectiveLogicIds: effectiveLogicIds().slice(),
+      drawdownDisabledLogicIds: drawdownDisabledLogicIds().slice(),
+      tradingRunId: state.live.tradingRunId || null,
+      tradingActive: !!state.live.active,
+      meta: evt.meta && typeof evt.meta === "object" ? { ...evt.meta } : null
+    };
+    const hist = ensureLiveSessionEvents();
+    hist.unshift(row);
+    if (hist.length > LIVE_TRIM_MAX) trimLiveSessionEventsWithArchive(hist);
+    scheduleLiveSessionPersist();
+    noteLiveTech("logic-session-event", `${row.action}:${row.logicKey || row.scope}`, row.reason || "—");
+  }
+
+  if (logicSessionEventSink) logicSessionEventSink.record = recordLogicSessionEvent;
+
+  function tradeHistoryProtocolSessionEventRow(ev) {
+    if (!ev) return null;
+    return {
+      eventId: ev.eventId,
+      when: ev.when,
+      kind: ev.kind || "logic",
+      action: ev.action,
+      actionLabel: ev.actionLabel || sessionEventActionLabel(ev.action, ev.scope),
+      scope: ev.scope,
+      logicKey: ev.logicKey,
+      logicName: ev.logicName || (ev.logicKey ? logicDisplayName(ev.logicKey) : null),
+      logicKeys: ev.logicKeys || null,
+      reason: ev.reason,
+      reasonLabel: ev.reasonLabel || sessionEventReasonLabel(ev.reason),
+      stackBefore: ev.stackBefore || null,
+      stackAfter: ev.stackAfter || null,
+      effectiveLogicIds: ev.effectiveLogicIds || null,
+      drawdownDisabledLogicIds: ev.drawdownDisabledLogicIds || null,
+      tradingRunId: ev.tradingRunId || null,
+      tradingActive: !!ev.tradingActive,
+      meta: ev.meta || null
+    };
+  }
+
+  function trimLiveSessionEventsWithArchive(hist) {
+    if (hist.length <= LIVE_TRIM_MAX) return;
+    const evicted = hist.splice(LIVE_TRIM_MAX);
+    void archiveEvictedLiveData({ sessionEvents: evicted, reason: "session-events-trim" });
+  }
+
   /** Проверка булева условия: `isLiveOrderActive`. */
   function isLiveOrderActive(o) {
     if (o.fake || isLiveSandbox()) return false;
@@ -1682,7 +1932,7 @@
 
   /** Live-торговля: `liveTradeSourceRobotLabel`. */
   function liveTradeSourceRobotLabel() {
-    const ids = selectedLogicIds();
+    const ids = effectiveLogicIds();
     if (!ids.length) return "Робот";
     if (ids.length === 1) return logicDisplayName(ids[0]);
     return `Робот: ${ids.map(logicDisplayName).join(" → ")}`;
@@ -1696,7 +1946,7 @@
     if (source === "close-position") return "Закрытие позиции";
     if (source === "sell-all") return "Закрыть все";
     if (source === "portfolio-stopper") return "Портфельный Stopper";
-    if (source === "recovery-pause") return "Пауза по просадке";
+    if (source === "recovery-pause") return "Отключение логики (просадка)";
     if (source === "broker") return "Брокер";
     if (source) return String(source);
     return "—";
@@ -2459,10 +2709,11 @@
     }
   }
 
-  /** Кнопка «Начать» блокируется на время расчёта; «Остановить» — всегда в live. */
+  /** Кнопка «Начать» блокируется на время расчёта; в песочнице — нет (bootstrap не ждёт run()). */
   function liveCriticalToggleDisabled(isLive) {
     if (!isLive) return true;
     if (state.live.active) return false;
+    if (isLiveSandbox()) return false;
     return !!state.uiBusy;
   }
 
@@ -3109,6 +3360,9 @@
     const legToOpenTradeId = {};
     for (const [legId, tradeId] of legToTradeId.entries()) legToOpenTradeId[String(legId)] = tradeId;
     const sessionMeta = liveProtocolSessionMeta();
+    const sessionEvents = ensureLiveSessionEvents().slice().sort(
+      (a, b) => (Date.parse(a.when || 0) || 0) - (Date.parse(b.when || 0) || 0)
+    ).map(tradeHistoryProtocolSessionEventRow).filter(Boolean);
     return {
       format: "multilogic-trade-history-protocol-v1",
       exportedAt: new Date().toISOString(),
@@ -3121,11 +3375,12 @@
       legToOpenTradeId,
       trades,
       closeEvents,
+      sessionEvents,
       openLots: [...openLotsByKey.values()]
     };
   }
 
-  const LIVE_TRIM_MAX = 500;
+
   let liveArchivePersistBusy = false;
   let cachedArchivedTrades = null;
   let cachedArchivedSessionId = null;
@@ -3207,7 +3462,8 @@
     if (!isLiveMode() || liveArchivePersistBusy) return;
     const ledgerFills = options.ledgerFills || [];
     const tradeRows = options.tradeHistoryRows || [];
-    if (!ledgerFills.length && !tradeRows.length) return;
+    const sessionEvents = options.sessionEvents || [];
+    if (!ledgerFills.length && !tradeRows.length && !sessionEvents.length) return;
     liveArchivePersistBusy = true;
     try {
       state.live.protocolArchivePart = (state.live.protocolArchivePart || 0) + 1;
@@ -3241,6 +3497,7 @@
         session: liveProtocolSessionMeta(),
         trades,
         closeEvents,
+        sessionEvents: sessionEvents.map(tradeHistoryProtocolSessionEventRow).filter(Boolean),
         ledgerFills: ledgerFills.map((f) => ({
           ...f,
           tradeMatches: f.tradeMatches ? f.tradeMatches.map((m) => ({ ...m })) : null
@@ -3372,7 +3629,7 @@
       noteLiveTech(
         "live-trade-protocol",
         `saved ${filename}`,
-        `trades=${payload.trades?.length ?? 0} closes=${payload.closeEvents?.length ?? 0}`
+        `trades=${payload.trades?.length ?? 0} closes=${payload.closeEvents?.length ?? 0} logicEvents=${payload.sessionEvents?.length ?? 0}`
       );
     } catch (err) {
       noteLiveTech("live-trade-protocol", err.message || String(err));
@@ -4148,13 +4405,21 @@
       const warnOnly = liveFinrespWarnOnly(state.live.lastError);
       return `${warnOnly ? "внимание" : "ошибка"}: ${state.live.lastError}`;
     }
-    const rs = state.live.recoveryStop;
-    if (pauseOnDrawdownEnabled() && rs?.paused) {
-      const target = Number.isFinite(rs.resumeAt) ? fmt(rs.resumeAt, 0) : "—";
-      if (recoveryResumeReady()) {
-        return `пауза @@PauseOnDrawdown: модель восстановилась (≥ ${target} ₽) — можно возобновить`;
+    const disabled = drawdownDisabledLogicIds();
+    if (pauseOnDrawdownEnabled() && disabled.length) {
+      const cfg = recoveryStopConfig();
+      if (!cfg.perLogic) {
+        const pd = portfolioDrawdownState();
+        const target = Number.isFinite(pd.resumeAt) ? fmt(pd.resumeAt, 0) : "—";
+        if (drawdownPortfolioResumeReady()) {
+          return `@@PauseOnDrawdown: портфельные логики отключены — модель ≥ ${target} ₽, можно включить снова`;
+        }
+        return `@@PauseOnDrawdown: все логики отключены — ожидание модели ${target} ₽ (торговля активна для остального)`;
       }
-      return `пауза @@PauseOnDrawdown: ожидание восстановления модели до ${target} ₽ (не закрывайте вкладку)`;
+      const names = disabled.map(logicDisplayName).join(", ");
+      return state.live.active
+        ? `торговля активна · отключены логики: ${names}`
+        : `остановлена · отключены логики: ${names}`;
     }
     if (state.live.active) {
       const boot = state.live.candleRefreshBusy
@@ -4193,21 +4458,14 @@
 
   /** Патч для Angular live$-панели из state (не читать DOM — Angular перезаписывает биндинги). */
   function buildLiveBridgePatch(isLive, sandbox) {
-    const rs = ensureRecoveryStopState();
-    const recoveryPaused = pauseOnDrawdownEnabled() && rs.paused;
+    const disabled = drawdownDisabledLogicIds();
+    const recoveryPaused = pauseOnDrawdownEnabled() && disabled.length > 0;
     const recoveryReady = recoveryPaused && recoveryResumeReady();
     let toggleDisabled = liveCriticalToggleDisabled(isLive);
     let toggleText = state.live.active ? "Остановить торговлю" : "Начать торговлю";
     let toggleActive = !!state.live.active;
-    if (recoveryPaused) {
-      toggleActive = false;
-      if (recoveryReady) {
-        toggleText = "Возобновить торговлю";
-        toggleDisabled = false;
-      } else {
-        toggleText = "Ожидание восстановления";
-        toggleDisabled = true;
-      }
+    if (recoveryPaused && recoveryReady && !state.live.active) {
+      toggleText = "Торговля остановлена";
     }
     const sellAllDisabled = liveCriticalSellAllDisabled(isLive);
     const commissionEl = $("live-commission-paid");
@@ -5760,6 +6018,30 @@
     compactSandboxOrderJournal(sb);
   }
 
+  /** То же, с yield — длинный журнал песочницы не блокирует UI (диалог «Подождите» браузера). */
+  async function rebuildSandboxFromLedgerAsync(sb) {
+    ensureSandboxLedger(sb);
+    if (!Number.isFinite(sb.startPortfolio)) return;
+    if (!sb.ledger.length) {
+      migrateSandboxLedgerFromLegacy(sb);
+      if (!sb.ledger.length) return;
+    }
+    const ctx = createSandboxReplayCtx(sb);
+    const ledger = sb.ledger;
+    for (let i = 0; i < ledger.length; i++) {
+      const fill = ledger[i];
+      const meta = applySandboxLedgerFill(ctx, fill);
+      fill.tradeRole = meta.role;
+      fill.tradeMatches = meta.matches ? meta.matches.map((m) => ({ ...m })) : [];
+      fill.tradePnl = meta.pnlTotal;
+      if (meta.legIds?.length) fill.openLegIds = meta.legIds.slice();
+      if (i > 0 && i % 48 === 0) await yieldToUi();
+    }
+    copySandboxReplayToState(sb, ctx);
+    syncSandboxOrdersTradeMetaFromLedger(sb);
+    compactSandboxOrderJournal(sb);
+  }
+
   /** Применение настроек/результата: `applySandboxLedgerFill`. */
   function applySandboxLedgerFill(ctx, fill) {
     const signedPieces = Math.trunc(+fill.signedPieces || 0);
@@ -6341,15 +6623,19 @@
       sessionStartedAt: state.live.sessionStartedAt || null,
       sessionPositionBaseline: state.live.sessionPositionBaseline || null,
       tradeHistory: [],
+      sessionEvents: [],
       sandboxState: null,
-      openLots: null
+      openLots: null,
+      drawdownRecovery: snapshotDrawdownRecoveryForPersist()
     };
     if (sandbox) {
       payload.sandboxState = serializeSandboxForSession(brokerSandboxState(id));
       payload.tradeHistory = hist.filter((h) => h.fake || h.mode === "sandbox").map(cloneTradeHistoryRow);
+      payload.sessionEvents = ensureLiveSessionEvents().map(cloneSessionEventRow);
     } else {
       persistLiveUiToRuntime(id);
       payload.tradeHistory = hist.filter((h) => !h.fake && h.mode !== "sandbox").map(cloneTradeHistoryRow);
+      payload.sessionEvents = ensureLiveSessionEvents().map(cloneSessionEventRow);
       try {
         payload.openLots = buildTradeHistoryProtocol().openLots || [];
       } catch (_) { /* ignore during persist */ }
@@ -6442,6 +6728,13 @@
       hydrateLiveUiFromRuntime(brokerId);
     }
     noteLiveTech("live-session-restore", `${brokerId} sandbox=${sandbox} trades=${(payload.tradeHistory || []).length}`);
+    if (payload.drawdownRecovery) {
+      restoreDrawdownRecoveryFromSnapshot(payload.drawdownRecovery);
+      syncRecoveryStopBanner();
+    }
+    if (Array.isArray(payload.sessionEvents) && payload.sessionEvents.length) {
+      state.live.sessionEvents = payload.sessionEvents.map(cloneSessionEventRow);
+    }
     return true;
   }
 
@@ -6477,6 +6770,7 @@
     }
     cachedArchivedTrades = null;
     cachedArchivedSessionId = null;
+    state.live.sessionEvents = [];
     if (sandbox) {
       const dep = +($("vol-deposit")?.value || 0) || defaultProvisionalDepositRub();
       await resetSandboxLedgerToBaseline(dep);
@@ -7059,7 +7353,10 @@
       sb.startPortfolio = state.live.realPortfolioValue ?? state.live.portfolioValue ?? (+$("vol-deposit")?.value || 0);
     }
     ensureSandboxCash(sb);
-    if (sb.ledger?.length) rebuildSandboxFromLedger(sb);
+    if (sb.ledger?.length) {
+      if (sb.ledger.length > 80) await rebuildSandboxFromLedgerAsync(sb);
+      else rebuildSandboxFromLedger(sb);
+    }
     let mtm = 0;
     for (const pos of sb.open.values()) {
       let cur = sandboxLocalPrice(pos);
@@ -7647,8 +7944,11 @@
   /** Live-торговля: `liveReconcileTargets`. */
   function liveReconcileTargets() {
     const rows = liveFinrespPerSec();
-    if (!state.live.manualFlatten) return rows;
-    return rows.map((p) => ({ ...p, pos: 0 }));
+    if (state.live.manualFlatten) return rows.map((p) => ({ ...p, pos: 0 }));
+    if (pauseOnDrawdownEnabled() && !effectiveLogicIds().length && drawdownDisabledLogicIds().length > 0) {
+      return rows.map((p) => ({ ...p, pos: 0 }));
+    }
+    return rows;
   }
 
   /** Проверка булева условия: `isLiveObTrendGateEnabled`. */
@@ -8336,17 +8636,29 @@ ${referenceBlock}
     return out;
   }
 
-  /** Цветные полосы режимов (live/sandbox/stopped) на графике. */
+  /** Цветные полосы режимов (live/sandbox/stopped) и паузы логики на графике. */
   function buildModeRegionBands(rows, modeRegions, x, top, bottom) {
     if (!modeRegions?.length) return "";
     return modeRegions.map(({ fromIdx, toIdx, mode }) => {
       const x0 = x(fromIdx);
       const x1 = x(toIdx);
-      const fill = mode === "sandbox" ? "#ecfdf5" : "#fef2f2";
-      const stroke = mode === "sandbox" ? "#bbf7d0" : "#fecaca";
+      let fill = "#fef2f2";
+      let stroke = "#fecaca";
+      let title = "Реальная торговля";
+      let opacity = "0.88";
+      if (mode === "sandbox") {
+        fill = "#ecfdf5";
+        stroke = "#bbf7d0";
+        title = "Песочница (фейк)";
+      } else if (mode === "logic_pause") {
+        fill = "#ffffff";
+        stroke = "#cbd5e1";
+        title = "Логика отключена (@@PauseOnDrawdown)";
+        opacity = "0.96";
+      }
       const w = Math.max(2, x1 - x0 + (toIdx === rows.length - 1 ? 4 : 0));
-      const title = mode === "sandbox" ? "Песочница (фейк)" : "Реальная торговля";
-      return `<g opacity="0.88"><rect x="${x0.toFixed(1)}" y="${top}" width="${w.toFixed(1)}" height="${bottom - top}" fill="${fill}" stroke="${stroke}" stroke-width="0.6"/><title>${title}</title></g>`;
+      const dash = mode === "logic_pause" ? ' stroke-dasharray="4 3"' : "";
+      return `<g opacity="${opacity}"><rect x="${x0.toFixed(1)}" y="${top}" width="${w.toFixed(1)}" height="${bottom - top}" fill="${fill}" stroke="${stroke}" stroke-width="0.9"${dash}/><title>${title}</title></g>`;
     }).join("");
   }
 
@@ -8472,66 +8784,69 @@ ${referenceBlock}
     return { finresp, cash, pos, commission, buys, sells, bySec };
   }
 
+  /** Live: AutoReverses в песочнице — async, с yield (sync runMulti блокировал главный поток). */
+  async function runSandboxAutoReversesCheck() {
+    const p = params();
+    if (!p.AutoReverses || !isLiveSandbox() || !state.packs.length) return;
+    const spec = resolveEffectiveCalcLogicSpec(p, indicatorSelection());
+    if (!spec) return;
+    try {
+      if (!state.live.autoReverses) state.live.autoReverses = { lastCheckedB: -1, activeKey: null };
+      const packs = state.packs || [];
+      const b = Math.min(...packs.map((x) => (x?.length || 0)).filter((n) => n > 0).map((n) => n - 1));
+      const lookback = Math.max(50, Math.round(+p.AutoLookback || 220));
+      const step = Math.max(1, Math.round(+p.AutoStep || 30));
+      const shouldCheck = Number.isFinite(b) && b >= 0
+        && (state.live.autoReverses.lastCheckedB < 0 || (b - state.live.autoReverses.lastCheckedB) >= step);
+      if (!shouldCheck) return;
+      state.live.autoReverses.lastCheckedB = b;
+      const a = Math.max(0, b - lookback + 1);
+      const vol = volConfig();
+      const stop = stopperConfig();
+      const variants = [
+        { sides: false, signals: false, key: "00" },
+        { sides: true, signals: false, key: "10" },
+        { sides: false, signals: true, key: "01" },
+        { sides: true, signals: true, key: "11" }
+      ];
+      let best = null;
+      for (const v of variants) {
+        await yieldToUi();
+        const pv = { ...p, ReverseSides: v.sides, ReverseSignals: v.signals };
+        const out = await E.runMultiAsync(packs, spec, a, b, pv, vol, stop, {
+          reverseSides: v.sides,
+          reverseSignals: v.signals,
+          silent: true
+        });
+        const fin = out?.agg?.finresp;
+        if (!Number.isFinite(fin)) continue;
+        if (!best || fin > best.finresp) best = { ...v, finresp: fin };
+      }
+      if (!best) return;
+      const curSides = !!$("param-reverse")?.checked;
+      const curSignals = !!$("param-reverse-signals")?.checked;
+      const needSwitch = best.sides !== curSides || best.signals !== curSignals;
+      if (!needSwitch) return;
+      await sellAllMarketLive();
+      if ($("param-reverse")) $("param-reverse").checked = best.sides;
+      if ($("param-reverse-signals")) $("param-reverse-signals").checked = best.signals;
+      saveConfig();
+      noteLiveTech(
+        "auto-reverses",
+        `best=${best.key} fin=${fmt(best.finresp, 2)} sides=${best.sides ? "on" : "off"} signals=${best.signals ? "on" : "off"}`
+      );
+    } catch (err) {
+      noteLiveTech("auto-reverses-error", err.message);
+    }
+  }
+
   /** Live: сигнал по хвосту каждого инструмента (общий портфельный лимит, без привязки к окну ползунков). */
   async function calcLiveSignalsPerInstrument(runOptions) {
     const ro = runOptions || {};
     if (!state.packs.length) return null;
     const p = params();
-    const spec = resolveCalcLogicSpec(p, indicatorSelection());
+    const spec = resolveEffectiveCalcLogicSpec(p, indicatorSelection());
     if (!spec) return null;
-
-    // --- Auto-reverses (sandbox-first): choose best of 4 variants on rolling window ---
-    // Variants are defined by UI checkboxes ReverseSides / ReverseSignals (engine uses XOR logic for signals).
-    // In sandbox mode, switching ReverseSides requires flattening to avoid mixing old/new semantics.
-    if (p.AutoReverses && isLiveSandbox()) {
-      try {
-        if (!state.live.autoReverses) state.live.autoReverses = { lastCheckedB: -1, activeKey: null };
-        const packs = state.packs || [];
-        const b = Math.min(...packs.map((x) => (x?.length || 0)).filter((n) => n > 0).map((n) => n - 1));
-        const lookback = Math.max(50, Math.round(+p.AutoLookback || 220));
-        const step = Math.max(1, Math.round(+p.AutoStep || 30));
-        const shouldCheck = Number.isFinite(b) && b >= 0 && (state.live.autoReverses.lastCheckedB < 0 || (b - state.live.autoReverses.lastCheckedB) >= step);
-        if (shouldCheck) {
-          state.live.autoReverses.lastCheckedB = b;
-          const a = Math.max(0, b - lookback + 1);
-          const vol = volConfig();
-          const stop = stopperConfig();
-          const variants = [
-            { sides: false, signals: false, key: "00" },
-            { sides: true, signals: false, key: "10" },
-            { sides: false, signals: true, key: "01" },
-            { sides: true, signals: true, key: "11" }
-          ];
-          let best = null;
-          for (const v of variants) {
-            const pv = { ...p, ReverseSides: v.sides, ReverseSignals: v.signals };
-            const out = E.runMulti(packs, spec, a, b, pv, vol, stop, {
-              reverseSides: v.sides,
-              reverseSignals: v.signals
-            });
-            const fin = out?.agg?.finresp;
-            if (!Number.isFinite(fin)) continue;
-            if (!best || fin > best.finresp) best = { ...v, finresp: fin };
-          }
-          if (best) {
-            const curSides = !!$("param-reverse")?.checked;
-            const curSignals = !!$("param-reverse-signals")?.checked;
-            const needSwitch = best.sides !== curSides || best.signals !== curSignals;
-            if (needSwitch) {
-              // Flatten first to avoid position semantics mismatch
-              await sellAllMarketLive();
-              if ($("param-reverse")) $("param-reverse").checked = best.sides;
-              if ($("param-reverse-signals")) $("param-reverse-signals").checked = best.signals;
-              saveConfig();
-              // Let HTML update summary on next UI sync.
-              noteLiveTech("auto-reverses", `best=${best.key} fin=${fmt(best.finresp, 2)} sides=${best.sides ? "on" : "off"} signals=${best.signals ? "on" : "off"}`);
-            }
-          }
-        }
-      } catch (err) {
-        noteLiveTech("auto-reverses-error", err.message);
-      }
-    }
 
     const skipped = [];
     const tail = MIN_WARMUP_BARS;
@@ -8565,6 +8880,7 @@ ${referenceBlock}
         reverseSignals: !!p.ReverseSignals,
         ...(finrespRunOptions() || {})
       });
+      await yieldToUi();
       if (!r.rows?.length) {
         skipped.push({ sec, error: "нет данных для сигнала на свечах" });
         state.live.finrespBootstrapProgress = { done: pi + 1, total };
@@ -8588,7 +8904,7 @@ ${referenceBlock}
         lastSell: +(last?.sell || 0)
       });
       state.live.finrespBootstrapProgress = { done: pi + 1, total };
-      if (pi > 0 && pi % 4 === 0) syncLiveTradingUi({ skipPanels: true });
+      if (pi > 0 && pi % 2 === 0) syncLiveTradingUi({ skipPanels: true });
     }
     } finally {
       state.live.finrespBootstrapProgress = null;
@@ -8868,6 +9184,9 @@ ${referenceBlock}
       state.movedSlider = "end";
       updateLiveCandleBarMeta();
       await recalcLivePortfolioMtmFromCandles();
+      if (isLiveSandbox() && params().AutoReverses) {
+        await runSandboxAutoReversesCheck();
+      }
       const result = await tryLiveFinrespCalc({ silent: true, ...opts });
       if (!result?.perSec?.length) {
         noteLiveFinrespSkipped();
@@ -8922,9 +9241,12 @@ ${referenceBlock}
     if (!instruments.length) {
       return { ok: false, error: "выберите инструменты" };
     }
-    const spec = resolveCalcLogicSpec(params(), indicatorSelection());
+    const spec = resolveEffectiveCalcLogicSpec(params(), indicatorSelection());
     if (!spec) {
       return { ok: false, error: "выберите логику" };
+    }
+    if (!effectiveLogicIds().length && pauseOnDrawdownEnabled()) {
+      return { ok: false, error: "все выбранные логики отключены просадкой — дождитесь восстановления модели" };
     }
     if (!requireTbankDepositForRun()) {
       return { ok: false, error: "загрузите депозит брокера" };
@@ -9298,7 +9620,8 @@ ${referenceBlock}
   /** Вкл/выкл live-торговлю: старт/стоп опросов, reconcile, FINRESP на барах. */
   async function toggleLiveTrading() {
     if (!isLiveMode()) return;
-    if (state.uiBusy && !state.live.active) {
+    await yieldToUi();
+    if (state.uiBusy && !state.live.active && !isLiveSandbox()) {
       state.live.lastError = "дождитесь окончания расчёта";
       syncLiveTradingUi();
       return;
@@ -9314,17 +9637,6 @@ ${referenceBlock}
       syncLiveTradingUi();
       notifyLiveTradingToggle(false);
       updateTechInfo("live-trading-stopped");
-      return;
-    }
-    const rs = ensureRecoveryStopState();
-    if (rs.paused) {
-      if (recoveryResumeReady()) {
-        rs.userIntent = true;
-        await tryRecoveryResumeLive();
-      } else {
-        state.live.lastError = "модель ещё не восстановилась";
-        syncLiveTradingUi();
-      }
       return;
     }
     clearLiveManualFlatten();

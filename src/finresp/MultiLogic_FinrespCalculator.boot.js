@@ -12,7 +12,17 @@
   window.__mlFinresp = window.__mlFinresp || {};
   window.__mlFinresp.bootPhase = "started";
   window.__mlFinresp.lastBootError = null;
-  const CALC_PAGE_VERSION = "2026-06-18-live-commission-reset-v1";
+  window.__mlFinresp.persistInstrumentSelection = () => {
+    if (state?.restoringConfig) return;
+    syncSelectAllCheckboxes();
+    saveConfig();
+  };
+  window.__mlFinresp.persistLogicSelection = () => {
+    if (state?.restoringConfig) return;
+    saveConfig();
+  };
+  window.__mlFinresp.saveConfig = () => saveConfig();
+  const CALC_PAGE_VERSION = "2026-06-18-logic-pause-equity-v10";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -201,6 +211,20 @@
       sec: o.value,
       market: o.dataset.market === "futures" ? "futures" : "shares"
     })).filter((i) => i.sec);
+  }
+  function restoredInstrumentKeySet() {
+    const keys = new Set();
+    for (const inst of state.restoredSelectedInstruments || []) {
+      const market = inst.market === "futures" ? "futures" : "shares";
+      const sec = String(inst.sec || "").trim().toUpperCase();
+      if (sec) keys.add(`${market}:${sec}`);
+    }
+    return keys;
+  }
+  function collectSelectedInstrumentsForConfig() {
+    const fromDom = bridgeReadInstrumentsFromDom();
+    if (fromDom.length) return fromDom;
+    return selectedInstruments();
   }
   function bridgeReadLogicIdsFromDom() {
     const sel = $("calc-logic");
@@ -556,6 +580,10 @@
         `period=${$("calc-from")?.value || "—"}…${$("calc-till")?.value || "—"}`,
         `tf=${$("calc-tf")?.value || "—"}`,
         `logic=${selectedLogicIds().join(",") || "—"}`,
+        `effectiveLogic=${effectiveLogicIds().join(",") || "—"}`,
+        `pauseOnDrawdownPerLogic=${!!$("param-pause-on-drawdown-per-logic")?.checked}`,
+        `logicRecoveryPaused=${drawdownDisabledLogicIds().join(",") || "—"}`,
+        `portfolioDrawdownDisabled=${!!state.portfolioDrawdown?.disabled}`,
         `indicators=${typeof selectedIndicatorKeys === "function" ? selectedIndicatorKeys().join(",") : "—"}`,
         `accountMode=${calcState.accountMode || "paper"}`,
         `brokerProvider=${$("broker-provider")?.value || "tbank"}`,
@@ -954,6 +982,7 @@
     uiBusy: false,
     restoringConfig: false,
     restoredSelectedInstruments: [],
+    restoredInstrumentSelectAll: null,
     restoredLogicIds: null,
     savedEquityDeltaPeriod: null,
     logicPickerSnapshot: null,
@@ -1037,6 +1066,7 @@
       positionsMenuIdx: null,
       manualPriceSec: "",
       tradeHistory: [],
+      sessionEvents: [],
       brokerOperations: [],
       recoveryStop: {
         paused: false,
@@ -1046,7 +1076,16 @@
         userIntent: false,
         pauseCount: 0,
         lastNotifyKey: null
-      }
+      },
+      logicRecovery: {},
+      portfolioDrawdown: {
+        disabled: false,
+        peakEquity: null,
+        resumeAt: null,
+        pausedAt: null,
+        pauseCount: 0
+      },
+      logicModelEquity: {}
     },
     optim: {
       active: null,
@@ -1221,7 +1260,14 @@
       till: formSnap?.till || $("calc-till")?.value || "",
       logic: (formSnap?.logicIds?.[0]) || primaryLogicId(),
       logics: formSnap?.logicIds?.length ? formSnap.logicIds.slice() : selectedLogicIds(),
-      selectedInstruments: selectedInstruments(),
+      selectedInstruments: collectSelectedInstrumentsForConfig(),
+      instrumentSelectAll: {
+        shares: !!$("calc-sec-all-shares")?.checked,
+        futures: !!$("calc-sec-all-futures")?.checked,
+        sharesIndeterminate: !!$("calc-sec-all-shares")?.indeterminate,
+        futuresIndeterminate: !!$("calc-sec-all-futures")?.indeterminate
+      },
+      drawdownRecovery: snapshotDrawdownRecoveryForPersist(),
       brokers: {
         tbank: {
           deposit: state.tbank.depositRub != null ? String(Math.round(state.tbank.depositRub)) : "",
@@ -1291,6 +1337,7 @@
         autoLookback: $("param-auto-reverses-lookback")?.value || "",
         autoStep: $("param-auto-reverses-step")?.value || "",
         pauseOnDrawdown: !!$("param-pause-on-drawdown")?.checked,
+        pauseOnDrawdownPerLogic: !!$("param-pause-on-drawdown-per-logic")?.checked,
         drawdownPct: $("param-drawdown-pct")?.value || "",
         sandboxMatchMode: $("live-sandbox-match-mode")?.value || "fifo"
       },
@@ -1316,6 +1363,54 @@
         equityDeltaPeriod: equityDeltaPeriod()
       }
     };
+  }
+
+  function snapshotDrawdownRecoveryForPersist() {
+    const lr = {};
+    for (const id of recoveryStopConfig().logicKeys) {
+      const ent = logicRecoveryEntry(id);
+      if (!ent) continue;
+      if (ent.disabled || ent.resumeAt != null || ent.peakEquity != null) {
+        lr[id] = {
+          disabled: !!ent.disabled,
+          paused: !!ent.paused,
+          peakEquity: ent.peakEquity,
+          resumeAt: ent.resumeAt,
+          pausedAt: ent.pausedAt,
+          pauseCount: ent.pauseCount || 0
+        };
+      }
+    }
+    const pd = ensurePortfolioDrawdownState();
+    return {
+      portfolioDrawdown: {
+        disabled: !!pd.disabled,
+        peakEquity: pd.peakEquity,
+        resumeAt: pd.resumeAt,
+        pausedAt: pd.pausedAt,
+        pauseCount: pd.pauseCount || 0
+      },
+      logicRecovery: lr,
+      logicModelEquity: { ...(state.logicModelEquity || {}) }
+    };
+  }
+
+  function restoreDrawdownRecoveryFromSnapshot(snap) {
+    if (!snap || typeof snap !== "object") return;
+    if (snap.portfolioDrawdown && typeof snap.portfolioDrawdown === "object") {
+      Object.assign(ensurePortfolioDrawdownState(), snap.portfolioDrawdown);
+    }
+    if (snap.logicRecovery && typeof snap.logicRecovery === "object") {
+      for (const [key, ent] of Object.entries(snap.logicRecovery)) {
+        const e = logicRecoveryEntry(key);
+        if (!e || !ent || typeof ent !== "object") continue;
+        Object.assign(e, ent);
+      }
+    }
+    if (snap.logicModelEquity && typeof snap.logicModelEquity === "object") {
+      state.logicModelEquity = { ...snap.logicModelEquity };
+    }
+    syncLogicChipDrawdownState();
   }
 
   /** Сохранение: `saveConfig`. */
@@ -1516,6 +1611,11 @@
       if ($("param-pause-on-drawdown")) {
         $("param-pause-on-drawdown").checked = !!(cfg.params?.pauseOnDrawdown ?? cfg.params?.PauseOnDrawdown);
       }
+      if ($("param-pause-on-drawdown-per-logic")) {
+        $("param-pause-on-drawdown-per-logic").checked = !!(
+          cfg.params?.pauseOnDrawdownPerLogic ?? cfg.params?.PauseOnDrawdownPerLogic
+        );
+      }
       setValueIfExists("param-drawdown-pct", cfg.params?.drawdownPct ?? cfg.params?.DrawdownPct);
       if ($("param-reverse")) {
         $("param-reverse").checked = !!(cfg.params?.reverseSides ?? cfg.params?.ReverseSides ?? cfg.params?.reverse ?? cfg.params?.Reverse);
@@ -1576,7 +1676,11 @@
       ensureLogicLineKeys();
       fillLogicEditor();
       fillLogicSelect();
+      restoreDrawdownRecoveryFromSnapshot(cfg.drawdownRecovery);
       state.restoredSelectedInstruments = Array.isArray(cfg.selectedInstruments) ? cfg.selectedInstruments : [];
+      state.restoredInstrumentSelectAll = cfg.instrumentSelectAll && typeof cfg.instrumentSelectAll === "object"
+        ? cfg.instrumentSelectAll
+        : null;
       syncObTrendConfirmUi();
       if (!state.tbank.token) state.tbank.depositLoaded = false;
       if (!state.alor.token) state.alor.depositLoaded = false;
@@ -1615,6 +1719,26 @@
       matched.add(key);
     }
     syncSelectAllCheckboxes();
+    const selAll = state.restoredInstrumentSelectAll;
+    if (selAll) {
+      const sharesCb = $("calc-sec-all-shares");
+      const futuresCb = $("calc-sec-all-futures");
+      if (sharesCb && selAll.sharesIndeterminate) {
+        sharesCb.indeterminate = true;
+        sharesCb.checked = false;
+      } else if (sharesCb && selAll.shares != null) {
+        sharesCb.checked = !!selAll.shares;
+        sharesCb.indeterminate = false;
+      }
+      if (futuresCb && selAll.futuresIndeterminate) {
+        futuresCb.indeterminate = true;
+        futuresCb.checked = false;
+      } else if (futuresCb && selAll.futures != null) {
+        futuresCb.checked = !!selAll.futures;
+        futuresCb.indeterminate = false;
+      }
+      state.restoredInstrumentSelectAll = null;
+    }
     state.prevSelectCount = selectedInstrumentCount();
     publishInstrumentSelectionFromDom();
   }
@@ -2053,6 +2177,7 @@
       AutoLookback: Math.max(50, Math.round(+$("param-auto-reverses-lookback")?.value || 220)),
       AutoStep: Math.max(1, Math.round(+$("param-auto-reverses-step")?.value || 30)),
       PauseOnDrawdown: !!$("param-pause-on-drawdown")?.checked,
+      PauseOnDrawdownPerLogic: !!$("param-pause-on-drawdown-per-logic")?.checked,
       DrawdownPct: Math.max(0.01, Math.min(99, +($("param-drawdown-pct")?.value || 1) || 1))
     };
   }
@@ -2076,8 +2201,14 @@
 
 
 
+  /** Поздняя привязка: live.js подменяет record при install. */
+  const logicSessionEventSink = {
+    record(_evt) { /* noop until live module installs */ }
+  };
+
   // === LIVE: installed from MultiLogic_FinrespCalculator.live.js ===
   const __mlLiveDeps = {
+    logicSessionEventSink,
     state, E, $, fmt, fmtSignedRub, RUB_SIGN, IS_FILE_PROTOCOL,
     TBANK_REST_BASES, TBANK_TOKEN_STORE_KEY, TBANK_ACCOUNT_STORE_KEY, TBANK_HOST_STORE_KEY,
     ALOR_TOKEN_STORE_KEY, ALOR_ACCOUNT_STORE_KEY, ALOR_PORTFOLIO_STORE_KEY, ALOR_EXCHANGE_STORE_KEY,
@@ -2090,6 +2221,21 @@
     get volConfig() { return volConfig; },
     get stopperConfig() { return stopperConfig; },
     get recoveryStopConfig() { return recoveryStopConfig; },
+    get effectiveLogicIds() { return effectiveLogicIds; },
+    get logicRecoveryState() { return ensureLogicRecoveryState; },
+    get drawdownDisabledLogicIds() { return drawdownDisabledLogicIds; },
+    get syncLogicChipDrawdownState() { return syncLogicChipDrawdownState; },
+    get restoreDrawdownRecoveryFromSnapshot() { return restoreDrawdownRecoveryFromSnapshot; },
+    get snapshotDrawdownRecoveryForPersist() { return snapshotDrawdownRecoveryForPersist; },
+    get disableLogicForDrawdown() { return disableLogicForDrawdown; },
+    get enableLogicAfterDrawdown() { return enableLogicAfterDrawdown; },
+    get disableAllLogicsForDrawdown() { return disableAllLogicsForDrawdown; },
+    get enableAllLogicsAfterDrawdown() { return enableAllLogicsAfterDrawdown; },
+    get logicModelEquityRub() { return logicModelEquityRub; },
+    get syncLogicModelEquityFromCache() { return syncLogicModelEquityFromCache; },
+    get portfolioDrawdownState() { return ensurePortfolioDrawdownState; },
+    get isDrawdownRecoveryActive() { return isDrawdownRecoveryActive; },
+    get clearDrawdownRecoveryState() { return clearDrawdownRecoveryState; },
     get commissionPctValue() { return commissionPctValue; },
     noteLiveTech, noteTechError, noteBrokerTech, updateTechInfo, saveConfig,
     get selectedInstruments() { return selectedInstruments; },
@@ -2102,6 +2248,7 @@
     get primaryLogicId() { return primaryLogicId; },
     get logicDisplayName() { return logicDisplayName; },
     get resolveCalcLogicSpec() { return resolveCalcLogicSpec; },
+    get resolveEffectiveCalcLogicSpec() { return resolveEffectiveCalcLogicSpec; },
     get calcResultAsync() { return calcResultAsync; },
     get yieldToUi() { return yieldToUi; },
     get syncChartBox() { return syncChartBox; },
@@ -2218,17 +2365,302 @@
       opts.ctgSpotPacks = state.ctgSpotPacks;
     }
     if (!extra?.forEquity) {
-      opts.recoveryStopConfig = recoveryStopConfig();
+      const rsc = recoveryStopConfig();
+      opts.recoveryStopConfig = rsc;
+      if (rsc.perLogic) {
+        const p = params();
+        const ind = indicatorSelection();
+        opts.isoLogicSpecs = selectedLogicIds()
+          .map((id) => E.resolveLogicSpec(id, state.customLines, p, ind))
+          .filter((s) => s && !s.disabled);
+      }
     }
     return opts;
   }
 
-  /** @@PauseOnDrawdown / @@DrawdownPct для расчёта и live. */
+  /** @@PauseOnDrawdown / @@PauseOnDrawdownPerLogic / @@DrawdownPct. */
   function recoveryStopConfig() {
+    const perLogic = !!$("param-pause-on-drawdown-per-logic")?.checked;
+    const enabled = !!$("param-pause-on-drawdown")?.checked || perLogic;
     return {
-      enabled: !!$("param-pause-on-drawdown")?.checked,
-      drawdownPct: Math.max(0.01, Math.min(99, +($("param-drawdown-pct")?.value || 1) || 1))
+      enabled,
+      perLogic,
+      drawdownPct: Math.max(0.01, Math.min(99, +($("param-drawdown-pct")?.value || 1) || 1)),
+      logicKeys: selectedLogicIds().slice()
     };
+  }
+
+  function ensurePortfolioDrawdownState() {
+    if (!state.portfolioDrawdown || typeof state.portfolioDrawdown !== "object") {
+      state.portfolioDrawdown = {
+        disabled: false,
+        peakEquity: null,
+        resumeAt: null,
+        pausedAt: null,
+        pauseCount: 0
+      };
+    }
+    return state.portfolioDrawdown;
+  }
+
+  function ensureLogicRecoveryState() {
+    if (!state.logicRecovery || typeof state.logicRecovery !== "object") {
+      state.logicRecovery = {};
+    }
+    return state.logicRecovery;
+  }
+
+  function logicRecoveryEntry(logicKey) {
+    const lr = ensureLogicRecoveryState();
+    const key = String(logicKey || "");
+    if (!key) return null;
+    if (!lr[key]) {
+      lr[key] = {
+        disabled: false,
+        paused: false,
+        peakEquity: null,
+        resumeAt: null,
+        pausedAt: null,
+        pauseCount: 0
+      };
+    }
+    return lr[key];
+  }
+
+  function isLogicDisabledByDrawdown(logicKey) {
+    const cfg = recoveryStopConfig();
+    if (!cfg.enabled) return false;
+    if (!cfg.perLogic) {
+      return !!ensurePortfolioDrawdownState().disabled;
+    }
+    return !!logicRecoveryEntry(logicKey)?.disabled;
+  }
+
+  function drawdownDisabledLogicIds() {
+    const cfg = recoveryStopConfig();
+    if (!cfg.enabled) return [];
+    if (!cfg.perLogic) {
+      return ensurePortfolioDrawdownState().disabled ? cfg.logicKeys.slice() : [];
+    }
+    return cfg.logicKeys.filter((id) => !!logicRecoveryEntry(id)?.disabled);
+  }
+
+  function isDrawdownRecoveryActive() {
+    return drawdownDisabledLogicIds().length > 0;
+  }
+
+  /** Выбранные логики, допущенные к торговле (не отключены просадкой). */
+  function effectiveLogicIds() {
+    const ids = selectedLogicIds();
+    const cfg = recoveryStopConfig();
+    if (!cfg.enabled) return ids.slice();
+    if (!cfg.perLogic) {
+      return ensurePortfolioDrawdownState().disabled ? [] : ids.slice();
+    }
+    const lr = ensureLogicRecoveryState();
+    return ids.filter((id) => !lr[id]?.disabled);
+  }
+
+  function disableLogicForDrawdown(logicKey, meta, opts) {
+    const ent = logicRecoveryEntry(logicKey);
+    if (!ent) return;
+    const wasDisabled = !!ent.disabled;
+    ent.disabled = true;
+    ent.paused = true;
+    ent.peakEquity = meta?.peak ?? meta?.peakEquity ?? null;
+    ent.resumeAt = meta?.resumeAt ?? ent.peakEquity;
+    ent.pausedAt = meta?.time || meta?.pausedAt || new Date().toISOString();
+    ent.pauseCount = (ent.pauseCount || 0) + 1;
+    syncLogicChipDrawdownState();
+    if (!opts?.skipSessionEvent && !wasDisabled) {
+      logicSessionEventSink.record({
+        action: "disable",
+        scope: "logic",
+        logicKey,
+        reason: "drawdown",
+        meta: {
+          drawdownPct: meta?.drawdownPct,
+          peakEquity: ent.peakEquity,
+          resumeAt: ent.resumeAt,
+          pausedAt: ent.pausedAt
+        }
+      });
+    }
+    if (!opts?.skipSave) saveConfig();
+  }
+
+  function enableLogicAfterDrawdown(logicKey, meta, opts) {
+    const ent = logicRecoveryEntry(logicKey);
+    if (!ent) return;
+    const wasDisabled = !!ent.disabled;
+    ent.disabled = false;
+    ent.paused = false;
+    ent.peakEquity = meta?.equity ?? ent.peakEquity;
+    ent.resumeAt = null;
+    ent.pausedAt = null;
+    syncLogicChipDrawdownState();
+    if (!opts?.skipSessionEvent && wasDisabled) {
+      logicSessionEventSink.record({
+        action: "enable",
+        scope: "logic",
+        logicKey,
+        reason: "recovery",
+        meta: {
+          equity: meta?.equity ?? ent.peakEquity
+        }
+      });
+    }
+    if (!opts?.skipSave) saveConfig();
+  }
+
+  function disableAllLogicsForDrawdown(meta, opts) {
+    const pd = ensurePortfolioDrawdownState();
+    const wasDisabled = !!pd.disabled;
+    pd.disabled = true;
+    pd.peakEquity = meta?.peak ?? meta?.peakEquity ?? null;
+    pd.resumeAt = meta?.resumeAt ?? pd.peakEquity;
+    pd.pausedAt = meta?.time || meta?.pausedAt || new Date().toISOString();
+    pd.pauseCount = (pd.pauseCount || 0) + 1;
+    for (const key of selectedLogicIds()) disableLogicForDrawdown(key, meta, { skipSave: true, skipSessionEvent: true });
+    syncLogicChipDrawdownState();
+    if (!opts?.skipSessionEvent && !wasDisabled) {
+      logicSessionEventSink.record({
+        action: "disable",
+        scope: "portfolio",
+        logicKeys: selectedLogicIds().slice(),
+        reason: "drawdown",
+        meta: {
+          drawdownPct: meta?.drawdownPct,
+          peakEquity: pd.peakEquity,
+          resumeAt: pd.resumeAt,
+          pausedAt: pd.pausedAt
+        }
+      });
+    }
+    saveConfig();
+  }
+
+  function enableAllLogicsAfterDrawdown(meta, opts) {
+    const pd = ensurePortfolioDrawdownState();
+    const wasDisabled = !!pd.disabled;
+    pd.disabled = false;
+    pd.peakEquity = meta?.equity ?? pd.peakEquity;
+    pd.resumeAt = null;
+    pd.pausedAt = null;
+    for (const key of selectedLogicIds()) enableLogicAfterDrawdown(key, meta, { skipSave: true, skipSessionEvent: true });
+    syncLogicChipDrawdownState();
+    if (!opts?.skipSessionEvent && wasDisabled) {
+      logicSessionEventSink.record({
+        action: "enable",
+        scope: "portfolio",
+        logicKeys: selectedLogicIds().slice(),
+        reason: "recovery",
+        meta: {
+          equity: meta?.equity ?? pd.peakEquity
+        }
+      });
+    }
+    saveConfig();
+  }
+
+  function clearDrawdownRecoveryState() {
+    state.logicRecovery = {};
+    state.portfolioDrawdown = {
+      disabled: false,
+      peakEquity: null,
+      resumeAt: null,
+      pausedAt: null,
+      pauseCount: 0
+    };
+    for (const key of selectedLogicIds()) logicRecoveryEntry(key);
+    syncLogicChipDrawdownState();
+    saveConfig();
+  }
+
+  function resetLogicRecovery(keys) {
+    clearDrawdownRecoveryState();
+    for (const key of keys || selectedLogicIds()) logicRecoveryEntry(key);
+  }
+
+  function applyLogicRecoveryFromEvents(events) {
+    if (!Array.isArray(events) || !events.length) return;
+    const cfg = recoveryStopConfig();
+    const replayOpts = { skipSave: true, skipSessionEvent: true };
+    for (const ev of events) {
+      if (ev.kind === "pause") {
+        if (cfg.perLogic && ev.logicKey) {
+          disableLogicForDrawdown(ev.logicKey, ev, replayOpts);
+        } else if (!cfg.perLogic) {
+          disableAllLogicsForDrawdown(ev, replayOpts);
+        }
+      } else if (ev.kind === "resume") {
+        if (cfg.perLogic && ev.logicKey) {
+          enableLogicAfterDrawdown(ev.logicKey, ev, replayOpts);
+        } else if (!cfg.perLogic) {
+          enableAllLogicsAfterDrawdown(ev, replayOpts);
+        }
+      }
+    }
+    syncLogicChipDrawdownState();
+  }
+
+  function syncLogicModelEquityFromCache() {
+    if (!state.logicModelEquity || typeof state.logicModelEquity !== "object") {
+      state.logicModelEquity = {};
+    }
+    const runs = state.equityRunsCache?.data?.runs;
+    if (!runs) return;
+    for (const [key, v] of Object.entries(runs)) {
+      const eq = v?.rows?.at(-1)?.eq;
+      if (Number.isFinite(eq)) state.logicModelEquity[key] = eq;
+    }
+  }
+
+  function logicModelEquityRub(logicKey) {
+    const key = String(logicKey || "");
+    if (!key) return NaN;
+    const cached = state.logicModelEquity?.[key];
+    if (Number.isFinite(cached)) return cached;
+    const runs = state.equityRunsCache?.data?.runs?.[key];
+    const eq = runs?.rows?.at(-1)?.eq;
+    return Number.isFinite(eq) ? eq : NaN;
+  }
+
+  function formatLogicRecoveryStatus(events) {
+    const cfg = recoveryStopConfig();
+    if (!cfg.enabled || !events?.length) return "";
+    if (!cfg.perLogic) {
+      const hasPause = events.some((e) => e.kind === "pause");
+      return hasPause ? "портфель" : "";
+    }
+    const paused = [...new Set(events.filter((e) => e.kind === "pause").map((e) => e.logicKey))];
+    if (!paused.length) return "";
+    return paused.map((k) => logicDisplayName(k)).join(", ");
+  }
+
+  function formatDrawdownDisabledStatus() {
+    const ids = drawdownDisabledLogicIds();
+    if (!ids.length) return "";
+    const cfg = recoveryStopConfig();
+    if (!cfg.perLogic) return "портфель";
+    return ids.map((k) => logicDisplayName(k)).join(", ");
+  }
+
+  function scheduleDrawdownLogicModelEquityRefresh(a, b) {
+    const cfg = recoveryStopConfig();
+    if (!cfg.enabled || !cfg.perLogic || !state.packs.length) return;
+    void (async () => {
+      try {
+        const data = await calcLogicEquityRunsAsync(a, b);
+        if (!data?.runs) return;
+        state.logicModelEquity = state.logicModelEquity || {};
+        for (const [k, v] of Object.entries(data.runs)) {
+          const eq = v?.rows?.at(-1)?.eq;
+          if (Number.isFinite(eq)) state.logicModelEquity[k] = eq;
+        }
+        updateTechInfo("logic-model-equity");
+      } catch (_) { /* ignore */ }
+    })();
   }
 
   /** Синхронизация UI/state: `syncPageVersionBadge`. */
@@ -2977,7 +3409,8 @@
         ctgSpotPacks: ro.ctgSpotPacks || finOpts.ctgSpotPacks || undefined,
         tradingPeriods: ro.tradingPeriods || finOpts.tradingPeriods || undefined,
         calcTf: ro.calcTf || finOpts.calcTf || undefined,
-        recoveryStopConfig: finOpts.recoveryStopConfig || undefined
+        recoveryStopConfig: finOpts.recoveryStopConfig || undefined,
+        isoLogicSpecs: finOpts.isoLogicSpecs || undefined
       });
     });
   }
@@ -2989,6 +3422,9 @@
   async function calcResultAsync(optimCtx, runOptions) {
     const ro = runOptions || {};
     if (!state.packs.length) return null;
+    if (!optimCtx && !ro.liveSession && !ro.keepDrawdownState && !isLiveMode() && recoveryStopConfig().enabled) {
+      clearDrawdownRecoveryState();
+    }
     const [a, b] = normalizeSliders();
     const p = optimCtx?.params ?? params();
     const sc = optimCtx?.stopper ?? stopperConfig();
@@ -3421,6 +3857,7 @@
     const options = opts || {};
     const sel = $("calc-sec");
     const prev = new Set(selectedSecs());
+    const restoredKeys = restoredInstrumentKeySet();
     if (options.preserveSecs?.length) {
       for (const id of options.preserveSecs) prev.add(id);
     }
@@ -3431,8 +3868,9 @@
         o.value = id;
         o.textContent = id;
         o.dataset.market = market;
+        const key = `${market}:${String(id || "").trim().toUpperCase()}`;
         const selectFutures = options.selectFutures && market === "futures";
-        if (selectFutures || prev.has(id)) {
+        if (selectFutures || prev.has(id) || restoredKeys.has(key)) {
           o.selected = true;
         }
         sel.appendChild(o);
@@ -3450,7 +3888,10 @@
       instrumentOptions,
       instrumentsDisabled: !!sel.disabled
     });
-    publishInstrumentSelectionFromDom();
+    const pendingRestore = (state.restoredSelectedInstruments || []).length > 0;
+    if (!pendingRestore && !options.skipPublish) {
+      publishInstrumentSelectionFromDom();
+    }
   }
 
   /** Подпрограмма `initPrefixFields`. */
@@ -4635,6 +5076,49 @@
       : "Логики не выбраны. Клик — подсказка.";
   }
 
+  /** Зафиксировать изменения стека логик в протоколе live-сессии. */
+  function recordLogicStackSelectionDiff(prev, next, reason) {
+    if (!isLiveMode()) return;
+    const before = Array.isArray(prev) ? prev.slice() : [];
+    const after = Array.isArray(next) ? next.slice() : [];
+    const beforeSet = new Set(before);
+    const afterSet = new Set(after);
+    for (const id of after) {
+      if (!beforeSet.has(id)) {
+        logicSessionEventSink.record({
+          action: "add",
+          scope: "stack",
+          logicKey: id,
+          reason,
+          stackBefore: before,
+          stackAfter: after
+        });
+      }
+    }
+    for (const id of before) {
+      if (!afterSet.has(id)) {
+        logicSessionEventSink.record({
+          action: "remove",
+          scope: "stack",
+          logicKey: id,
+          reason,
+          stackBefore: before,
+          stackAfter: after
+        });
+      }
+    }
+    const sameMembers = before.length === after.length && before.every((id) => afterSet.has(id));
+    if (sameMembers && before.length > 1 && before.some((id, i) => id !== after[i])) {
+      logicSessionEventSink.record({
+        action: "reorder",
+        scope: "stack",
+        reason,
+        stackBefore: before,
+        stackAfter: after
+      });
+    }
+  }
+
   /** Удалить одну логику из текущего выбора (live badge). */
   function removeSelectedLogicId(id) {
     const removeId = String(id || "").trim();
@@ -4642,6 +5126,14 @@
     const prev = selectedLogicIds();
     const next = prev.filter((x) => x !== removeId);
     if (next.length === prev.length) return;
+    logicSessionEventSink.record({
+      action: "remove",
+      scope: "stack",
+      logicKey: removeId,
+      reason: "live_badge_remove",
+      stackBefore: prev,
+      stackAfter: next
+    });
     const cleared = next.length === 0;
     state.logicSelectionCleared = cleared;
     if (bridgeApplyLogicSelection(next, cleared)) return;
@@ -4655,12 +5147,22 @@
     invalidateFormChange();
   }
 
+  /** Обновить признак «отключена просадкой» на чипах логик (Angular + fallback DOM). */
+  function syncLogicChipDrawdownState() {
+    bridgeSetFormCatalog({ logicDrawdownDisabledIds: drawdownDisabledLogicIds() });
+    const api = bridgeApi();
+    if (api?.refreshLogicChips) {
+      api.refreshLogicChips();
+    } else {
+      renderLogicSelectedChips();
+    }
+    if (state.lastEquityChartCtx) redrawEquityChartsFromCache();
+  }
+
   /** Процедура: цветные чипы выбранных логик (свёрнутый вид). */
   function renderLogicSelectedChips() {
-    if (bridgeApi()?.setFormCatalog) {
-      bridgeApplyLogicSelection(selectedLogicIds(), state.logicSelectionCleared);
-      return;
-    }
+    bridgeSetFormCatalog({ logicDrawdownDisabledIds: drawdownDisabledLogicIds() });
+    if (bridgeApplyLogicSelection(selectedLogicIds(), state.logicSelectionCleared)) return;
     const chipsEl = $("calc-logic-chips");
     const collapsed = $("calc-logic-picker-collapsed");
     if (!chipsEl) return;
@@ -4676,6 +5178,7 @@
       }
       return;
     }
+    const disabledSet = new Set(drawdownDisabledLogicIds());
     ids.forEach((id, i) => {
       if (i > 0) {
         const arrow = document.createElement("span");
@@ -4686,9 +5189,11 @@
       }
       const chip = document.createElement("span");
       const obMeta = logicObMeta(id);
+      const drawdownOff = disabledSet.has(id);
       chip.className = "calc-logic-chip"
         + (obMeta.requiresOrderBook ? " calc-logic-chip--ob" : "")
-        + (obMeta.obProfile === "only" ? " calc-logic-chip--ob-only" : "");
+        + (obMeta.obProfile === "only" ? " calc-logic-chip--ob-only" : "")
+        + (drawdownOff ? " calc-logic-chip--drawdown-disabled" : "");
       chip.style.setProperty("--logic-color", equityLogicColor(id));
       const ord = document.createElement("span");
       ord.className = "calc-logic-chip-ord";
@@ -4705,7 +5210,16 @@
         nameEl.textContent = name;
         chip.appendChild(nameEl);
       }
-      chip.title = name !== id ? `${id} — ${name}` : id;
+      if (drawdownOff) {
+        const paused = document.createElement("span");
+        paused.className = "calc-logic-chip-paused";
+        paused.textContent = "отключена";
+        paused.setAttribute("aria-label", "Логика отключена просадкой");
+        chip.appendChild(paused);
+      }
+      chip.title = drawdownOff
+        ? (name !== id ? `${id} — ${name} · отключена (@@PauseOnDrawdown)` : `${id} · отключена`)
+        : (name !== id ? `${id} — ${name}` : id);
       chipsEl.appendChild(chip);
     });
     if (collapsed) {
@@ -4743,6 +5257,9 @@
     }
     if (apply && sel) {
       if ([...sel.selectedOptions].length) state.logicSelectionCleared = false;
+      const prev = state.logicPickerSnapshot || [];
+      const next = selectedLogicIds();
+      recordLogicStackSelectionDiff(prev, next, "user_selection");
       updatePositionSlHint();
       syncLogicSelectedHint();
       invalidateFormChange();
@@ -4819,9 +5336,16 @@
     syncLogicObHint();
   }
 
-  /** Функция: spec для расчёта — одна логика или multi_logic (engine.resolveLogicSpecStack). */
+  /** Spec для кнопки «Рассчитать» / worker — всегда все выбранные логики; recovery — пост-проход engine. */
   function resolveCalcLogicSpec(p, indicators) {
     return E.resolveLogicSpecStack(selectedLogicIds(), state.customLines, p, indicators);
+  }
+
+  /** Spec для live reconcile / tail-сигналов — только логики, не отключённые просадкой. */
+  function resolveEffectiveCalcLogicSpec(p, indicators) {
+    const ids = effectiveLogicIds();
+    if (!ids.length) return null;
+    return E.resolveLogicSpecStack(ids, state.customLines, p, indicators);
   }
 
   /** Процедура: заполнить #calc-logic из каталога логик. */
@@ -5188,13 +5712,20 @@
 
   /** Галочка @@AutoReverses в блоке «Реальная торговля» (окно/шаг только в доп. параметрах). */
   function syncPauseOnDrawdownUi(skipSource) {
-    const on = !!$("param-pause-on-drawdown")?.checked;
+    const perLogic = !!$("param-pause-on-drawdown-per-logic")?.checked;
+    const on = !!$("param-pause-on-drawdown")?.checked || perLogic;
     const panel = $("live-pause-on-drawdown-panel");
     if (panel && skipSource !== "live-pause-on-drawdown-panel" && panel.checked !== on) {
       panel.checked = on;
     }
     const panelWrap = $("live-pause-on-drawdown-panel-wrap");
     if (panelWrap) panelWrap.classList.toggle("live-reverse-panel-toggle--on", on);
+    const perPanel = $("live-pause-on-drawdown-per-logic-panel");
+    if (perPanel && skipSource !== "live-pause-on-drawdown-per-logic-panel" && perPanel.checked !== perLogic) {
+      perPanel.checked = perLogic;
+    }
+    const perWrap = $("live-pause-on-drawdown-per-logic-panel-wrap");
+    if (perWrap) perWrap.classList.toggle("live-reverse-panel-toggle--on", perLogic);
   }
 
   function bindLivePauseOnDrawdownPanelUi() {
@@ -5204,16 +5735,51 @@
     panel.addEventListener("change", () => {
       const main = $("param-pause-on-drawdown");
       if (main) main.checked = panel.checked;
+      if (!panel.checked) {
+        const per = $("param-pause-on-drawdown-per-logic");
+        if (per) per.checked = false;
+      }
       syncPauseOnDrawdownUi("live-pause-on-drawdown-panel");
       renderFromParams();
       saveConfig();
     });
     $("param-pause-on-drawdown")?.addEventListener("change", () => {
+      if (!$("param-pause-on-drawdown")?.checked) {
+        const per = $("param-pause-on-drawdown-per-logic");
+        if (per) per.checked = false;
+      }
+      syncPauseOnDrawdownUi();
+      renderFromParams();
+      saveConfig();
+    });
+    $("param-pause-on-drawdown-per-logic")?.addEventListener("change", () => {
+      if ($("param-pause-on-drawdown-per-logic")?.checked) {
+        const main = $("param-pause-on-drawdown");
+        if (main) main.checked = true;
+      }
       syncPauseOnDrawdownUi();
       renderFromParams();
       saveConfig();
     });
     $("param-drawdown-pct")?.addEventListener("change", () => { renderFromParams(); saveConfig(); });
+    syncPauseOnDrawdownUi();
+  }
+
+  function bindLivePauseOnDrawdownPerLogicPanelUi() {
+    const panel = $("live-pause-on-drawdown-per-logic-panel");
+    if (!panel || panel.dataset.pauseOnDrawdownPerLogicBound) return;
+    panel.dataset.pauseOnDrawdownPerLogicBound = "1";
+    panel.addEventListener("change", () => {
+      const main = $("param-pause-on-drawdown-per-logic");
+      if (main) main.checked = panel.checked;
+      if (panel.checked) {
+        const master = $("param-pause-on-drawdown");
+        if (master) master.checked = true;
+      }
+      syncPauseOnDrawdownUi("live-pause-on-drawdown-per-logic-panel");
+      renderFromParams();
+      saveConfig();
+    });
     syncPauseOnDrawdownUi();
   }
 
@@ -5264,10 +5830,11 @@
     const pAtr = $("stopper-atr-len")?.value ?? "—";
     const pRef = $("stopper-ref")?.value ?? "—";
     const rdOn = $("param-pause-on-drawdown")?.checked ? "вкл" : "выкл";
+    const rdPerLogic = $("param-pause-on-drawdown-per-logic")?.checked ? "вкл" : "выкл";
     const rdPct = $("param-drawdown-pct")?.value ?? "1";
     if (globalEl) {
       globalEl.textContent =
-        `@@PauseOnDrawdown=${rdOn} @@DrawdownPct=${rdPct}% `
+        `@@PauseOnDrawdown=${rdOn} @@PauseOnDrawdownPerLogic=${rdPerLogic} @@DrawdownPct=${rdPct}% `
         + `@@ReverseSides=${reverse} @@ReverseSignals=${reverseSignals} @@AutoReverses=${autoRev} @@AutoLookback=${autoLookback} @@AutoStep=${autoStep} `
         + `@@MaxPos=${maxPos} плечо=${levText} `
         + `@@SL=${pSl} @@TP=${pTp} @@ATR=${pAtr} база=${pRef} ₽`;
@@ -5830,6 +6397,112 @@
     return idx;
   }
 
+  function rowIndexAtOrAfterMs(rows, ms) {
+    if (!rows?.length || !Number.isFinite(ms)) return -1;
+    for (let i = 0; i < rows.length; i++) {
+      const t = parseMoexTime(rows[i]?.time);
+      if (t && t.getTime() >= ms) return i;
+    }
+    return rows.length - 1;
+  }
+
+  function rowIndexAtOrBeforeMs(rows, ms) {
+    if (!rows?.length || !Number.isFinite(ms)) return -1;
+    let idx = -1;
+    for (let i = 0; i < rows.length; i++) {
+      const t = parseMoexTime(rows[i]?.time);
+      if (!t) continue;
+      if (t.getTime() <= ms) idx = i;
+      else break;
+    }
+    return idx;
+  }
+
+  /** События паузы @@PauseOnDrawdown для одной логики (расчёт + live-журнал). */
+  function logicPauseTimelineEvents(logicKey) {
+    const out = [];
+    const cfg = recoveryStopConfig();
+    const affects = (evKey, portfolioWide) => {
+      if (!selectedLogicIds().includes(logicKey)) return false;
+      if (portfolioWide || !cfg.perLogic) return true;
+      return evKey === logicKey;
+    };
+    for (const ev of state.lastResult?.recoveryStop?.events || []) {
+      if (ev.kind === "pause" && affects(ev.logicKey, !ev.logicKey)) {
+        out.push({ edge: "start", time: ev.time, ms: parseMoexTime(ev.time)?.getTime() });
+      } else if (ev.kind === "resume" && affects(ev.logicKey, !ev.logicKey)) {
+        out.push({ edge: "end", time: ev.time, ms: parseMoexTime(ev.time)?.getTime() });
+      }
+    }
+    if (isLiveMode()) {
+      for (const se of state.live.sessionEvents || []) {
+        if (se.kind && se.kind !== "logic") continue;
+        if (se.scope === "logic" && se.logicKey !== logicKey) continue;
+        if (se.scope === "portfolio" && !selectedLogicIds().includes(logicKey)) continue;
+        const ms = parseMoexTime(se.when)?.getTime();
+        if (!Number.isFinite(ms)) continue;
+        if (se.action === "disable") out.push({ edge: "start", time: se.when, ms });
+        else if (se.action === "enable") out.push({ edge: "end", time: se.when, ms });
+      }
+      const ent = logicRecoveryEntry(logicKey);
+      if (isLogicDisabledByDrawdown(logicKey) && ent?.pausedAt) {
+        const starts = out.filter((e) => e.edge === "start").length;
+        const ends = out.filter((e) => e.edge === "end").length;
+        if (starts <= ends) {
+          const ms = parseMoexTime(ent.pausedAt)?.getTime();
+          if (Number.isFinite(ms)) out.push({ edge: "start", time: ent.pausedAt, ms });
+        }
+      }
+    }
+    out.sort((a, b) => (a.ms || 0) - (b.ms || 0));
+    return out;
+  }
+
+  /** Белые полосы и линии на equity-графике логики: периоды отключения (просадка / live). */
+  function logicPauseDecorForRows(rows, logicKey) {
+    if (!rows?.length || !logicKey) {
+      return { modeRegions: [], vLines: [], logicPauseOverlays: [], hasLogicPause: false };
+    }
+    const events = logicPauseTimelineEvents(logicKey);
+    const modeRegions = [];
+    const vLines = [];
+    const logicPauseOverlays = [];
+    let openIdx = null;
+    let openEq = null;
+    const closeInterval = (endIdx) => {
+      if (openIdx == null || endIdx < openIdx) return;
+      modeRegions.push({ fromIdx: openIdx, toIdx: endIdx, mode: "logic_pause" });
+      vLines.push({ idx: openIdx, kind: "logic-pause-start", label: `${logicKey}: отключена` });
+      vLines.push({ idx: endIdx, kind: "logic-pause-end", label: `${logicKey}: включена` });
+      if (Number.isFinite(openEq)) {
+        logicPauseOverlays.push({ fromIdx: openIdx, toIdx: endIdx, eq: openEq });
+      }
+      openIdx = null;
+      openEq = null;
+    };
+    for (const ev of events) {
+      let idx = Number.isFinite(ev.ms)
+        ? (ev.edge === "start" ? rowIndexAtOrAfterMs(rows, ev.ms) : rowIndexAtOrBeforeMs(rows, ev.ms))
+        : rowIndexByTime(rows, ev.time);
+      if (idx < 0) continue;
+      if (ev.edge === "start") {
+        if (openIdx == null) {
+          openIdx = idx;
+          openEq = rows[idx]?.eq;
+        }
+      } else if (openIdx != null) {
+        closeInterval(idx);
+      }
+    }
+    if (openIdx != null) closeInterval(rows.length - 1);
+    return {
+      modeRegions,
+      vLines,
+      logicPauseOverlays,
+      hasLogicPause: modeRegions.length > 0
+    };
+  }
+
   /** Подпрограмма `chartStopLines`. */
   function chartStopLines(rows, portfolioEvents) {
     const lines = [];
@@ -5861,6 +6534,11 @@
         const tip = String(label || (kind === "order-buy" ? "Покупка" : "Продажа"))
           .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
         return `<g opacity="0.92"><line x1="${xi}" y1="${top}" x2="${xi}" y2="${bottom}" stroke="${stroke}" stroke-width="1.8" stroke-dasharray="3 3"/><title>${tip}</title></g>`;
+      }
+      if (kind === "logic-pause-start" || kind === "logic-pause-end") {
+        const tip = String(label || (kind === "logic-pause-start" ? "логика отключена" : "логика включена"))
+          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+        return `<g opacity="0.9"><line x1="${xi}" y1="${top}" x2="${xi}" y2="${bottom}" stroke="#64748b" stroke-width="1.6" stroke-dasharray="5 4"/><title>${tip}</title></g>`;
       }
       const stroke = kind === "tp" ? "#16a34a" : "#dc2626";
       const dash = scope === "portfolio" ? "7 4" : "4 3";
@@ -6632,15 +7310,23 @@ ${rects}
     const strokeW = decor.strokeW ?? (compact ? 1.8 : 2.2);
     const configLines = buildStopVLines(decor.vLines || [], x, top, h - bottom);
     const modeBands = buildModeRegionBands(rows, decor.modeRegions, x, top, h - bottom);
+    const pauseLevelLines = (decor.logicPauseOverlays || []).map(({ fromIdx, toIdx, eq }) => {
+      if (!Number.isFinite(eq)) return "";
+      const yEq = y(eq).toFixed(1);
+      return `<line x1="${x(fromIdx).toFixed(1)}" y1="${yEq}" x2="${x(toIdx).toFixed(1)}" y2="${yEq}" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.95"><title>Логика отключена · equity заморожен</title></line>`;
+    }).join("");
     const configLegend = (decor.vLines || []).some((l) => l.kind === "config")
       ? " · фиолетовая — смена логик/комиссии/индикаторов"
       : "";
-    const modeLegend = decor.modeRegions?.length
+    const pauseLegend = decor.hasLogicPause || (decor.modeRegions || []).some((r) => r.mode === "logic_pause")
+      ? " · белая полоса — логика отключена (просадка)"
+      : "";
+    const modeLegend = (decor.modeRegions || []).some((r) => r.mode === "sandbox" || r.mode === "real")
       ? " · зелёная область — песочница · розовая — реальная торговля"
       : "";
     const caption = decor.caption ?? (faded
       ? "Справочный equity (логика не участвует в торговле / сумме)"
-      : `Equity по выбранным логикам${configLegend}${modeLegend}`);
+      : `Equity по выбранным логикам${configLegend}${pauseLegend}${modeLegend}`);
     const titleFont = compact ? 12 : 14;
     const titleColor = faded ? "#6b7280" : "#111827";
     const titleStartY = 16;
@@ -6661,7 +7347,7 @@ ${rects}
     return `<svg viewBox="0 0 ${w} ${h}" class="chart-equity-main-svg" role="img" aria-label="${escSvgText(title)}">
 <rect width="${w}" height="${h}" fill="#fff"/>
 ${modeBands}
-${gridH}${gridV}${zeroLine}${configLines}
+${gridH}${gridV}${zeroLine}${configLines}${pauseLevelLines}
 <line x1="${left}" y1="${top}" x2="${left}" y2="${h - bottom}" stroke="#94a3b8" stroke-width="1.2"/>
 <line x1="${left}" y1="${h - bottom}" x2="${w - right}" y2="${h - bottom}" stroke="#94a3b8" stroke-width="1.2"/>
 ${yLabels}${xLabels}
@@ -6975,10 +7661,18 @@ ${svg}
       const wrapClass = selected ? "chart-mini" : "chart-mini chart-mini--inactive";
       return `<div class="${wrapClass}"><p class="chart-sec-title">${heading}</p>${absentNote}<div class="chart-mini-empty">Нет свечей в live-сессии</div></div>`;
     }
+    const pauseDecor = logicPauseDecorForRows(rows, key);
+    const baseDecor = chartDecorFromRows(rows, configMarkersForRows(rows));
     const decor = {
-      ...chartDecorFromRows(rows, configMarkersForRows(rows)),
+      ...baseDecor,
+      ...pauseDecor,
+      modeRegions: [...(baseDecor.modeRegions || []), ...(pauseDecor.modeRegions || [])],
+      vLines: [...(baseDecor.vLines || []), ...(pauseDecor.vLines || [])],
       faded: !selected,
-      chartTitleLines: logicChartTitleLines(key, selected)
+      chartTitleLines: logicChartTitleLines(key, selected),
+      caption: pauseDecor.hasLogicPause
+        ? "Белая полоса — логика отключена (@@PauseOnDrawdown); пунктир — уровень equity на момент отключения"
+        : undefined
     };
     const fin = rows.at(-1).eq;
     const lineColor = selected ? equityLogicColor(key) : undefined;
@@ -7473,8 +8167,29 @@ ${referenceBlock}
     if (stopper?.events?.length) status += ` | Stopper: ${stopper.events.length} сраб.`;
     else if (stopperConfig().useSl || stopperConfig().useTp) status += " | Stopper вкл.";
     const rdEv = result.recoveryStop?.events;
-    if (rdEv?.length) status += ` | PauseOnDrawdown: ${rdEv.length} событ.`;
-    else if (recoveryStopConfig().enabled) status += " | PauseOnDrawdown вкл.";
+    if (rdEv?.length) {
+      const perLogicEv = formatLogicRecoveryStatus(rdEv);
+      status += perLogicEv
+        ? ` | PauseOnDrawdown: ${rdEv.length} событ. (пауза: ${perLogicEv})`
+        : ` | PauseOnDrawdown: ${rdEv.length} событ.`;
+    } else if (recoveryStopConfig().enabled) status += " | PauseOnDrawdown вкл.";
+    if (!opts.optimTrial) {
+      const rdCfg = recoveryStopConfig();
+      if (rdCfg.enabled) {
+        if (!liveSession) {
+          resetLogicRecovery(rdCfg.logicKeys);
+          applyLogicRecoveryFromEvents(rdEv);
+        }
+        syncLogicModelEquityFromCache();
+        if (rdCfg.perLogic && Number.isFinite(a) && Number.isFinite(b)) {
+          scheduleDrawdownLogicModelEquityRefresh(a, b);
+        }
+      }
+    }
+    const disabledLabel = formatDrawdownDisabledStatus();
+    if (disabledLabel && recoveryStopConfig().enabled) {
+      status += ` | логики отключены: ${disabledLabel}`;
+    }
     if (randomPriceShiftEnabled()) status += " | сдвиг индикаторов ±0,1%";
     if (params().ReverseSides) status += " | Реверс сторон вкл.";
     if (opts.optimNote) {
@@ -8125,6 +8840,7 @@ ${referenceBlock}
   bindLiveReversePanelUi();
   bindLiveReverseSignalsPanelUi();
   bindLivePauseOnDrawdownPanelUi();
+  bindLivePauseOnDrawdownPerLogicPanelUi();
   bindLiveAutoReversesPanelUi();
   $("calc-tf").addEventListener("change", () => {
     const n = selectedInstrumentCount();
@@ -8232,6 +8948,8 @@ ${referenceBlock}
           instrumentIds: savedInst.map((i) => String(i.sec || "").trim()).filter(Boolean)
         });
       }
+      syncSelectAllCheckboxes();
+      syncLogicChipDrawdownState();
     } else {
       api?.syncFormFromDom?.();
     }

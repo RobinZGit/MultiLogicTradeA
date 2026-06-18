@@ -127,6 +127,51 @@
     return `<section class="proto-section" id="open-lots"><h2>Открытые пакеты (ещё не закрыты)</h2>${rows}</section>`;
   }
 
+  function formatLogicStack(ids) {
+    if (!ids?.length) return "—";
+    return ids.map((id) => esc(id)).join(" → ");
+  }
+
+  function renderSessionEvents(sessionEvents) {
+    if (!sessionEvents?.length) {
+      return `<section class="proto-section" id="logic-events"><h2>Логики: включения и отключения</h2><p class="proto-empty">Событий стека/паузы пока нет.</p></section>`;
+    }
+    const rows = sessionEvents.map((ev) => {
+      const logicCell = ev.scope === "portfolio"
+        ? `портфель (${(ev.logicKeys || []).map(esc).join(", ") || "—"})`
+        : (ev.logicName ? `${esc(ev.logicName)} <code>${esc(ev.logicKey || "")}</code>` : esc(ev.logicKey || "—"));
+      const meta = ev.meta || {};
+      const metaBits = [];
+      if (Number.isFinite(meta.drawdownPct)) metaBits.push(`просадка ${fmt(meta.drawdownPct)}%`);
+      if (Number.isFinite(meta.peakEquity)) metaBits.push(`пик/цель ${fmt(meta.peakEquity)} ₽`);
+      if (Number.isFinite(meta.resumeAt)) metaBits.push(`возобновление ≥ ${fmt(meta.resumeAt)} ₽`);
+      if (Number.isFinite(meta.equity)) metaBits.push(`модель ${fmt(meta.equity)} ₽`);
+      const stackLine = ev.stackAfter?.length
+        ? `<div class="proto-hint">Стек: ${formatLogicStack(ev.stackAfter)}</div>`
+        : "";
+      const effLine = ev.effectiveLogicIds?.length
+        ? `<div class="proto-hint">Торговля: ${formatLogicStack(ev.effectiveLogicIds)}</div>`
+        : "";
+      return `<tr id="logic-event-${esc(ev.eventId)}">
+<td><code>${esc(ev.eventId)}</code></td>
+<td>${fmtWhen(ev.when)}</td>
+<td>${esc(ev.actionLabel || ev.action || "—")}</td>
+<td>${logicCell}</td>
+<td>${esc(ev.reasonLabel || ev.reason || "—")}</td>
+<td>${metaBits.length ? esc(metaBits.join(" · ")) : "—"}</td>
+<td>${ev.tradingActive ? "да" : "нет"}</td>
+</tr>
+<tr class="logic-event-detail"><td colspan="7">${stackLine}${effLine}</td></tr>`;
+    }).join("");
+    return `<section class="proto-section" id="logic-events">
+<h2>Логики: включения и отключения</h2>
+<div class="proto-scroll"><table class="proto-table">
+<thead><tr><th>eventId</th><th>Время</th><th>Действие</th><th>Логика</th><th>Причина</th><th>Детали</th><th>Торговля</th></tr></thead>
+<tbody>${rows}</tbody>
+</table></div>
+</section>`;
+  }
+
   function renderTrades(trades) {
     if (!trades?.length) {
       return `<section class="proto-section" id="trades"><h2>Журнал сделок</h2><p class="proto-empty">Сделок нет.</p></section>`;
@@ -181,13 +226,14 @@
 <h1>Протокол истории сделок${payload.archive ? " (архив)" : ""}</h1>
 <p class="proto-sub">Экспорт: ${fmtWhen(payload.exportedAt)} · режим: ${esc(modeLabel)} · версия: ${esc(payload.pageVersion || "—")}${archiveNote}</p>
 ${sessionLine}
-<p class="proto-sub">Формат: ${esc(payload.format || "—")} · сделок: ${payload.trades?.length ?? 0} · закрытий: ${payload.closeEvents?.length ?? 0}</p>
+<p class="proto-sub">Формат: ${esc(payload.format || "—")} · сделок: ${payload.trades?.length ?? 0} · закрытий: ${payload.closeEvents?.length ?? 0} · логики: ${payload.sessionEvents?.length ?? 0}</p>
 <nav class="proto-toc">
-<a href="#summary">Сводка</a> · <a href="#closes">Закрытия FIFO</a> · <a href="#open-lots">Открытые пакеты</a> · <a href="#trades">Журнал</a>
+<a href="#summary">Сводка</a> · <a href="#logic-events">Логики</a> · <a href="#closes">Закрытия FIFO</a> · <a href="#open-lots">Открытые пакеты</a> · <a href="#trades">Журнал</a>
 </nav>
 </header>
 <main class="proto-main">
 ${renderPortfolioSummary(payload.portfolioSummary, payload.session)}
+${renderSessionEvents(payload.sessionEvents)}
 ${renderCloseEvents(payload.closeEvents)}
 ${renderOpenLots(payload.openLots)}
 ${renderTrades(payload.trades)}
