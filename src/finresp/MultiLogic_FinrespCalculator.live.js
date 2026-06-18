@@ -10579,6 +10579,7 @@ ${referenceBlock}
     if (window.__mlFinresp?.deferBrokerConnect) {
       state.accountMode = readAccountModeFromUi();
       syncAccountModeUi();
+      saveConfig();
       return;
     }
     if ($("account-mode")?.value !== "live" && state.live.active) stopLiveTradingOnModeChange();

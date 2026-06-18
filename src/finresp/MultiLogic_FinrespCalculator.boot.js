@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-18-boot-restore-v15";
+  const CALC_PAGE_VERSION = "2026-06-18-config-flush-v16";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -212,6 +212,26 @@
       market: o.dataset.market === "futures" ? "futures" : "shares"
     })).filter((i) => i.sec);
   }
+  function bridgeReadVisibleInstrumentsFromDom() {
+    const sel = $("calc-sec-visible");
+    if (!sel) return [];
+    const marketBySec = new Map();
+    const hidden = $("calc-sec");
+    if (hidden) {
+      for (const o of hidden.options) {
+        if (!o.value) continue;
+        marketBySec.set(o.value, o.dataset.market === "futures" ? "futures" : "shares");
+      }
+    }
+    for (const o of sel.options) {
+      if (!o.value || marketBySec.has(o.value)) continue;
+      marketBySec.set(o.value, "shares");
+    }
+    return Array.from(sel.selectedOptions).map((o) => ({
+      sec: o.value,
+      market: marketBySec.get(o.value) || "shares"
+    })).filter((i) => i.sec);
+  }
   function restoredInstrumentKeySet() {
     const keys = new Set();
     for (const inst of state.restoredSelectedInstruments || []) {
@@ -222,9 +242,19 @@
     return keys;
   }
   function collectSelectedInstrumentsForConfig() {
+    const fromVisible = bridgeReadVisibleInstrumentsFromDom();
+    if (fromVisible.length) return fromVisible;
     const fromDom = bridgeReadInstrumentsFromDom();
     if (fromDom.length) return fromDom;
     return selectedInstruments();
+  }
+  function resolveAccountModeForConfig() {
+    const snapMode = readFormScalarsForConfig()?.accountMode;
+    const domMode = $("account-mode")?.value;
+    const stateMode = state?.accountMode;
+    const candidates = [snapMode, domMode, stateMode].map((m) => normalizeAccountMode(m || "paper"));
+    if (candidates.some((m) => m === "live")) return "live";
+    return candidates.find((m) => m) || "paper";
   }
   function bridgeReadLogicIdsFromDom() {
     const sel = $("calc-logic");
@@ -828,8 +858,21 @@
     window.addEventListener("pagehide", () => {
       clearTimeout(techLogFileTimer);
       flushTechInfoToFile();
+      flushConfigSave({ force: true, source: "pagehide" });
+    });
+  } else {
+    window.addEventListener("pagehide", () => {
+      flushConfigSave({ force: true, source: "pagehide" });
     });
   }
+  window.addEventListener("beforeunload", () => {
+    flushConfigSave({ force: true, source: "beforeunload" });
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      flushConfigSave({ force: true, source: "visibility-hidden" });
+    }
+  });
 
   window.addEventListener("error", (ev) => {
     const msg = `window.error: ${ev.message || ev.type} @ ${ev.filename || "?"}:${ev.lineno || "?"}`;
@@ -1257,7 +1300,7 @@
     return {
       v: 1,
       savedAt: new Date().toISOString(),
-      accountMode: formSnap?.accountMode || $("account-mode")?.value || "paper",
+      accountMode: resolveAccountModeForConfig(),
       brokerProvider: $("broker-provider")?.value || "tbank",
       alor: {
         portfolioId: $("alor-portfolio-id")?.value || "",
@@ -1424,17 +1467,43 @@
   /** Сохранение: `saveConfig`. */
   function saveConfig() {
     if (state.restoringConfig || state.deferConfigSave) return;
+    flushConfigSave({ source: "save" });
+  }
+
+  let notifyEmailCacheTimer = null;
+  let periodicConfigSaveTimer = null;
+
+  /** Синхронизировать форму и записать config (pagehide / периодический flush). */
+  function flushConfigSave(opts) {
+    const options = opts || {};
+    if (state.restoringConfig) return;
+    if (!options.force && state.deferConfigSave) return;
     try {
+      const modeEl = $("account-mode");
+      if (modeEl && state.accountMode) {
+        const mode = normalizeAccountMode(state.accountMode);
+        if (modeEl.value !== mode) modeEl.value = mode;
+      }
+      bridgeApi()?.syncFormFromDom?.();
       persistBrokerDepositFromDom?.();
       safeStorageSet(CONFIG_STORE_KEY, JSON.stringify(collectConfig()));
-      syncNotifyEmailCacheToServer();
-      onLiveConfigSavedForNotify?.();
+      if (!options.force) {
+        syncNotifyEmailCacheToServer();
+        onLiveConfigSavedForNotify?.();
+      }
     } catch (err) {
       noteTechError(`save-config: ${err.message}`);
     }
   }
 
-  let notifyEmailCacheTimer = null;
+  function startPeriodicConfigSave() {
+    if (periodicConfigSaveTimer) return;
+    periodicConfigSaveTimer = setInterval(() => {
+      if (!state.restoringConfig && !state.deferConfigSave) saveConfig();
+    }, 30000);
+  }
+
+  window.__mlFinresp.flushConfigSave = (opts) => flushConfigSave(opts || { force: true });
   /** Зеркало e-mail/телефона рассылки в notify.email.cache.json (через :4201). */
   function syncNotifyEmailCacheToServer() {
     try {
@@ -8991,6 +9060,8 @@ ${referenceBlock}
     syncRestoredFormUiAfterSnapshot();
     const finishBoot = () => {
       state.deferConfigSave = false;
+      startPeriodicConfigSave();
+      saveConfig();
       void completeLiveInitAfterFormReady().catch((err) => {
         noteTechError(`live-init-after-form: ${err?.message || err}`);
       });

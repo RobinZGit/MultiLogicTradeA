@@ -435,3 +435,11 @@ test('initAccountMode does not force paper on reload', () => {
   assert.match(block, /readAccountModeFromUi/);
   assert.doesNotMatch(block, /value = "paper"/);
 });
+
+test('boot flushes config on page hide and periodic save', () => {
+  const bootSrc = fs.readFileSync(bootPath, 'utf8');
+  assert.match(bootSrc, /function flushConfigSave/);
+  assert.match(bootSrc, /flushConfigSave\(\{ force: true, source: "pagehide" \}\)/);
+  assert.match(bootSrc, /startPeriodicConfigSave/);
+  assert.match(bootSrc, /function resolveAccountModeForConfig/);
+});
