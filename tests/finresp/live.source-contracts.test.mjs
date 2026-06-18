@@ -449,10 +449,20 @@ test('logic stack persisted with selectionCleared and drawdown slice', () => {
   assert.match(bootSrc, /function resolveLogicIdsForConfig/);
   assert.match(bootSrc, /logicSelectionCleared: logicPick\.cleared/);
   assert.match(bootSrc, /prepareForConfigPersist/);
+  assert.match(bootSrc, /function logicIdsForFillPreserve/);
+  assert.match(bootSrc, /bridgeReadLogicIdsFromChips/);
+  assert.doesNotMatch(
+    bootSrc.match(/try \{[\s\S]*?applySavedConfig\(\);[\s\S]*?fillLogicSelect\(\);/m)?.[0] || '',
+    /fillLogicSelect\(\);\s*\n\s*updatePositionSlHint/,
+  );
   const formSrc = fs.readFileSync(
     path.join(root, 'src', 'app', 'finresp', 'finresp-form.service.ts'),
     'utf8',
   );
   assert.match(formSrc, /prepareForConfigPersist/);
   assert.match(formSrc, /logicSelectionCleared: this\.logicSelectionCleared/);
+  assert.doesNotMatch(
+    formSrc.match(/onBridgeBootReady\(\)[\s\S]*?^  \}/m)?.[0] || '',
+    /syncFromDom/,
+  );
 });

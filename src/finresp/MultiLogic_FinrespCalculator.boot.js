@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-18-logic-restore-v17";
+  const CALC_PAGE_VERSION = "2026-06-18-logic-persist-v18";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -271,26 +271,65 @@
     if (!sel) return [];
     return [...sel.selectedOptions].map((o) => o.value).filter(Boolean);
   }
+  function bridgeReadLogicIdsFromChips() {
+    const keys = [];
+    for (const el of document.querySelectorAll("#calc-logic-chips .calc-logic-chip-key")) {
+      const id = String(el.textContent || "").trim();
+      if (id) keys.push(id);
+    }
+    return keys;
+  }
   function resolveLogicIdsForConfig() {
     const snap = readFormScalarsForConfig();
-    if (snap?.logicIds != null) {
+    if (snap?.logicIds != null && snap.logicIds.length) {
       return {
         ids: snap.logicIds.slice(),
-        cleared: snap.logicSelectionCleared ?? (snap.logicIds.length === 0)
+        cleared: snap.logicSelectionCleared ?? false
       };
+    }
+    const fromChips = bridgeReadLogicIdsFromChips();
+    if (fromChips.length) {
+      return { ids: fromChips, cleared: false };
     }
     const fromVisible = bridgeReadVisibleLogicIdsFromDom();
     if (fromVisible.length) {
       return { ids: fromVisible, cleared: false };
     }
     const fromDom = bridgeReadLogicIdsFromDom();
-    if (fromDom.length) {
+    if (fromDom.length && !(fromDom.length === 1 && fromDom[0] === "RND" && !state.logicSelectionCleared)) {
       return { ids: fromDom, cleared: false };
+    }
+    if (snap?.logicIds != null) {
+      return {
+        ids: snap.logicIds.slice(),
+        cleared: snap.logicSelectionCleared ?? (snap.logicIds.length === 0)
+      };
     }
     if (state.logicSelectionCleared) {
       return { ids: [], cleared: true };
     }
-    return { ids: selectedLogicIds().slice(), cleared: false };
+    const ids = selectedLogicIds().slice();
+    if (ids.length === 1 && ids[0] === "RND") {
+      return { ids: [], cleared: false };
+    }
+    return { ids, cleared: false };
+  }
+  function logicIdsForFillPreserve() {
+    if (state.restoredLogicIds != null) {
+      return state.restoredLogicIds.filter(Boolean).slice();
+    }
+    const cfg = readSavedConfig();
+    if (Array.isArray(cfg?.logics) && cfg.logics.length) {
+      return cfg.logics.filter(Boolean);
+    }
+    const fromDom = bridgeReadLogicIdsFromDom();
+    if (fromDom.length && !(fromDom.length === 1 && fromDom[0] === "RND" && !state.logicSelectionCleared)) {
+      return fromDom;
+    }
+    const snap = readFormScalarsForConfig();
+    if (snap?.logicIds?.length) return snap.logicIds.slice();
+    if (snap?.logicSelectionCleared || state.logicSelectionCleared) return [];
+    return [];
   }
   function publishWindowBridge() {
     const startEl = $("calc-start");
@@ -5117,6 +5156,20 @@
     if (!pick.length) {
       if (Array.isArray(cfg?.logics) && cfg.logics.length === 0) {
         state.logicSelectionCleared = true;
+      } else if (ids.length && sel.options.length) {
+        for (const id of ids) {
+          if (allowed.has(id)) continue;
+          const o = document.createElement("option");
+          o.value = id;
+          o.textContent = logicDisplayName(id);
+          o.selected = true;
+          sel.appendChild(o);
+          allowed.add(id);
+        }
+        for (const o of sel.options) {
+          o.selected = ids.includes(o.value);
+        }
+        state.logicSelectionCleared = false;
       } else if (sel.options.length) {
         const fallback = allowed.has("RND") ? "RND" : (allowed.has("UT") ? "UT" : (allowed.has("UCT") ? "UCT" : (allowed.has("L5") ? "L5" : sel.options[0].value)));
         for (const o of sel.options) o.selected = o.value === fallback;
@@ -5473,7 +5526,7 @@
     ensureLogicLineKeys();
     ensureDefaultLogicLines();
     const sel = $("calc-logic");
-    const prev = selectedLogicIds();
+    const prev = logicIdsForFillPreserve();
     sel.innerHTML = "";
     for (const key of state.logicLineKeys) {
       const o = document.createElement("option");
@@ -9102,7 +9155,6 @@ ${referenceBlock}
     const finishBoot = () => {
       state.deferConfigSave = false;
       startPeriodicConfigSave();
-      saveConfig();
       void completeLiveInitAfterFormReady().catch((err) => {
         noteTechError(`live-init-after-form: ${err?.message || err}`);
       });
@@ -9121,7 +9173,6 @@ ${referenceBlock}
   try {
     state.deferConfigSave = true;
     window.__mlFinresp.deferBrokerConnect = true;
-    fillLogicSelect();
     fillLogicEditor();
     initTradingPeriodsPanel();
     initIndicatorToggles();
@@ -9132,7 +9183,6 @@ ${referenceBlock}
     applySavedConfig();
     initLiveGoal();
     initLiveNotify();
-    fillLogicSelect();
     updatePositionSlHint();
     updateAtParamsSummary();
     initOptButtonIcons();
