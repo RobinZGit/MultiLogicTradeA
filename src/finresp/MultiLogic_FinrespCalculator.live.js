@@ -3324,18 +3324,9 @@
     };
   }
 
-  /** Собрать полный JSON-протокол истории сделок. */
-  function buildTradeHistoryProtocol() {
-    syncTradeHistoryFromSources({ force: true });
-    const hist = ensureLiveTradeHistory().slice().sort(
-      (a, b) => (Date.parse(a.when || 0) || 0) - (Date.parse(b.when || 0) || 0)
-    );
-    const done = hist.filter((h) => !h.active);
-    const { legToTradeId, remainingLegs } = buildReplayLegTradeMap();
-    const trades = hist.map(tradeHistoryProtocolTradeRow);
-    const closeEvents = done
-      .map((e) => tradeHistoryProtocolClosePacket(e, legToTradeId))
-      .filter(Boolean);
+  /** Открытые лоты для протокола / persist (replay из RAM, без брокера). */
+  function buildProtocolOpenLots() {
+    const { remainingLegs } = buildReplayLegTradeMap();
     const openLotsByKey = new Map();
     for (const leg of remainingLegs) {
       if (!leg.pieces) continue;
@@ -3357,6 +3348,22 @@
       });
       openLotsByKey.set(leg.key, row);
     }
+    return [...openLotsByKey.values()];
+  }
+
+  /** Собрать полный JSON-протокол истории сделок (только RAM, без API брокера). */
+  function buildTradeHistoryProtocol() {
+    syncTradeHistoryFromSources({ force: true });
+    const hist = ensureLiveTradeHistory().slice().sort(
+      (a, b) => (Date.parse(a.when || 0) || 0) - (Date.parse(b.when || 0) || 0)
+    );
+    const done = hist.filter((h) => !h.active);
+    const { legToTradeId } = buildReplayLegTradeMap();
+    const trades = hist.map(tradeHistoryProtocolTradeRow);
+    const closeEvents = done
+      .map((e) => tradeHistoryProtocolClosePacket(e, legToTradeId))
+      .filter(Boolean);
+    const openLots = buildProtocolOpenLots();
     const legToOpenTradeId = {};
     for (const [legId, tradeId] of legToTradeId.entries()) legToOpenTradeId[String(legId)] = tradeId;
     const sessionMeta = liveProtocolSessionMeta();
@@ -3376,7 +3383,7 @@
       trades,
       closeEvents,
       sessionEvents,
-      openLots: [...openLotsByKey.values()]
+      openLots
     };
   }
 
@@ -3607,13 +3614,13 @@
 <script>MLTradeProtocol.boot();</script></body></html>`;
   }
 
-  /** Открыть HTML-протокол и скачать автономный .html-файл. */
+  /** Открыть HTML-протокол и скачать автономный .html-файл (без брокера и без перезагрузки SPA). */
   async function exportTradeHistoryProtocolFile() {
     if (!isLiveMode()) return;
+    if (exportTradeHistoryProtocolFile._busy) return;
+    exportTradeHistoryProtocolFile._busy = true;
     try {
       const payload = buildTradeHistoryProtocol();
-      try { sessionStorage.setItem(PROTOCOL_STORAGE_KEY, JSON.stringify(payload)); } catch (_) { /* quota */ }
-      window.open(assetUrl("MultiLogic_TradeHistoryProtocol.html"), "_blank");
       const day = new Date().toISOString().slice(0, 10);
       const mode = payload.mode || "live";
       const sid = (payload.sessionId || "sess").replace(/[^\w-]+/g, "").slice(0, 24);
@@ -3621,11 +3628,17 @@
       const html = await buildStandaloneProtocolHtml(payload);
       const blob = new Blob([html], { type: "text/html;charset=utf-8" });
       const url = URL.createObjectURL(blob);
+      // Не assetUrl("MultiLogic_TradeHistoryProtocol.html"): на GitHub Pages это SPA → снова калькулятор и пароль.
+      const preview = window.open(url, "_blank", "noopener");
+      if (!preview) {
+        setCalcStatus("Протокол скачан. Для предпросмотра в новой вкладке разрешите всплывающие окна.");
+      }
       const a = document.createElement("a");
       a.href = url;
       a.download = filename;
       a.click();
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 120_000);
+      try { sessionStorage.setItem(PROTOCOL_STORAGE_KEY, JSON.stringify(payload)); } catch (_) { /* quota */ }
       noteLiveTech(
         "live-trade-protocol",
         `saved ${filename}`,
@@ -3633,6 +3646,8 @@
       );
     } catch (err) {
       noteLiveTech("live-trade-protocol", err.message || String(err));
+    } finally {
+      exportTradeHistoryProtocolFile._busy = false;
     }
   }
 
@@ -6637,7 +6652,7 @@
       payload.tradeHistory = hist.filter((h) => !h.fake && h.mode !== "sandbox").map(cloneTradeHistoryRow);
       payload.sessionEvents = ensureLiveSessionEvents().map(cloneSessionEventRow);
       try {
-        payload.openLots = buildTradeHistoryProtocol().openLots || [];
+        payload.openLots = buildProtocolOpenLots();
       } catch (_) { /* ignore during persist */ }
     }
     return payload;

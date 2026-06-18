@@ -369,3 +369,13 @@ test('conjugate logics: engine export + UI button between help and copy', () => 
   assert.match(css, /\.logic-line-conjugate-btn/);
   assert.match(bootSrc, /logic-line-help-btn[\s\S]*logic-line-conjugate-btn[\s\S]*logic-line-copy-btn/);
 });
+
+test('trade protocol export: blob preview, not SPA protocol html url', () => {
+  const liveSrc = fs.readFileSync(livePath, 'utf8');
+  const block = liveSrc.match(/async function exportTradeHistoryProtocolFile\(\)[\s\S]*?^  \}/m)?.[0] || '';
+  assert.ok(block.length > 40, 'exportTradeHistoryProtocolFile body');
+  assert.doesNotMatch(block, /window\.open\(assetUrl\("MultiLogic_TradeHistoryProtocol\.html"\)/);
+  assert.match(block, /createObjectURL/);
+  assert.match(block, /window\.open\(url/);
+  assert.match(liveSrc, /function buildProtocolOpenLots/);
+});
