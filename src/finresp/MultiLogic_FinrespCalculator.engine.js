@@ -5290,7 +5290,13 @@
     return Math.max(24, Math.min(72, Math.floor(span / 14)));
   }
 
-  const CALC_PROGRESS = { LOAD_MAX: 33, FINRESP_START: 33, FINRESP_MAX: 66, RUN_MAX: 99 };
+  const CALC_PROGRESS = {
+    LOAD_MAX: 33,
+    FINRESP_START: 33,
+    FINRESP_MAX: 66,
+    CHARTS_START: 88,
+    RUN_MAX: 99
+  };
 
   /** Подпрограмма `lerpCalcProgress`. */
   function lerpCalcProgress(from, to, fraction) {
@@ -5585,7 +5591,7 @@
       );
     }
     if (!shouldAbortRun(opts)) {
-      emitRunProgress(opts, CALC_PROGRESS.RUN_MAX, "Расчёт FINRESP: готово");
+      emitRunProgress(opts, CALC_PROGRESS.CHARTS_START - 1, "Расчёт FINRESP: данные готовы · графики…");
     }
     const agg = aggregateFinresp(perSec);
     return {
@@ -5815,7 +5821,7 @@
       );
     }
     if (!shouldAbortRun(opts)) {
-      await emitRunProgressAsync(opts, CALC_PROGRESS.RUN_MAX, "Расчёт FINRESP: готово");
+      await emitRunProgressAsync(opts, CALC_PROGRESS.CHARTS_START - 1, "Расчёт FINRESP: данные готовы · графики…");
     }
     const agg = aggregateFinresp(perSec);
     return {

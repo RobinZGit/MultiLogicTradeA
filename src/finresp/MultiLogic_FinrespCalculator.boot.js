@@ -22,7 +22,8 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-18-equity-pause-hints-v22";
+  const CALC_PAGE_VERSION = "2026-06-18-equity-reuse-v23";
+  const CHART_ENRICH_LIGHT_MIN_INSTRUMENTS = 16;
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -6798,20 +6799,14 @@
   }
 
   /** OHLC + индикаторы всех выбранных логик для строк графика. */
-  function enrichChartRowsForDisplay(rows, sec) {
+  function enrichChartRowsForDisplay(rows, sec, enrichOpts) {
     const pack = packForSec(sec);
     if (!pack?.length || !rows?.length) return rows;
-    const cache = indicatorCacheForPack(pack);
-    if (!cache) return rows;
     const timeToIdx = new Map(pack.map((c, i) => [c.time, i]));
-    const p = params();
-    const indicators = indicatorSelection();
-    const specs = selectedLogicIds()
-      .map((id) => E.resolveLogicSpec(id, state.customLines, p, indicators))
-      .filter((s) => s && !s.disabled);
+    const light = enrichOpts?.light
+      ?? (state.lastInstruments?.length || 0) >= CHART_ENRICH_LIGHT_MIN_INSTRUMENTS;
     let prevPos = 0;
-    return rows.map((r) => {
-      const idx = timeToIdx.get(r.time);
+    const withOhlc = (r, idx) => {
       const posAfter = r?.pos ?? 0;
       const inferred = E.tradeMarkersFromBar
         ? E.tradeMarkersFromBar(prevPos, posAfter, r?.posStop ?? null)
@@ -6819,17 +6814,33 @@
       prevPos = posAfter;
       if (idx == null) return { ...r, ...inferred };
       const candle = pack[idx];
-      const ind = E.collectChartIndicatorsForSpecs
-        ? E.collectChartIndicatorsForSpecs(cache, specs, idx)
-        : {};
       return {
         ...r,
         ...inferred,
         open: r.open ?? candle?.open ?? r.close,
         high: r.high ?? candle?.high ?? r.close,
-        low: r.low ?? candle?.low ?? r.close,
-        ...ind
+        low: r.low ?? candle?.low ?? r.close
       };
+    };
+    if (light) {
+      return rows.map((r) => withOhlc(r, timeToIdx.get(r.time)));
+    }
+    const cache = indicatorCacheForPack(pack);
+    if (!cache) return rows.map((r) => withOhlc(r, timeToIdx.get(r.time)));
+    const p = params();
+    const indicators = indicatorSelection();
+    const specs = selectedLogicIds()
+      .map((id) => E.resolveLogicSpec(id, state.customLines, p, indicators))
+      .filter((s) => s && !s.disabled);
+    prevPos = 0;
+    return rows.map((r) => {
+      const idx = timeToIdx.get(r.time);
+      const row = withOhlc(r, idx);
+      if (idx == null) return row;
+      const ind = E.collectChartIndicatorsForSpecs
+        ? E.collectChartIndicatorsForSpecs(cache, specs, idx)
+        : {};
+      return { ...row, ...ind };
     });
   }
 
@@ -7677,6 +7688,27 @@ ${svg}
     return { runs, times };
   }
 
+  /** Можно взять perSec основного расчёта вместо повторного runMulti (1 логика, без stopper/pause). */
+  function canReuseMainResultForEquityRuns(a, b, keys) {
+    if (!keys?.length || keys.length !== 1) return false;
+    const lr = state.lastResult;
+    if (!lr?.perSec?.length || lr.a !== a || lr.b !== b) return false;
+    const sc = stopperConfig();
+    if (sc.useSl || sc.useTp) return false;
+    if (recoveryStopConfig().enabled) return false;
+    if (randomPriceShiftEnabled()) return false;
+    const selected = selectedLogicIds();
+    return selected.length === 1 && selected[0] === keys[0];
+  }
+
+  function equityRunsFromMainResult(times, key) {
+    const rows = E.buildPortfolioEquityRows(state.lastResult.perSec, times);
+    return {
+      runs: { [key]: { rows, finresp: rows.length ? rows.at(-1).eq : 0 } },
+      times
+    };
+  }
+
   /** Асинхронный расчёт equity по каталогу логик (с yield между логиками). */
   async function calcLogicEquityRunsAsync(a, b, onProgress) {
     if (!state.packs.length) return null;
@@ -7695,14 +7727,30 @@ ${svg}
     const times = pack.slice(a, b + 1).map((c) => c.time).filter(Boolean);
     if (!times.length) return null;
     const keys = equitySimLogicKeys();
+    if (canReuseMainResultForEquityRuns(a, b, keys)) {
+      const key = keys[0];
+      if (onProgress) onProgress(0, keys.length, key);
+      await yieldToUi();
+      const result = equityRunsFromMainResult(times, key);
+      if (onProgress) onProgress(keys.length, keys.length, key);
+      state.equityRunsCache = { fp: cacheFp, data: result };
+      return result;
+    }
     const indicators = indicatorSelection();
     const runs = {};
+    const progressSpan = Math.max(1, CALC_PROGRESS.RUN_MAX - CALC_PROGRESS.FINRESP_START);
     for (let i = 0; i < keys.length; i++) {
       const key = keys[i];
       if (onProgress) onProgress(i, keys.length, key);
       await yieldToUi();
       const spec = E.resolveLogicSpec(key, state.customLines, p, indicators);
       if (!spec || spec.disabled || !EQUITY_RUN_TYPES.has(spec.type)) continue;
+      const equityOnProgress = onProgress
+        ? (pct) => {
+          const sub = Math.max(0, Math.min(1, (pct - CALC_PROGRESS.FINRESP_START) / progressSpan));
+          onProgress(i + sub, keys.length, key);
+        }
+        : undefined;
       const { perSec } = await E.runMultiAsync(
         state.packs,
         spec,
@@ -7711,7 +7759,11 @@ ${svg}
         p,
         vol,
         EQUITY_STOPPER_OFF,
-        { ...finrespRunOptions({ forEquity: true }), yieldUi: true }
+        {
+          ...finrespRunOptions({ forEquity: true }),
+          yieldUi: true,
+          onProgress: equityOnProgress
+        }
       );
       const rows = E.buildPortfolioEquityRows(perSec, times);
       runs[key] = { rows, finresp: rows.length ? rows.at(-1).eq : 0 };
