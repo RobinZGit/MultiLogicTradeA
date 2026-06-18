@@ -5819,6 +5819,11 @@ ${renderBlock}
     state.live.manualFlatten = false;
   }
 
+  /** Ручное сведение: reconcile держит цели = 0, пока пользователь снова не нажмёт «Начать торговлю». */
+  function setLiveManualFlatten(active = true) {
+    state.live.manualFlatten = !!active;
+  }
+
   /** Принудительно показать пустой список позиций (без ожидания опроса брокера). */
   function forceClearLivePositionsPanel() {
     state.live.openPositions = [];
@@ -9414,6 +9419,10 @@ ${referenceBlock}
       noteLiveReconcileAbort("другая операция", "tradingActionBusy=true");
       return;
     }
+    if (state.live.sellAllInFlight) {
+      noteLiveReconcileAbort("закрытие всех позиций", "sellAllInFlight=true");
+      return;
+    }
     const sandbox = isLiveSandbox();
     if (!sandbox) {
       if (!(await ensureTbankTokenUnlocked({ interactive: false, openUi: false }))) {
@@ -9658,7 +9667,7 @@ ${referenceBlock}
       refreshLiveChartsUi();
       await runLiveStopMonitorTick({ source: "candle", includePositionStops: true });
     }
-    if (state.live.active && liveFinrespReady() && !state.live.tradingActionBusy) {
+    if (state.live.active && liveFinrespReady() && !state.live.tradingActionBusy && !state.live.sellAllInFlight) {
       await liveTradingReconcile();
       queueLiveChartsRefresh();
     }
@@ -9677,7 +9686,7 @@ ${referenceBlock}
       // OB active mode: refresh order book cache frequently when OB logics are selected.
       if (liveOrderBookActivePollNeeded()) startLiveOrderBookActivePoll();
       else if (state.live.orderBookActiveTimer) stopLiveOrderBookActivePoll();
-      if (state.live.candleRefreshBusy || (state.live.active && state.live.reconcileBusy) || state.live.tradingActionBusy) return;
+      if (state.live.candleRefreshBusy || (state.live.active && state.live.reconcileBusy) || state.live.tradingActionBusy || state.live.sellAllInFlight) return;
       livePollTickAfterRefresh()
         .then((ok) => {
           if (!ok) {
@@ -9858,29 +9867,38 @@ ${referenceBlock}
     const sb = ensureSandboxState();
     let sent = 0;
     const failed = [];
-    while (sb.open.size > 0) {
-      const pos = sb.open.values().next().value;
-      if (!pos) break;
-      const key = sandboxPosKey(pos.market || (pos.isFuture ? "futures" : "shares"), pos.ticker || pos.sec);
-      try {
-        const ok = await closeSandboxPositionAtMarket(pos, {
-          skipUiRefresh: true,
-          tradeSource,
-          tradeSourceLabel
-        });
-        if (!ok) {
-          failed.push(`${pos.ticker}: не удалось закрыть`);
+    const runPass = async (keys) => {
+      for (const key of keys) {
+        const pos = sb.open.get(key);
+        if (!pos || pos.pieces <= 0) continue;
+        try {
+          const ok = await closeSandboxPositionAtMarket(pos, {
+            skipUiRefresh: true,
+            tradeSource,
+            tradeSourceLabel
+          });
+          if (!ok) {
+            failed.push(`${pos.ticker}: не удалось закрыть`);
+            sb.open.delete(key);
+            continue;
+          }
+          sent += 1;
+          renderSandboxPortfolioQuick();
+          syncSandboxPositionsTable();
+          await yieldToUi();
+        } catch (err) {
+          failed.push(`${pos.ticker}: ${err.message}`);
           sb.open.delete(key);
-          continue;
         }
-        sent += 1;
-        renderSandboxPortfolioQuick();
-        syncSandboxPositionsTable();
-        await yieldToUi();
-      } catch (err) {
-        failed.push(`${pos.ticker}: ${err.message}`);
-        sb.open.delete(key);
       }
+    };
+    await runPass([...sb.open.keys()]);
+    if (sb.open.size > 0) {
+      rebuildSandboxFromLedger(sb);
+      await runPass([...sb.open.keys()]);
+    }
+    if (sb.open.size > 0) {
+      noteLiveTech("sandbox-close-all-leftover", `осталось ${sb.open.size} поз.`, [...sb.open.keys()].join(", "));
     }
     sb.open.clear();
     state.live.openPositions = [];
@@ -9892,7 +9910,8 @@ ${referenceBlock}
   async function sellAllMarketLive() {
     if (!isLiveMode()) return;
     if (state.live.sellAllInFlight) return;
-    clearLiveManualFlatten();
+    setLiveManualFlatten(true);
+    noteLiveTech("live-manual-flatten", "вкл — reconcile к нулю до «Начать торговлю»");
     state.live.sellAllInFlight = true;
     state.live.tradingActionBusy = true;
     cancelQueuedLiveChartsRefresh();
