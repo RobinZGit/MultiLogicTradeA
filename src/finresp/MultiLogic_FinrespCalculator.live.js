@@ -3582,7 +3582,7 @@
     } else if (!hasDate) {
       $("live-goal-end-date").value = defaultLiveGoalEndDate();
     }
-    if (!hasPct && $("live-goal-ann-pct")) $("live-goal-ann-pct").value = "100";
+    if (!hasPct && $("live-goal-ann-pct")) $("live-goal-ann-pct").value = "1000";
     syncLiveTradingGoalUi();
   }
 
