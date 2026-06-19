@@ -65,6 +65,7 @@ th{background:#f8fafc;width:28%;}
 <a href="#results">Результаты</a> ·
 <a href="#window">Окно</a> ·
 <a href="#extra">Доп. параметры</a> ·
+<a href="#tbru">TBRU</a> ·
 <a href="#ob-dsl">OB.* стакан</a> ·
 <a href="#charts">Графики</a> ·
 <a href="#tbank">T-Bank</a> ·
@@ -92,6 +93,7 @@ th{background:#f8fafc;width:28%;}
 <li><code>MultiLogic_FinrespCalculator.stop-monitor.js</code> — единая оценка стопов (портфель, @@PauseOnDrawdown, позиционные SL/TP) для live</li>
 <li><code>MultiLogic_FinrespCalculator.charts.js</code> — интерактивные графики по инструментам (свечи, pan/zoom)</li>
 <li><code>MultiLogic_FinrespCalculator.live.js</code> — T-Bank и блок «Реальная торговля»</li>
+<li><code>bond-tbru-data.js</code>, <code>bond-tbru-fetch.js</code>, <code>bond-tbru-procedure.js</code> — логика <strong>TBRU</strong> (портфель облигаций по составу фонда, §<a href="#tbru">9.8</a>)</li>
 </ul>
 <p>Для MOEX нужен <strong>http://</strong>, не <code>file://</code>.</p>
 <ul>
@@ -122,7 +124,7 @@ th{background:#f8fafc;width:28%;}
 <tr><td><strong>Выбрать все фьючерсы</strong></td><td>Отметить все фьючерсы (все подходящие серии по префиксам и периоду)</td></tr>
 <tr><td>Подсказка под списком</td><td>Число выбранных инструментов и ограничение периода по ТФ</td></tr>
 </table>
-<p class="note">Список заполняется из полей «Тикеры акций» и «Префиксы фьючерсов» в доп. параметрах (кнопки «Подобрать»).</p>
+<p class="note">Список заполняется из полей «Тикеры акций» и «Префиксы фьючерсов» в доп. параметрах (кнопки «Подобрать»). Для логики <strong>TBRU</strong> выбор акций/фьючерсов <em>не нужен</em> — расчёт идёт по виртуальному тикеру <code>TBRU</code> и списку облигаций фонда (§<a href="#tbru">9.8</a>).</p>
 
 <h2 id="period">5. Период, логика и кнопки расчёта</h2>
 <table>
@@ -426,6 +428,10 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 <p><strong>Назначение:</strong> контрольный шум — проверка расчёта FINRESP и инфраструктуры без рыночной логики.</p>
 <p><strong>Принцип:</strong> на каждом баре независимо с вероятностью 12% сигнал <code>Rand(P=12%)</code> на long и отдельно на short. Фиксированные <code>SL[1%]</code> и <code>TP[5%]</code>. Regime не используется.</p>
 
+<h4>TBRU — портфель облигаций (состав БПИФ)</h4>
+<p><strong>Назначение:</strong> имитация вложения в облигации из состава БПИФ «Т-Капитал Облигации» (<a href="https://porti.ru/etf/holders/MOEX:TBRU">MOEX:TBRU</a> на porti.ru). Это <em>не</em> строка Op/Cl — отдельный тип <code>bond_tbru</code>. Подробно — §<a href="#tbru">9.8</a>.</p>
+<p><strong>Кратко:</strong> покупка <strong>жадно по текущей доходности</strong> (сначала самые доходные ISIN из списка фонда), лимит <code>min(100%, Volume% × Max positions) × депозит</code>, rebalance на каждом баре ТФ; в live — перечитывание состава с porti.ru.</p>
+
 <h4>TBC — test counter-bokovik (лонг)</h4>
 <p><strong>Назначение:</strong> контртрендовый лонг в боковике — покупка на перепроданности у нижней границы диапазона.</p>
 <p><strong>Regime:</strong> LinReg с <code>SlopeDead=0.05%</code>, <code>Entry=FlatOnly</code> — только когда рынок «без тренда».</p>
@@ -525,6 +531,60 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 <tr><td><strong>Префиксы фьючерсов</strong> + <strong>Подобрать</strong></td><td>Префиксы корня (Si, BR…); подбор и расчёт учитывают экспирацию и период</td></tr>
 </table>
 
+<h3 id="tbru">9.8. TBRU — портфель облигаций (состав фонда)</h3>
+<p>Логика <strong>TBRU</strong> в списке «Логика» моделирует покупку отдельных облигаций из состава БПИФ <strong>Т-Капитал Облигации</strong> (тикер <code>TBRU</code> на MOEX). Состав (ISIN и доли) берётся с <a href="https://porti.ru/etf/holders/MOEX:TBRU">porti.ru</a>; в каталоге калькулятора — резервная копия ~67 бумаг с номиналом, купоном и весом.</p>
+
+<h4>Что не нужно для TBRU</h4>
+<ul>
+<li>Выбор акций/фьючерсов в §4 — расчёт идёт по одному виртуальному инструменту <code>TBRU</code>.</li>
+<li>Строки Op/Cl, Regime, индикаторы SMA/Stoch и т.д. — не участвуют (тип <code>bond_tbru</code>).</li>
+<li>Стакан <code>OB.*</code> и <code>@OBT</code> — не применяются.</li>
+</ul>
+
+<h4>Лимит вложений (deploy)</h4>
+<p>Без маржи, как у остального портфеля (§9.1.1):</p>
+<p><code>deploy ₽ = депозит × min(100%, Volume% × Max positions)</code></p>
+<p>Пример: депозит 10&nbsp;000 ₽, Volume 10%, Max positions 10 → deploy 10&nbsp;000 ₽ (100%). При Volume 10% и Max positions 5 → deploy 5&nbsp;000 ₽.</p>
+<p>FINRESP по TBRU = итоговая equity портфеля облигаций (кэш + переоценка + купоны) <strong>минус</strong> deploy на старте периода.</p>
+
+<h4>Аллокация: всегда жадно по доходности</h4>
+<p>Целевые позиции <strong>не</strong> строятся пропорционально весам фонда. На каждом rebalance свободный кэш (в пределах deploy) вкладывается так:</p>
+<ol>
+<li>Бумаги из актуального состава сортируются по <strong>текущей доходности</strong>: годовой купон ÷ чистая цена, % годовых (при равенстве — по весу в фонде).</li>
+<li>Round-robin: по кругу +1 шт. от более доходных к менее доходным, пока хватает кэша (с учётом комиссии).</li>
+<li>Порядок сделок: сначала <strong>продажи</strong>, затем покупки — от более доходных к менее доходным.</li>
+</ol>
+<p>На малом депозите (например 10&nbsp;000 ₽) это даёт ~10 разных облигаций с более высоким купоном (корпоративные/лизинговые ~16%), а не только 1–2 ОФЗ с большим весом в фонде (~11%). На крупном депозите тот же принцип: сначала набираются самые доходные имена, затем следующие по списку.</p>
+<p class="note">Веса porti.ru используются для справки и сортировки при равной доходности; при покупке приоритет — <em>yield</em>, не доля в ETF.</p>
+
+<h4>Расчёт «Рассчитать» (бэктест)</h4>
+<ul>
+<li>На каждом баре выбранного <strong>Таймфрейма</strong> — rebalance к целевым позициям, начисление <strong>купонов</strong> (дискретно в «купонные» дни, не ежедневный шум), погашение по номиналу в дату maturity (если задана).</li>
+<li>Цены облигаций в симуляции — из каталога (чистая ~98% номинала) + линейный НКД; в день купона — <strong>откупон</strong> (зубчик грязной цены вниз).</li>
+<li>Результат в блоке FINRESP — одна строка <code>TBRU</code>; в протоколе — агрегат <code>bySec.TBRU</code>, суммы покупок/продаж, число позиций.</li>
+<li>Портфельный Stopper (@@SL/@@TP) и позиционные @SL/@TP к облигациям TBRU <em>не применяются</em> — только rebalance и купоны.</li>
+</ul>
+
+<h4>Графики TBRU (§<a href="#charts-tbru">10.3</a>)</h4>
+<p>После расчёта: кривая <strong>equity портфеля облигаций</strong> и отдельные mini-графики по каждой купленной бумаге (ISIN). На графике облигации — ▲ покупка, ▼ продажа, жёлтый вертикальный штрих — <strong>день купона</strong>; цена — <strong>грязная</strong> (с НКД).</p>
+
+<h4>Live и песочница</h4>
+<ul>
+<li>На каждом опросе по ТФ: обновление состава с porti.ru (до 3 попыток на бар; при локальной разработке — прокси <code>GET /finresp-tbru-holdings</code> на tech-log сервере <code>:4201</code>), пересчёт целей, <strong>reconcile</strong> с брокером/песочницей.</li>
+<li>ISIN, которых нет в текущем списке фонда, получают цель <strong>0</strong> (продать «сироту»).</li>
+<li>В <strong>песочнице (фейк)</strong> — те же цели; купоны начисляются по модели каталога; цены — из sandbox-котировок облигаций.</li>
+<li>Параметры @@ReverseSides / ReverseSignals, @@PauseOnDrawdown и индикаторы на TBRU не влияют.</li>
+</ul>
+
+<h4>Файлы</h4>
+<ul>
+<li><code>bond-tbru-data.js</code> — каталог ISIN, веса, купоны;</li>
+<li><code>bond-tbru-fetch.js</code> — загрузка/разбор porti.ru;</li>
+<li><code>bond-tbru-procedure.js</code> — deploy, жадная аллокация, бэктест, live-targets;</li>
+<li><code>logics/tbru.js</code> — регистрация в каталоге.</li>
+</ul>
+<p class="note">Тесты: <code>tests/finresp/bond-tbru.test.mjs</code> (deploy, жадная покупка, купоны, бэктест на 10k).</p>
+
 <h3>Кнопки «Оптимизировать»</h3>
 <p>При нажатии перебираются допустимые значения параметра (или комбинации индикаторов); в поле подставляется лучшее по FINRESP в текущем окне. Повторное нажатие — остановка. Во время оптимизации поля блокируются.</p>
 
@@ -532,7 +592,7 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 <table>
 <tr><th>Блок</th><th>Назначение</th></tr>
 <tr><td><strong>Графики по инструментам</strong> (<code>calc-chart</code>)</td><td>Интерактивные mini-графики: свечи OHLC, входы/выходы. Линии индикаторов — <strong>по кнопке</strong> «Показать индикаторы» на каждом графике (§10.1), не сразу при расчёте</td></tr>
-<tr><td><strong>Equity портфеля</strong> (<code>calc-chart-equity</code>)</td><td>Суммарная кривая equity и сравнение логик UT, UCT, L5, L1…L4 (без pan/zoom; линия close/equity)</td></tr>
+<tr><td><strong>Equity портфеля</strong> (<code>calc-chart-equity</code>)</td><td>Суммарная кривая equity и сравнение логик UT, UCT, L5, L1…L4 (без pan/zoom; линия close/equity). Для <strong>TBRU</strong> — отдельная equity кривая портфеля облигаций (§<a href="#charts-tbru">10.3</a>)</td></tr>
 </table>
 
 <h3>10.1. Графики по инструментам (<code>calc-chart</code>)</h3>
@@ -597,12 +657,21 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 <p>Блок <strong>«Тех. информация»</strong> внизу формы: после открытия графиков — строки <code>chart.ТИКЕР: …</code> (число входов/выходов, posStop, линия FINRESP). Скопируйте и пришлите при сбое отображения.</p>
 
 <h4>Файлы и версия</h4>
-<p>Интерактивная отрисовка — <code>MultiLogic_FinrespCalculator.charts.js</code> (рядом с <code>engine.js</code>, <code>cycle-cooperative.js</code>, <code>stop-monitor.js</code>, <code>live.js</code>). Версия страницы — бейдж <code>pageVersion</code> (актуальная: <code>2026-06-18-instruments-picker-unlock-v28</code>). После обновления — <strong>Ctrl+Shift+R</strong>.</p>
+<p>Интерактивная отрисовка — <code>MultiLogic_FinrespCalculator.charts.js</code> (рядом с <code>engine.js</code>, <code>cycle-cooperative.js</code>, <code>stop-monitor.js</code>, <code>live.js</code>). Версия страницы — бейдж <code>pageVersion</code> (актуальная: <code>2026-06-19-tbru-help-v29</code>). После обновления — <strong>Ctrl+Shift+R</strong>.</p>
 
 <h3>10.2. Equity портфеля (<code>calc-chart-equity</code>)</h3>
 <p>Отдельный блок ниже ползунков: кривая equity <strong>только по выбранным в списке «Логика»</strong> стратегиям (не по всему каталогу), справочные кривые — тоже только для отмеченных логик, портфельный стоппер. Формат — линия по equity, без свечей и без pan/zoom.</p>
 <p><strong>Пауза по просадке (@@PauseOnDrawdown / PerLogic):</strong> на mini-графике каждой логики — <strong>белая вертикальная полоса</strong> на интервалах, когда логика отключена; серые пунктирные линии на границах; горизонтальный пунктир — уровень equity в момент отключения. Источник: события <code>recoveryStop</code> после «Рассчитать» и журнал live <code>sessionEvents</code>.</p>
 <p>Над блоком — примечание: превращения FINRESP под каждым equity-графиком считаются за <strong>тот же таймфрейм</strong>, что поле «Таймфрейм» расчёта (1 мин … 1 день). Полоска баров Δ: зелёный — рост за свечу/период, розовый — просадка; на неактивных логиках — синие оттенки. Кнопка <strong>«Копировать график»</strong> — PNG кривой и полоски Δ.</p>
+
+<h3 id="charts-tbru">10.3. Графики TBRU (облигации)</h3>
+<p>При выбранной логике <strong>TBRU</strong> после «Рассчитать» под equity портфеля появляется блок <strong>«TBRU — облигации»</strong>:</p>
+<ul>
+<li><strong>Equity портфеля</strong> — суммарная кривая (кэш + MTM облигаций) за период окна.</li>
+<li><strong>Mini-графики по ISIN</strong> — только бумаги, по которым были сделки; свечи по <strong>грязной</strong> цене (чистая + НКД), в день купона — скачок вниз (откупон).</li>
+<li><strong>▲</strong> — покупка, <strong>▼</strong> — продажа; жёлтый пунктир — день выплаты купона (подсказка с суммой ₽/шт).</li>
+</ul>
+<p class="note">Интерактивные графики облигаций используют тот же компонент <code>MLInstrumentChart</code>, что и акции; линии индикаторов на них не строятся.</p>
 
 <h2 id="tbank">11. Реальный счёт T-Bank и Алор</h2>
 <p>Сворачиваемые блоки внизу формы (после графиков; не путать с выбором «Кошелёк» и «Брокер» вверху). По умолчанию <strong>свёрнуты</strong>. При первом входе в live/tbank с сохранённым токеном, но без пароля в поле, появляется <strong>модальное окно</strong> расшифровки (после готовности Angular-формы).</p>
@@ -623,7 +692,7 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 <tr><td><strong>Песочница (фейк)</strong></td><td>Галочка под заголовком «Реальная торговля», по умолчанию выключена. Включена — спокойная <em>зелёная</em> тема блока; робот и ручные заявки <strong>не уходят на биржу</strong>, а симулируются: портфель меняется от суммы счёта на момент включения, комиссия — по полю <strong>Commission, %</strong> калькулятора. Продажа без лонга открывает <strong>шорт</strong>. Действует <strong>портфельный лимит gross</strong> (§9.1.1). В «Позициях» — открытые и закрытые фейк-позиции с пометкой <code>(фейк)</code>. Снятие галочки — все фейк-позиции и фейк-заявки удаляются, портфель снова показывает <strong>текущую реальную</strong> сумму T-Bank</td></tr>
 <tr><td><strong>Бейдж «Логики»</strong></td><td>Рядом со статусом — краткий список выбранных логик (<code>UT → L5 +2</code>). <strong>Клик</strong> раскрывает полный порядок приоритета (как в блоке «Логика» калькулятора). Обновляется при смене выбора</td></tr>
 <tr><td>Бейдж статуса</td><td>«остановлена» / «торговля активна» / «внимание» (оранжевый) / «ошибка» (красный, в т.ч. в зелёной песочнице); в песочнице — «· песочница (фейк)». При старте — <strong>подготовка: свечи … и FINRESP N/M…</strong> (прогресс <code>liveFinrespBootstrap</code> в тех. информации)</td></tr>
-<tr><td><strong>Бейдж версии</strong> (<code>pageVersion</code>)</td><td>Справа от статуса — версия страницы (проверка после Ctrl+Shift+R). Актуальная: <code>2026-06-18-instruments-picker-unlock-v28</code></td></tr>
+<tr><td><strong>Бейдж версии</strong> (<code>pageVersion</code>)</td><td>Справа от статуса — версия страницы (проверка после Ctrl+Shift+R). Актуальная: <code>2026-06-19-tbru-help-v29</code></td></tr>
 <tr><td><strong>@@PauseOnDrawdown</strong> (toolbar)</td><td>Галочки в панели live — синхронизируются с «Параметрами управления»: <strong>портфельная</strong> пауза (§5.2) и <strong>@@PauseOnDrawdownPerLogic</strong> (отключение отдельных логик без остановки сессии)</td></tr>
 <tr><td><strong>Чипы логик «отключена»</strong></td><td>В свёрнутом выборе логик — пометка у логик, временно исключённых из стека по просадке (PerLogic). Состояние сохраняется в config и live-сессии</td></tr>
 <tr><td><strong>Монитор стопов</strong></td><td>Фоновый опрос ~8 с: портфельный @@SL/@@TP, @@PauseOnDrawdown, позиционные SL/TP (уведомления). В песочнице портфельный Stopper <em>закрывает</em> фейк-позиции; на реале — только notify (§9.4)</td></tr>
@@ -643,13 +712,25 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 <tr><td><strong>Портфель (все позиции)</strong></td><td>Стоимость счёта с позициями (GetPortfolio). В песочнице — подпись «Портфель (фейк, симуляция)»: стартовая сумма на момент включения галочки ± фейк-сделки и переоценка открытых фейк-позиций</td></tr>
 <tr><td><strong>Комиссии уплачено (реально)</strong></td><td>Комиссии брокера из операций T-Bank (не модель калькулятора). В песочнице — «Комиссии (фейк, модель %)» по полю Commission %</td></tr>
 <tr><td><strong>Заявки в реальном времени</strong></td><td>Таблица активных и недавних заявок. В песочнице — «Заявки (фейк, симуляция)» с пометкой <code>(фейк)</code></td></tr>
+<tr><td><strong>TBRU (bond_tbru)</strong></td><td>Если в стеке логик выбрана <strong>TBRU</strong>: на опросе — refresh состава porti.ru, жадные цели по доходности, reconcile облигаций (покупка/продажа лотов по ISIN). См. §<a href="#tbru">9.8</a>. Ручная заявка в «Заявке» и TBRU-reconcile работают параллельно — ориентируйтесь на блок «Нереализованные позиции»</td></tr>
 </table>
 <p class="note">Не все тикеры MOEX доступны для торговли через API T-Bank (<code>api_trade_available_flag</code>). При «выбрать все акции» калькулятор предпочитает листинг MOEX (TQBR), проверяет статус до заявки и <strong>пропускает</strong> недоступные бумаги, продолжая торговлю по остальным. Токен должен иметь право на торговлю (не только чтение).</p>
 <p class="note">При live без предварительного «Рассчитать» или при расхождении окон свечей возможно предупреждение <strong>«FINRESP пустой»</strong> / <code>windowSkipped</code> — свечи и опрос продолжаются, <strong>торговля не останавливается</strong>; сузьте выбор или нажмите «Рассчитать» для согласования с нижним блоком.</p>
 
 <h2 id="changelog">13. Изменения</h2>
 
-<h3 id="changelog-2026-06-18-v28">13.1. 18.06.2026 — отзывчивость UI, графики (v25–v28)</h3>
+<h3 id="changelog-2026-06-19-tbru">13.1. 19.06.2026 — TBRU, облигации (v29)</h3>
+<p>Сборка: <code>pageVersion=2026-06-19-tbru-help-v29</code>.</p>
+<table>
+<tr><th>Тема</th><th>Что сделано</th></tr>
+<tr><td><strong>Логика TBRU</strong></td><td>Портфель облигаций по составу БПИФ TBRU (porti.ru): тип <code>bond_tbru</code>, виртуальный тикер <code>TBRU</code>, модули <code>bond-tbru-*.js</code></td></tr>
+<tr><td><strong>Жадная аллокация</strong></td><td>Покупка <em>всегда</em> по текущей доходности (сначала самые доходные ISIN), round-robin +1 шт.; лимит deploy = <code>min(100%, Volume% × MaxPos) × депозит</code></td></tr>
+<tr><td><strong>Бэктест</strong></td><td>Rebalance на каждом баре ТФ, дискретные купоны, грязная цена с откупоном, графики equity и по облигациям</td></tr>
+<tr><td><strong>Live</strong></td><td>Обновление состава с porti, reconcile, продажа ISIN вне фонда; прокси <code>/finresp-tbru-holdings</code> для dev-сервера</td></tr>
+<tr><td><strong>Справка</strong></td><td>§9.8 TBRU, §10.3 графики облигаций; тесты <code>bond-tbru.test.mjs</code></td></tr>
+</table>
+
+<h3 id="changelog-2026-06-18-v28">13.2. 18.06.2026 — отзывчивость UI, графики (v25–v28)</h3>
 <p>Сборка: <code>pageVersion=2026-06-18-instruments-picker-unlock-v28</code>.</p>
 <table>
 <tr><th>Тема</th><th>Что сделано</th></tr>
@@ -662,7 +743,7 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 </table>
 <p class="note">Тесты: <code>cycle-cooperative.test.mjs</code>, полный <code>npm run test:finresp</code>.</p>
 
-<h3 id="changelog-2026-06-18">13.2. 18.06.2026 — CtgStoch, пауза, протокол</h3>
+<h3 id="changelog-2026-06-18">13.3. 18.06.2026 — CtgStoch, пауза, протокол</h3>
 <p>Ранее в тот же день. Сборка справки: <code>2026-06-18-ctg-futures-help-v20</code>.</p>
 <table>
 <tr><th>Тема</th><th>Что сделано</th></tr>
@@ -675,7 +756,7 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 </table>
 <p class="note">Тесты: <code>engine.recovery-stop.test.mjs</code> (per-logic pause), <code>live.source-contracts.test.mjs</code> (pause UI, protocol blob, sessionEvents), <code>live.refresh-guards.test.mjs</code>.</p>
 
-<h3 id="changelog-2026-06-17">13.3. 17.06.2026</h3>
+<h3 id="changelog-2026-06-17">13.4. 17.06.2026</h3>
 <p>Сводка доработок калькулятора и live-торговли за 17.06.2026. Сборка: <code>pageVersion=2026-06-17-stop-monitor-sandbox-v1</code>.</p>
 <table>
 <tr><th>Тема</th><th>Что сделано</th></tr>

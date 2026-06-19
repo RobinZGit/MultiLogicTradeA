@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-18-instruments-picker-unlock-v28";
+  const CALC_PAGE_VERSION = "2026-06-19-tbru-help-v29";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
