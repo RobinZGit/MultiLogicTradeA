@@ -2782,6 +2782,10 @@
    */
   function resolveLogicSpec(logicId, customLines, params, indicatorSelection) {
     const p = { ...DEFAULT_PARAMS, ...params };
+    const cat = LOG_REG?.get?.(logicId);
+    if (cat?.type === "bond_tbru") {
+      return { type: "bond_tbru", logicId, disabled: false };
+    }
     const rawLine = resolveLogicLineRaw(logicId, customLines);
     if (!String(rawLine).trim()) {
       return { type: "logic_line", parsed: null, line: "", logicId, disabled: true };
@@ -5911,6 +5915,10 @@
     BUILTIN_META,
     calcTradeVolume,
     portfolioGrossCapRub,
+    bondDeployPct: (vol) => (root.MultiLogicFinrespBondTbruProc?.bondDeployPct(vol) ?? 0),
+    bondDeployCapRub: (vol) => (root.MultiLogicFinrespBondTbruProc?.bondDeployCapRub(vol) ?? 0),
+    computeTbruTargets: (opts) => root.MultiLogicFinrespBondTbruProc?.computeTbruTargets(opts) || [],
+    runBondTbruBacktestAsync: (opts) => root.MultiLogicFinrespBondTbruProc?.simulateBondTbruBacktestAsync(opts),
     createPortfolioCap,
     runPacksOnTimeGrid,
     runPacksOnTimeGridAsync,

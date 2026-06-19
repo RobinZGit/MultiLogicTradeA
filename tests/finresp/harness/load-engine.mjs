@@ -30,6 +30,9 @@ const INDICATOR_SCRIPTS = [
 const LOGIC_SCRIPTS = [
   'parser.js',
   'registry.js',
+  join('..', 'bond-tbru-data.js'),
+  join('..', 'bond-tbru-fetch.js'),
+  join('..', 'bond-tbru-procedure.js'),
   'fragments.js',
   'rnd.js',
   'tbc.js',
@@ -50,6 +53,7 @@ const LOGIC_SCRIPTS = [
   'ftt_s.js',
   'cml.js',
   'cms.js',
+  'tbru.js',
   join('..', 'orderbook', '_eval.js'),
   'ob_sma.js',
   'ob_only.js',

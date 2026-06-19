@@ -6,6 +6,7 @@
  *   POST /finresp-tech-log  — mirror «Тех. информация»
  *   POST /finresp-broker-trace — append broker/deposit events (logs/finresp-broker-trace.txt)
  *   POST /finresp-notify    — email/SMS alerts (also logs to logs/finresp-notify.log)
+ *   GET  /finresp-tbru-holdings — состав БПИФ TBRU с porti.ru (JSON, CORS для браузера)
  *
  * Optional env for real delivery:
  *   ML_NOTIFY_SMSRU_API_ID   — SMS.ru API id (Russia +7)
@@ -147,6 +148,49 @@ function corsHeaders(origin) {
   };
 }
 
+const PORTI_TBRU_URL = 'https://porti.ru/etf/holders/MOEX:TBRU';
+const PORTI_ISIN_RE = /\b(SU|RU)[0-9A-Z]{10,12}\b/g;
+const PORTI_WEIGHT_RE = /\|\s*#\d+\s*\|\s*([\d.]+)\s*\|/g;
+
+function parsePortiTbruHtml(html) {
+  const text = String(html || '');
+  const isins = [];
+  const seen = new Set();
+  let m;
+  while ((m = PORTI_ISIN_RE.exec(text)) !== null) {
+    const u = m[0].toUpperCase();
+    if (!seen.has(u)) {
+      seen.add(u);
+      isins.push(u);
+    }
+  }
+  const weights = [];
+  while ((m = PORTI_WEIGHT_RE.exec(text)) !== null) {
+    const w = +m[1];
+    if (Number.isFinite(w) && w >= 0) weights.push(w);
+  }
+  if (!isins.length || !weights.length) throw new Error('porti parse failed');
+  const n = Math.min(isins.length, weights.length);
+  const holdings = [];
+  for (let i = 0; i < n; i++) holdings.push({ sec: isins[i], weight: weights[i] });
+  return holdings;
+}
+
+async function fetchPortiTbruHoldings() {
+  const res = await fetch(PORTI_TBRU_URL, {
+    headers: { 'User-Agent': 'MultiLogicTradeA/1.0 (local-dev)' }
+  });
+  if (!res.ok) throw new Error(`porti HTTP ${res.status}`);
+  const html = await res.text();
+  const holdings = parsePortiTbruHtml(html);
+  return {
+    ok: true,
+    source: PORTI_TBRU_URL,
+    asOf: new Date().toISOString().slice(0, 10),
+    holdings
+  };
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -250,6 +294,18 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       res.writeHead(400, { ...corsHeaders(origin), 'Content-Type': 'text/plain; charset=utf-8' });
       res.end(String(err?.message || err));
+    }
+    return;
+  }
+
+  if (req.method === 'GET' && req.url === '/finresp-tbru-holdings') {
+    try {
+      const payload = await fetchPortiTbruHoldings();
+      res.writeHead(200, { ...corsHeaders(origin), 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(payload));
+    } catch (err) {
+      res.writeHead(502, { ...corsHeaders(origin), 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, error: String(err?.message || err) }));
     }
     return;
   }

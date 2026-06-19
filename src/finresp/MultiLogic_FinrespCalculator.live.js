@@ -4491,13 +4491,151 @@ ${renderBlock}
     else checkLiveGoalExpiredNotify();
   }
 
+  /** TBRU: процедуры и каталог облигаций фонда. */
+  function bondTbruProc() {
+    return root.MultiLogicFinrespBondTbruProc;
+  }
+
+  function bondTbruData() {
+    return root.MultiLogicFinrespBondTbru;
+  }
+
+  function bondTbruActive() {
+    return effectiveLogicIds().includes("TBRU");
+  }
+
+  /** Перечитать состав TBRU с porti.ru; при сбоях — до 3 попыток на бар TF, потом пауза до следующего бара. */
+  async function refreshTbruHoldingsFromPorti(opts) {
+    const fetchMod = root.MultiLogicFinrespBondTbruFetch;
+    if (!fetchMod?.fetchPortiHoldings) return bondTbruData()?.holdings || [];
+    const o = opts || {};
+    const tf = $("calc-tf")?.value || "60";
+    const barKey = o.barKey != null ? o.barKey : fetchMod.liveBarKey?.(tf);
+    const prev = fetchMod.getBarAttemptState?.(barKey);
+    if (prev?.exhausted && !o.force) {
+      return bondTbruData()?.holdings || [];
+    }
+    try {
+      const updated = await fetchMod.fetchPortiHoldings({
+        ...o,
+        barKey,
+        maxAttemptsPerBar: o.maxAttemptsPerBar ?? fetchMod.DEFAULT_MAX_ATTEMPTS_PER_BAR ?? 3
+      });
+      if (updated?.length) {
+        noteLiveTech("tbru-holdings", `porti.ru: ${updated.length} позиций`, `asOf=${bondTbruData()?.asOf || "—"}`);
+        return updated;
+      }
+      const after = fetchMod.getBarAttemptState?.(barKey);
+      if (after?.exhausted) {
+        noteLiveTech(
+          "tbru-holdings",
+          `porti.ru: нет ответа после ${after.attempts} попыток на этом баре TF`,
+          "до следующего бара — встроенный/последний срез"
+        );
+      }
+    } catch (err) {
+      noteLiveTech("tbru-holdings", err.message || String(err), "fallback=встроенный срез");
+    }
+    return bondTbruData()?.holdings || [];
+  }
+
+  function bondSandboxUnitPrice(holding) {
+    const proc = bondTbruProc();
+    const q = state.live.bondSandboxQuotes;
+    return proc?.bondUnitPriceRub(holding, q?.[holding?.sec]) ?? 980;
+  }
+
+  /** Обновить целевые позиции TBRU (wealth = cash + MTM, лимит Volume×MaxPos). */
+  async function refreshBondTbruTargets() {
+    const proc = bondTbruProc();
+    const data = bondTbruData();
+    const holdings = data?.holdings || [];
+    if (!proc || !holdings.length) {
+      state.live.bondTbruTargets = [];
+      return [];
+    }
+    const vol = volConfig();
+    const deployCapRub = proc.bondDeployCapRub(vol);
+    const pricesBySec = {};
+    const positionsBySec = {};
+    if (!state.live.bondSandboxQuotes) state.live.bondSandboxQuotes = {};
+    for (const h of holdings) {
+      pricesBySec[h.sec] = bondSandboxUnitPrice(h);
+      state.live.bondSandboxQuotes[h.sec] = pricesBySec[h.sec];
+    }
+
+    let wealthRub = Math.max(0, +vol.deposit || 0);
+    if (isLiveSandbox()) {
+      const sb = ensureSandboxState();
+      ensureSandboxCash(sb);
+      let mtm = 0;
+      for (const pos of sb.open.values()) {
+        const sec = String(pos.sec || pos.ticker || "").toUpperCase();
+        const pieces = pos.side === "short" ? -Math.abs(+pos.pieces || 0) : Math.abs(+pos.pieces || 0);
+        if (pos.market === "bonds" || holdings.some((x) => x.sec === sec)) {
+          positionsBySec[sec] = (positionsBySec[sec] || 0) + pieces;
+          const h = data.holdingBySec(sec);
+          const px = bondSandboxUnitPrice(h || { sec, nominal: 1000, pricePct: 98 });
+          mtm += pieces * px;
+        }
+      }
+      wealthRub = Math.max(0, (+sb.cash || 0) + mtm);
+    } else if (activeBrokerState().token && activeBrokerState().selectedAccountId
+      && (await ensureTbankTokenUnlocked({ interactive: false, openUi: false }))) {
+      try {
+        const actual = await tbankPositionsByTicker();
+        let mtm = 0;
+        for (const h of holdings) {
+          let pieces = 0;
+          for (const [, pos] of actual) {
+            const sec = String(pos.sec || pos.ticker || "").toUpperCase();
+            if (sec === h.sec || String(pos.ticker || "").toUpperCase() === h.sec) {
+              pieces = +pos.pieces || 0;
+              break;
+            }
+          }
+          positionsBySec[h.sec] = pieces;
+          let px = pricesBySec[h.sec];
+          try {
+            const im = await resolveLiveInstrumentMeta(h.sec, "bonds");
+            if (im?.instrumentId) {
+              const lp = await resolveOrderPrice(im.instrumentId, h.sec, "bonds");
+              if (Number.isFinite(lp) && lp > 0) px = lp;
+            }
+          } catch (_) { /* optional */ }
+          pricesBySec[h.sec] = px;
+          mtm += pieces * px;
+        }
+        const cash = Number.isFinite(state.live.freeCashRub) ? state.live.freeCashRub : 0;
+        wealthRub = Math.max(0, cash + mtm);
+      } catch (err) {
+        noteLiveTech("bond-tbru-wealth", err.message);
+      }
+    }
+
+    const rows = proc.computeTbruTargets({
+      holdings,
+      deployCapRub,
+      wealthRub,
+      positionsBySec,
+      pricesBySec,
+      minTradeRub: 500
+    });
+    state.live.bondTbruTargets = rows;
+    return rows;
+  }
+
   /** Строки FINRESP для reconcile: текущий расчёт или снимок до live-сессии. */
   function liveFinrespPerSec() {
+    if (bondTbruActive() && state.live.bondTbruTargets?.length) {
+      return state.live.bondTbruTargets;
+    }
     if (state.lastResult?.perSec?.length) return state.lastResult.perSec;
     return state.live.preCalcSnapshot?.result?.perSec || [];
   }
 
   function liveFinrespReady() {
+    if (bondTbruActive() && state.live.bondTbruTargets?.length) return true;
     return liveFinrespPerSec().length > 0;
   }
 
@@ -5550,7 +5688,7 @@ ${renderBlock}
   /** Мета инструмента для песочницы без T-Bank (лот=1, цены из свечей/MOEX). */
   function sandboxInstrumentMeta(sec, market) {
     const ticker = String(sec || "").trim().toUpperCase();
-    const m = market === "futures" ? "futures" : "shares";
+    const m = market === "futures" ? "futures" : (market === "bonds" ? "bonds" : "shares");
     const instrumentId = `sandbox:${m}:${ticker}`;
     const ti = { ticker, lot: 1, uid: instrumentId, figi: instrumentId, name: ticker };
     return {
@@ -5577,7 +5715,7 @@ ${renderBlock}
           instrumentId,
           lot: Math.max(1, +ti.lot || 1),
           ticker: String(ti.ticker || sec).toUpperCase(),
-          market: market === "futures" ? "futures" : "shares",
+          market: market === "futures" ? "futures" : (market === "bonds" ? "bonds" : "shares"),
           classCode: tbankInstField(ti, "classCode", "class_code") || "",
           instrumentName: tbankInstField(ti, "name") || ""
         };
@@ -5594,7 +5732,7 @@ ${renderBlock}
       instrumentId,
       lot: Math.max(1, +ti.lot || 1),
       ticker: String(ti.ticker || sec).toUpperCase(),
-      market: market === "futures" ? "futures" : "shares",
+      market: market === "futures" ? "futures" : (market === "bonds" ? "bonds" : "shares"),
       classCode: tbankInstField(ti, "classCode", "class_code") || "",
       instrumentName: tbankInstField(ti, "name") || ""
     };
@@ -5780,7 +5918,13 @@ ${renderBlock}
   /** Подпрограмма `packLastClose`. */
   function packLastClose(sec, market) {
     const secU = String(sec || "").trim().toUpperCase();
-    const mkt = market === "futures" ? "futures" : "shares";
+    if (market === "bonds" && bondTbruActive()) {
+      const h = bondTbruData()?.holdingBySec(secU);
+      if (h) return bondSandboxUnitPrice(h);
+      const q = state.live.bondSandboxQuotes?.[secU];
+      if (Number.isFinite(q) && q > 0) return q;
+    }
+    const mkt = market === "futures" ? "futures" : (market === "bonds" ? "bonds" : "shares");
     const key = `${mkt}:${secU}`;
     let pack = state.packs.find((p) => instrumentKey(p[0]) === key);
     if (!pack) pack = state.packs.find((p) => String(p[0]?.sec || "").toUpperCase() === secU);
@@ -5909,6 +6053,10 @@ ${renderBlock}
 
   /** Разрешение id/метаданных: `resolveOrderPrice`. */
   async function resolveOrderPrice(instrumentId, sec, market) {
+    if (market === "bonds" && bondTbruActive()) {
+      const h = bondTbruData()?.holdingBySec(sec);
+      if (h) return bondSandboxUnitPrice(h);
+    }
     const fromPack = packLastClose(sec, market);
     if (Number.isFinite(fromPack) && fromPack > 0) return fromPack;
     if (instrumentId && String(instrumentId).startsWith("sandbox:")) return null;
@@ -6429,7 +6577,8 @@ ${renderBlock}
 
   /** Функция: ключ позиции в Map песочницы (market:ticker). */
   function sandboxPosKey(market, ticker) {
-    return `${market === "futures" ? "futures" : "shares"}:${String(ticker || "").toUpperCase()}`;
+    const m = market === "futures" ? "futures" : (market === "bonds" ? "bonds" : "shares");
+    return `${m}:${String(ticker || "").toUpperCase()}`;
   }
 
   /** Функция: лоты со знаком (шорт — отрицательное количество). */
@@ -6596,12 +6745,16 @@ ${renderBlock}
     const map = new Map();
     for (const pos of ensureSandboxState().open.values()) {
       const pieces = pos.side === "short" ? -Math.abs(+pos.pieces || 0) : Math.abs(+pos.pieces || 0);
-      map.set(pos.ticker, {
+      const entry = {
         ticker: pos.ticker,
         instrumentId: pos.instrumentId,
         lot: pos.lot,
-        pieces
-      });
+        pieces,
+        sec: pos.sec || pos.ticker
+      };
+      map.set(pos.ticker, entry);
+      const secU = String(pos.sec || "").toUpperCase();
+      if (secU && secU !== pos.ticker) map.set(secU, entry);
     }
     return map;
   }
@@ -7315,7 +7468,9 @@ ${renderBlock}
     }
     ensureSandboxCash(sb);
     const revertSnap = snapshotSandboxState(sb);
-    const market = opts.market === "futures" ? "futures" : "shares";
+    const market = opts.market === "futures"
+      ? "futures"
+      : (opts.market === "bonds" ? "bonds" : "shares");
     let meta = null;
     if (instrumentId && !String(instrumentId).startsWith("sandbox:")) {
       try { meta = await tbankGetInstrumentById(instrumentId); } catch (_) { /* optional */ }
@@ -7416,7 +7571,9 @@ ${renderBlock}
       result = await simulateSandboxOrder(instrumentId, direction, lots, secForPrice, opts);
     } else {
       const qty = Math.max(0, Math.floor(+lots || 0));
-      const market = opts.market === "futures" ? "futures" : "shares";
+      const market = opts.market === "futures"
+        ? "futures"
+        : (opts.market === "bonds" ? "bonds" : "shares");
       let lot = 1;
       let meta = null;
       try { meta = await tbankGetInstrumentById(instrumentId); } catch (_) { /* optional */ }
@@ -8197,6 +8354,7 @@ ${renderBlock}
 
   /** Задержка live-свечей: >2×TF по времени бара или >2 мин без успешного опроса. */
   function assessLiveCandleDelay() {
+    if (bondTbruActive()) return { stale: false, message: "" };
     const tf = $("calc-tf")?.value || "60";
     const tfMs = tfDurationMs(tf);
     const maxBarLagMs = 2 * tfMs;
@@ -9238,6 +9396,22 @@ ${referenceBlock}
   async function refreshLiveCandleStreamInner(options) {
     const opts = options || {};
     if (!isLiveMode() || !state.live.chartSession) return false;
+    if (bondTbruActive()) {
+      if (isLiveSandbox()) {
+        const sb = ensureSandboxState();
+        await refreshTbruHoldingsFromPorti({ minIntervalMs: 30000 });
+        const holdings = bondTbruData()?.holdings || [];
+        bondTbruProc()?.accrueSandboxBondCoupons(sb, holdings);
+        bondTbruProc()?.redeemSandboxBondMaturities(sb, holdings);
+        ensureSandboxCash(sb);
+      } else {
+        await refreshTbruHoldingsFromPorti({ minIntervalMs: 30000 });
+      }
+      await refreshBondTbruTargets();
+      state.live.lastCandleRefreshAt = new Date().toISOString();
+      state.live.candleSource = "bond-tbru";
+      return true;
+    }
     const needsBootstrap = !liveHasAnyCandles() || !liveFinrespReady();
     if (state.live.candleRefreshBusy) return false;
     if (!liveRefreshMayProceed(needsBootstrap)) return false;
@@ -9394,6 +9568,15 @@ ${referenceBlock}
     if (!(vol.maxPositions > 0)) {
       return { ok: false, error: "Max positions должен быть > 0" };
     }
+    if (bondTbruActive()) {
+      if (isLiveSandbox() && sandboxBaselineMismatch(vol.deposit)) {
+        return {
+          ok: false,
+          error: `песочница: стартовый портфель не совпадает с депозитом ${fmt(vol.deposit, 0)} ₽ — выключите и снова включите «Песочница»`
+        };
+      }
+      return { ok: true, instruments, spec, vol };
+    }
     const meta = liveFinrespReady() ? state.lastResultMeta : null;
     const brokerId = readBrokerIdFromUi();
     if (meta?.brokerId && meta.brokerId !== brokerId) {
@@ -9503,7 +9686,7 @@ ${referenceBlock}
         }
         const { ti, instrumentId, lot, ticker, classCode, instrumentName } = im;
         const targetPieces = +p.pos || 0;
-        const cur = actual.get(ticker);
+        const cur = actual.get(ticker) || actual.get(secU);
         const currentPieces = cur ? +cur.pieces : 0;
         const delta = targetPieces - currentPieces;
         if (!reconcileNeedsTrade(targetPieces, currentPieces, delta, lot)) {
@@ -9682,6 +9865,15 @@ ${referenceBlock}
   /** Один цикл: свечи → FINRESP → reconcile (если торговля активна). */
   async function livePollTickAfterRefresh() {
     if (!isLiveMode() || !state.live.chartSession) return false;
+    if (bondTbruActive()) {
+      const ok = await refreshLiveCandleStream({ silent: true });
+      if (!ok) return false;
+      if (state.live.active && liveFinrespReady() && !state.live.tradingActionBusy && !state.live.sellAllInFlight) {
+        await liveTradingReconcile();
+        queueLiveChartsRefresh();
+      }
+      return true;
+    }
     const ok = await refreshLiveCandleStream({ silent: true });
     if (!ok) return false;
     if (liveFinrespReady()) {

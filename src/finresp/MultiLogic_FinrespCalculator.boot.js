@@ -2970,7 +2970,29 @@
   }
 
   /** Выбранные элементы UI: `selectedInstruments`. */
+  function bondTbruHoldings() {
+    return (typeof MultiLogicFinrespBondTbru !== "undefined" && MultiLogicFinrespBondTbru?.holdings)
+      ? MultiLogicFinrespBondTbru.holdings
+      : [];
+  }
+
+  function bondTbruCalcSelected() {
+    return selectedLogicIds().includes("TBRU");
+  }
+
+  function bondTbruModeActive() {
+    return effectiveLogicIds().includes("TBRU") || bondTbruCalcSelected();
+  }
+
+  function isTbruCalcSpec() {
+    const spec = resolveCalcLogicSpec(params(), indicatorSelection());
+    return spec?.type === "bond_tbru";
+  }
+
   function selectedInstruments() {
+    if (bondTbruCalcSelected() && bondTbruHoldings().length) {
+      return bondTbruHoldings().map((h) => ({ sec: h.sec, market: "bonds" }));
+    }
     const api = bridgeApi();
     if (api?.getSelectedInstruments) {
       try {
@@ -2988,7 +3010,9 @@
   /** Инструмент портфеля: `instrumentKey`. */
   function instrumentKey(inst) {
     const sec = inst?.sec ?? inst;
-    const market = inst?.market === "futures" ? "futures" : "shares";
+    const market = inst?.market === "futures"
+      ? "futures"
+      : (inst?.market === "bonds" ? "bonds" : "shares");
     return `${market}:${String(sec || "").trim().toUpperCase()}`;
   }
 
@@ -3666,22 +3690,97 @@
   }
 
   /**
+   * Расчёт TBRU в режиме «Рассчитать»: rebalance по TF, купоны, погашения, FINRESP.
+   */
+  async function calcBondTbruResultAsync(p, sc, ro) {
+    const from = $("calc-from")?.value;
+    const till = $("calc-till")?.value;
+    const calcTf = $("calc-tf")?.value || "24";
+    const vol = volConfig();
+    const fetchMod = typeof MultiLogicFinrespBondTbruFetch !== "undefined"
+      ? MultiLogicFinrespBondTbruFetch
+      : null;
+
+    async function pullHoldings(barDate) {
+      if (fetchMod?.fetchPortiHoldings) {
+        const barKey = barDate instanceof Date
+          ? barDate.toISOString().slice(0, 10)
+          : (barDate ? String(barDate).slice(0, 10) : "calc-init");
+        await fetchMod.fetchPortiHoldings({
+          minIntervalMs: 15000,
+          barKey,
+          maxAttemptsPerBar: fetchMod.DEFAULT_MAX_ATTEMPTS_PER_BAR ?? 3
+        });
+      }
+      return bondTbruHoldings();
+    }
+
+    if (!ro.silent) {
+      setCalcProgress("TBRU: загрузка состава фонда (porti.ru)…", 15);
+      await yieldToUi();
+    }
+    await pullHoldings();
+
+    if (typeof E.runBondTbruBacktestAsync !== "function") {
+      throw new Error("модуль TBRU не загружен (bond-tbru-*.js)");
+    }
+    const workerOut = await E.runBondTbruBacktestAsync({
+      volConfig: vol,
+      from,
+      till,
+      calcTf,
+      commissionPct: commissionPctValue(),
+      refreshHoldings: pullHoldings,
+      shouldCancel: ro.shouldCancel,
+      yieldUi: yieldToUi,
+      onProgress: ro.silent
+        ? undefined
+        : (done, total, day) => {
+          const pct = 15 + Math.round((done / Math.max(1, total)) * 75);
+          setCalcProgress(`TBRU: ${day} (${done}/${total})`, pct);
+        }
+    });
+    const { perSec, agg, preStopperAgg, stopper, skipped, bondCharts } = workerOut || {};
+    state.windowSkipped = skipped || [];
+    if (!perSec?.length) return null;
+    state.precomputedIsoEqByLogic = null;
+    return {
+      perSec,
+      bondCharts: bondCharts || [],
+      agg,
+      preStopperAgg,
+      stopper,
+      recoveryStop: null,
+      a: workerOut.a,
+      b: workerOut.b,
+      skipped
+    };
+  }
+
+  /**
    * Функция (async): полный расчёт FINRESP по state.packs и окну ползунков.
    * Берёт spec из resolveCalcLogicSpec; worker или E.runMultiAsync.
    */
   async function calcResultAsync(optimCtx, runOptions) {
     const ro = runOptions || {};
-    if (!state.packs.length) return null;
-    if (!optimCtx && !ro.liveSession && !ro.keepDrawdownState && !isLiveMode() && recoveryStopConfig().enabled) {
-      clearDrawdownRecoveryState();
-    }
-    const [a, b] = normalizeSliders();
     const p = optimCtx?.params ?? params();
     const sc = optimCtx?.stopper ?? stopperConfig();
     const indicators = optimCtx?.indicators ?? indicatorSelection();
     const spec = resolveCalcLogicSpec(p, indicators);
     if (!spec) return null;
 
+    if (spec.type === "bond_tbru") {
+      if (!optimCtx && !ro.liveSession && !ro.keepDrawdownState && !isLiveMode() && recoveryStopConfig().enabled) {
+        clearDrawdownRecoveryState();
+      }
+      return await calcBondTbruResultAsync(p, sc, ro);
+    }
+
+    if (!state.packs.length) return null;
+    if (!optimCtx && !ro.liveSession && !ro.keepDrawdownState && !isLiveMode() && recoveryStopConfig().enabled) {
+      clearDrawdownRecoveryState();
+    }
+    const [a, b] = normalizeSliders();
     state.precomputedIsoEqByLogic = null;
     const rdCfg = recoveryStopConfig();
     if (!optimCtx && rdCfg.enabled && rdCfg.perLogic) {
@@ -4250,6 +4349,7 @@
 
   /** Форматирование для отображения: `formatBySec`. */
   function formatBySec(bySec, limit = 40) {
+    if (!bySec || typeof bySec !== "object") return "";
     const entries = Object.entries(bySec).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
     const shown = entries.slice(0, limit).map(([k, v]) => `${k}:${fmt(v)}`).join(" · ");
     const rest = entries.length - limit;
@@ -4260,6 +4360,7 @@
 
   const DEFAULT_LOGIC_LINE_KEYS = [
     "RND", "TBC", "UT", "UCT", "L5", "L1", "L2", "L3", "L4", "CML", "CMS",
+    "TBRU",
     "sma_below", "sma_above", "sma_corridor_trend", "sma_corridor_anti",
     "OB_SMA", "OB_ONLY"
   ];
@@ -8862,6 +8963,183 @@ ${referenceBlock}
     return { packs, failures };
   }
 
+  /** Графики TBRU: equity портфеля + облигации с маркерами входа/выхода. */
+  async function drawTbruCharts(result, deployCap) {
+    const eqRows = result?.perSec?.[0]?.rows || [];
+    const bondCharts = result?.bondCharts || [];
+    const chartRows = eqRows.map((r) => ({
+      time: String(r.time || "").includes(" ") ? r.time : `${r.time} 12:00:00`,
+      eq: +r.equity || 0
+    }));
+    const finresp = +(result?.agg?.finresp ?? 0);
+    const box = $("calc-chart");
+    if (!chartRows.length && !bondCharts.length) {
+      syncChartBox(box, "<p class=\"note\">Нет данных для графика TBRU.</p>");
+      return;
+    }
+    const finrespColor = finresp < 0 ? "#b91c1c" : "#047857";
+    const finrespCurve = chartRows.map((r) => ({
+      time: r.time,
+      eq: r.eq - deployCap
+    }));
+    const pieces = result?.agg?.pos ?? 0;
+    const buys = result?.agg?.buys ?? 0;
+    const chartFormat = {
+      axisPrice,
+      axisTime,
+      niceTicks,
+      fmtFinresp: (v) => fmt(v)
+    };
+    const compactBonds = bondCharts.length > 1;
+    const useInteractive = typeof MLInstrumentChart !== "undefined" && MLInstrumentChart.mount;
+
+    const rootEl = document.createElement("div");
+    rootEl.className = "chart-equity-section";
+
+    const head = document.createElement("div");
+    head.innerHTML = `<p class="chart-equity-section-title">TBRU — портфель облигаций</p>
+<p class="note">${pieces} шт. в позиции · покупки ${fmt(buys)} ₽ · деплой ${fmt(deployCap)} ₽ · графиков облигаций: ${bondCharts.length}</p>`;
+    rootEl.appendChild(head);
+
+    const portfolioStack = document.createElement("div");
+    portfolioStack.className = "chart-stack";
+    if (chartRows.length) {
+      const equitySvg = buildEquityChartSvg(
+        chartRows, finresp, "TBRU — equity портфеля (cash + облигации)", false, "#0f766e", {}
+      );
+      const finrespSvg = buildEquityChartSvg(
+        finrespCurve, finresp, "TBRU — FINRESP (equity − деплой)", false, finrespColor, {}
+      );
+      const p1 = document.createElement("div");
+      p1.className = "chart-mini";
+      p1.innerHTML = equitySvg || "";
+      const p2 = document.createElement("div");
+      p2.className = "chart-mini";
+      p2.innerHTML = finrespSvg || "";
+      portfolioStack.appendChild(p1);
+      portfolioStack.appendChild(p2);
+    }
+    rootEl.appendChild(portfolioStack);
+
+    if (bondCharts.length) {
+      const bondTitle = document.createElement("p");
+      bondTitle.className = "chart-equity-section-title";
+      bondTitle.style.marginTop = "1rem";
+      bondTitle.textContent = "Облигации TBRU — цена и сделки";
+      rootEl.appendChild(bondTitle);
+      const bondNote = document.createElement("p");
+      bondNote.className = "note";
+      bondNote.textContent = "▲ вход (покупка) · ▼ выход (продажа). Цена — чистая, % от номинала в каталоге.";
+      rootEl.appendChild(bondNote);
+      const bondScroll = document.createElement("div");
+      bondScroll.className = "chart-equity-logic-scroll";
+      const bondStack = document.createElement("div");
+      bondStack.className = "chart-stack";
+      bondScroll.appendChild(bondStack);
+      rootEl.appendChild(bondScroll);
+
+      for (let i = 0; i < bondCharts.length; i++) {
+        const p = bondCharts[i];
+        const chartRowsBond = (p.rows || []).slice();
+        if (!chartRowsBond.length) continue;
+        const mini = document.createElement("div");
+        mini.className = "chart-mini";
+        const decor = chartDecorFromRows(chartRowsBond, []);
+        if (useInteractive) {
+          const host = document.createElement("div");
+          host.className = "ml-instrument-chart-host";
+          mini.appendChild(host);
+          bondStack.appendChild(mini);
+          MLInstrumentChart.mount(host, {
+            rows: chartRowsBond,
+            finresp: p.finresp ?? 0,
+            title: `График ${p.sec}`,
+            secTitle: p.sec,
+            compact: compactBonds,
+            decor,
+            format: chartFormat
+          });
+        } else {
+          const svg = buildChartSvg(chartRowsBond, p.finresp ?? 0, `График ${p.sec}`, compactBonds, [], decor);
+          mini.innerHTML = `<p class="chart-sec-title">${p.sec}</p>${svg || "<p class=\"chart-fail-msg\">Нет данных</p>"}`;
+          bondStack.appendChild(mini);
+        }
+        if (i % 3 === 2) await yieldToUi();
+      }
+    }
+
+    syncChartBox(box, "");
+    box.hidden = false;
+    box.appendChild(rootEl);
+    bridgeSetCharts({ equityVisible: true, instrumentVisible: bondCharts.length > 0 });
+    state.tbruBondCharts = bondCharts;
+  }
+
+  /** Расчёт TBRU без загрузки свечей MOEX — только портфель облигаций из porti.ru. */
+  async function runTbruCalc(runGen) {
+    if (runGen == null) runGen = ++state.runGeneration;
+    if (isOptimizing()) stopOptim();
+    state.runBusyOwner = runGen;
+    setBusy(true);
+    cycleBegin("calc-run", { mode: "TBRU" });
+    state.runCancelRequested = false;
+    state.runCheckpoint = null;
+    resetChartIndicatorSpecsCache();
+    const shouldCancel = () => isRunCancelled(runGen);
+    const from = $("calc-from")?.value;
+    const till = $("calc-till")?.value;
+    state.lastInstruments = [{ sec: "TBRU", market: "bonds" }];
+    state.failedInstruments = [];
+    state.windowSkipped = [];
+    state.bulkMode = null;
+    let focusResultsAfterRun = false;
+    setCalcProgress("TBRU: расчёт портфеля облигаций…", 5);
+    await yieldToUi();
+    try {
+      const p = params();
+      const sc = stopperConfig();
+      const result = await calcBondTbruResultAsync(p, sc, { shouldCancel });
+      if (shouldCancel()) return;
+      if (!result?.perSec?.length) {
+        $("calc-finresp").textContent = "—";
+        setCalcStatus("TBRU: нет результата — проверьте период, депозит и доступность porti.ru (proxy :4201).");
+        return;
+      }
+      const eqRows = result.perSec[0]?.rows || [];
+      const syntheticPack = eqRows.map((r) => {
+        const t = String(r.time || "").includes(" ") ? r.time : `${r.time} 12:00:00`;
+        const px = +r.equity || 0;
+        return { sec: "TBRU", market: "bonds", time: t, open: px, high: px, low: px, close: px, volume: 0 };
+      });
+      state.packs = syntheticPack.length
+        ? [syntheticPack]
+        : [[{ sec: "TBRU", market: "bonds", time: `${from} 12:00:00`, open: 1, high: 1, low: 1, close: 1, volume: 0 }]];
+      state.ctgSpotPacks = {};
+      resetEquityConfigMarkers();
+      state.lastLoadMeta = { periodKey: `tbru:${from}:${till}`, keys: ["bonds:TBRU"] };
+      state.movedSlider = "end";
+      setSliderBounds(false);
+      saveWindowAnchor();
+      applyResult(result, { redrawCharts: false, liveSession: false });
+      focusResultsAfterRun = true;
+      setCalcProgress("TBRU: графики…", 92);
+      await yieldToUi();
+      await drawTbruCharts(result, E.bondDeployCapRub(volConfig()));
+      await scrollResultsIntoView();
+      setCalcProgress("Готово", 100);
+    } catch (err) {
+      if (!shouldCancel() && err?.message !== "cancelled") {
+        noteTechError(`runTbruCalc: ${err.message}`);
+        setCalcStatus(`Ошибка TBRU: ${err.message}`);
+      }
+    } finally {
+      if (focusResultsAfterRun) await scrollResultsIntoView();
+      releaseRunBusy(runGen);
+      if (runGen === state.runGeneration) updateTechInfo("run-finished");
+      cycleEnd({ ok: runGen === state.runGeneration && !state.runCancelRequested });
+    }
+  }
+
   /** Запуск расчёта: `runWithInstruments`. */
   async function runWithInstruments(instruments, bulkMode, runGen) {
     if (!instruments.length) throw new Error("Список инструментов пуст.");
@@ -9031,13 +9309,19 @@ ${referenceBlock}
       return;
     }
     applyEditorParams();
+    if (!requireTbankDepositForRun()) return;
+    const runGen = ++state.runGeneration;
+    if (isTbruCalcSpec()) {
+      try {
+        await runTbruCalc(runGen);
+      } catch (_) { /* status уже выставлен */ }
+      return;
+    }
     let instruments = selectedInstruments();
     if (!instruments.length) {
       setCalcStatus("Выберите хотя бы один инструмент в списке.");
       return;
     }
-    if (!requireTbankDepositForRun()) return;
-    const runGen = ++state.runGeneration;
     const bulkMode = resolveBulkMode(instruments);
     try {
       if (instruments.some((i) => i.market === "futures")) {

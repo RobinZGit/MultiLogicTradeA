@@ -23,6 +23,9 @@
   imp("indicators/rand.js");
   imp("logics/parser.js");
   imp("logics/registry.js");
+  imp("bond-tbru-data.js");
+  imp("bond-tbru-fetch.js");
+  imp("bond-tbru-procedure.js");
   imp("logics/fragments.js");
   imp("logics/rnd.js");
   imp("logics/tbc.js");
@@ -43,6 +46,7 @@
   imp("logics/ftt_s.js");
   imp("logics/cml.js");
   imp("logics/cms.js");
+  imp("logics/tbru.js");
   imp("orderbook/_eval.js");
   imp("logics/ob_sma.js");
   imp("logics/ob_only.js");
