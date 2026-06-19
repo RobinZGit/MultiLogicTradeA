@@ -1,0 +1,31 @@
+---
+description: FINRESP — блокировка формы при расчёте; не ломать pickers; тесты на регресс
+globs: src/finresp/**,tests/finresp/**,src/app/finresp/**
+alwaysApply: false
+---
+
+# FINRESP: блокировка UI формы
+
+## При каждом изменении формы / boot / Angular-моста
+
+Проверять блокировку во время расчёта (`uiBusy`, `body.calc-running`, `setBusy`):
+
+| Что | Ожидание |
+|-----|----------|
+| Кнопка «Рассчитать» / стоп | корректный disabled во время `run` |
+| Поля `#finresp-calc` | блокируются через `CALC_LOCK_SELECTOR`, **кроме** явных исключений |
+| `#calc-logic-picker` | **не** блокировать при открытом picker (`closest("#calc-logic-picker")`) |
+| Live-критичные кнопки | см. `liveCriticalToggleDisabled`, `live.refresh-guards` |
+| Прогресс / техлог | `uiBusy` в тех. информации отражает реальное состояние |
+
+После правок в `MultiLogic_FinrespCalculator.boot.js`, `finresp-calc-form`, bridge (`bridgeApi`, `setFormCatalog`) — **прогнать сценарий**: старт расчёта → форма заблокирована → завершение → разблокирована; picker логик/инструментов/месяца не залипает.
+
+## Тесты при найденных багах UI
+
+Если был баг «форма не блокируется», «picker не кликается», «всё disabled после расчёта»:
+
+1. Добавить контрактный тест в `tests/finresp/` (как `live.source-contracts.test.mjs`, `cycle-cooperative.test.mjs`, `live.refresh-guards.test.mjs`).
+2. Проверять **строки/паттерны** в исходниках или чистые функции guards — без обязательного headless-браузера.
+3. Включить файл в `npm run test:finresp` в `package.json`, если новый тест.
+
+Примеры уже в репо: исключение logic-picker из `CALC_LOCK`, `liveRefreshMayProceed` при `uiBusy`, cooperative cycles в техлоге.

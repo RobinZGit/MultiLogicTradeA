@@ -83,7 +83,7 @@ th{background:#f8fafc;width:28%;}
 <li>во время расчёта — не выше <strong>99%</strong>; <strong>100%</strong> и закрытие полосы только после полного завершения (графики и результат).</li>
 <li>справа в полосе — кнопка <strong>Остановить</strong>: прерывает загрузку MOEX и расчёт; показываются FINRESP и графики <strong>до последней досчитанной свечи</strong> (правая граница окна сдвигается). При остановке во время загрузки — по уже загруженным инструментам.</li>
 </ul>
-<p>На время расчёта тема страницы слегка меняется, все поля и кнопки формы <strong>заблокированы</strong> (кроме «Остановить»). После завершения блокировка снимается.</p>
+<p>На время расчёта тема страницы слегка меняется; большинство полей и кнопок <strong>заблокированы</strong> (кроме «Остановить» и блока выбора логик — см. §5). После завершения блокировка снимается. Длинный расчёт (много инструментов и логик) не должен «зависать» на 99%: этапы отдают управление UI через <code>yieldToUi</code> / <code>cycleBeat</code> (<code>cycle-cooperative.js</code>).</p>
 
 <h2 id="start">2. Запуск</h2>
 <p>Калькулятор — Angular-маршрут <code>/finresp</code> и скрипты в <code>assets/finresp/</code>:</p>
@@ -117,7 +117,7 @@ th{background:#f8fafc;width:28%;}
 <h2 id="instruments">4. Выбор инструментов</h2>
 <table>
 <tr><th>Элемент</th><th>Назначение</th></tr>
-<tr><td><strong>Акции (фьючерсы) — выбор</strong> (<code>calc-sec</code>)</td><td>Список с множественным выбором (Ctrl+клик). Акции и фьючерсы MOEX в одном списке</td></tr>
+<tr><td><strong>Акции (фьючерсы) — выбор</strong> (<code>calc-sec-visible</code>)</td><td>Список с множественным выбором (Ctrl+клик). Акции и фьючерсы MOEX в одном списке. Синхронизируется с Angular-формой; скрытый <code>calc-sec</code> — зеркало для legacy/boot</td></tr>
 <tr><td><strong>Выбрать все акции</strong></td><td>Отметить все акции в списке</td></tr>
 <tr><td><strong>Выбрать все фьючерсы</strong></td><td>Отметить все фьючерсы (все подходящие серии по префиксам и периоду)</td></tr>
 <tr><td>Подсказка под списком</td><td>Число выбранных инструментов и ограничение периода по ТФ</td></tr>
@@ -130,7 +130,7 @@ th{background:#f8fafc;width:28%;}
 <tr><td><strong>Таймфрейм</strong> (<code>calc-tf</code>)</td><td>1, 5, 10, 15, 60 мин, 1 день. 5 и 15 мин — из минутных свечей (~7–14 дн. макс.). <strong>1 час и 1 день</strong> — любой период в календаре (<code>2020-01-01</code> — сегодня), без автосужения</td></tr>
 <tr><td><strong>Месяц целиком</strong> (<code>calc-month</code>)</td><td>Быстрый выбор календарного месяца — подставляет «Начало» и «Конец»</td></tr>
 <tr><td><strong>Начало</strong> / <strong>Конец</strong></td><td>Даты периода загрузки и расчёта. При смене ТФ или числа инструментов период может автоматически сужаться</td></tr>
-<tr><td><strong>Логика</strong> (<code>calc-logic</code>)</td><td>На всю ширину карточки, <strong>под</strong> кнопками «Рассчитать» / «Отобрать FINRESP ≥ 0». Список с <strong>множественным выбором</strong> (Ctrl+клик): L1…L5 и встроенные SMA. Высота списка растёт с числом выбранных. Строка «Выбрано N (порядок): …» показывает порядок приоритета. При нескольких логиках L1…L5 на каждой свече сначала проверяется верхняя в списке, затем следующая (как слоты MultiLogic); выход и SL/TP — у логики, открывшей позицию. «Выше/Ниже SMA» при комбинации с L1…L5 не входит в стек — оставьте одну SMA или одну L-логику</td></tr>
+<tr><td><strong>Логика</strong> (<code>calc-logic-picker</code>)</td><td>На всю ширину карточки, <strong>под</strong> кнопками «Рассчитать» / «Отобрать FINRESP ≥ 0». По умолчанию — <strong>свёрнутый</strong> блок: цветные <strong>чипы</strong> выбранных логик (порядок слева направо = приоритет), кнопка <strong>«Изменить»</strong> или клик по полосе — панель со списком (Ctrl+клик). <strong>Готово</strong> / Esc — применить и свернуть. У чипа 🗑 — убрать логику. Метка «пауза live» — логика временно не торгует из-за @@PauseOnDrawdownPerLogic, в расчёте участвует. <strong>Во время «Идёт расчёт»</strong> панель логик <em>не блокируется</em> — можно менять выбор (следующий «Рассчитать» возьмёт новый стек). При нескольких L1…L5 на свече сначала верхняя в списке; выход и SL/TP — у открывшей логики. «Выше/Ниже SMA» с L1…L5 в один стек не смешивать</td></tr>
 <tr><td><strong>Рассчитать</strong></td><td>Загрузить/дочитать свечи MOEX (или из IndexedDB), пересчитать FINRESP <em>для нижнего блока результатов и графиков</em> (теоретическая оценка на истории). Для <strong>live-торговли</strong> кнопка <em>не обязательна</em> — робот сам подгружает свечи и считает хвост FINRESP при опросе (§12)</td></tr>
 <tr><td><strong>Отобрать FINRESP ≥ 0</strong></td><td>После расчёта оставить в списке только инструменты с неотрицательным FINRESP в текущем окне</td></tr>
 </table>
@@ -531,7 +531,7 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 <h2 id="charts">10. Графики</h2>
 <table>
 <tr><th>Блок</th><th>Назначение</th></tr>
-<tr><td><strong>Графики по инструментам</strong> (<code>calc-chart</code>)</td><td>Интерактивные mini-графики по каждой бумаге в окне расчёта: свечи OHLC, линии индикаторов, входы/выходы из позиций</td></tr>
+<tr><td><strong>Графики по инструментам</strong> (<code>calc-chart</code>)</td><td>Интерактивные mini-графики: свечи OHLC, входы/выходы. Линии индикаторов — <strong>по кнопке</strong> «Показать индикаторы» на каждом графике (§10.1), не сразу при расчёте</td></tr>
 <tr><td><strong>Equity портфеля</strong> (<code>calc-chart-equity</code>)</td><td>Суммарная кривая equity и сравнение логик UT, UCT, L5, L1…L4 (без pan/zoom; линия close/equity)</td></tr>
 </table>
 
@@ -557,19 +557,21 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 </table>
 <p>В подсказке на графике показывается, сколько баров видно из общего числа (если включён zoom).</p>
 
-<h4>Линии индикаторов</h4>
-<p>На графике рисуются линии индикаторов, которые используются в <strong>выбранных логиках</strong> (галочки в блоке «Логика»), а не только у «активной» логики в стеке:</p>
+<h4>Линии индикаторов (ленивая загрузка)</h4>
+<p>После «Рассчитать» на графиках сразу рисуются <strong>свечи</strong>, маркеры сделок и линия FINRESP инструмента — без тяжёлого пересчёта всех индикаторов на десятках бумаг. Ценовые оверлеи подгружаются по кнопке <strong>«Показать индикаторы»</strong> на конкретном графике (рядом с «Копировать график»). После загрузки подпись меняется на «Индикаторы на графике». В фоне может идти предпрогрев серий (<code>queueChartIndicatorPrewarm</code>), но отрисовка — только по явному клику.</p>
+<p>Рисуются только <strong>ценовые</strong> линии из выбранных логик и галочек «Индикаторы» (не осцилляторы в отдельной панели):</p>
 <ul>
-<li><strong>SMA</strong> — оранжевая пунктирная; для SMA-коридора — также верхняя/нижняя граница коридора</li>
-<li><strong>LinReg</strong> — фиолетовая (центр и полосы ±Dev или ±K×ATR для BlLinK / AbRegK и т.п.)</li>
+<li><strong>SMA</strong>, <strong>CMA</strong> — оранжевая пунктирная; для SMA-коридора — верх/низ коридора</li>
+<li><strong>LinReg</strong> — фиолетовая (центр и полосы ±Dev или ±K×ATR)</li>
 <li><strong>Bollinger</strong> — голубая (средняя и верх/низ)</li>
 <li><strong>VWAP</strong> — зелёная пунктирная</li>
-<li><strong>FINRESP инструмента</strong> — чёрная линия на <strong>правой шкале</strong> (₽), после первого △/▲. Значение: <code>eq − eq₀</code>, где <code>eq₀</code> — equity на баре первого входа/выхода (<code>eq = cash + qty×цена</code>). Пока по бумаге не было сделок — линия не рисуется. В правом верхнем углу графика — подпись <strong>FINRESP … ₽</strong> по <em>видимому</em> окну (с учётом zoom/pan), в рамке; обновляется при масштабировании</li>
+<li><strong>FINRESP инструмента</strong> — чёрная линия на <strong>правой шкале</strong> (₽), после первого △/▲. Значение: <code>eq − eq₀</code>. Подпись <strong>FINRESP … ₽</strong> в углу — по <em>видимому</em> окну zoom/pan</li>
 </ul>
-<p>Если индикатор отключён в «Индикаторы» или не входит ни в одну выбранную логику — линия не рисуется. Под каждым графиком — <strong>легенда</strong>: образец линии (цвет и пунктир) и название. На самой картинке графика (в т.ч. при «Копировать график») — <strong>тикер инструмента</strong> слева.</p>
+<p>Stoch, MACD, CCI и прочие осцилляторы на mini-график <em>не</em> выводятся (только в расчёте Op/Cl). Если индикатор выключен или не входит в выбранные логики — линия не рисуется. Под графиком — <strong>легенда</strong>. На картинке (и в «Копировать график») слева — <strong>тикер</strong>.</p>
 
-<h4>Копирование графика</h4>
-<p>Справа от тикера инструмента — кнопка <strong>«Копировать график»</strong>. Копирует <em>текущий видимый</em> фрагмент (с учётом масштаба и сдвига) в буфер обмена как PNG. Нужен HTTPS или localhost и разрешение браузера на доступ к буферу.</p>
+<h4>Кнопки над графиком</h4>
+<p>Слева направо: <strong>тикер</strong> → <strong>«Копировать график»</strong> → <strong>«Показать индикаторы»</strong> → элементы масштаба. «Копировать график» — PNG <em>видимого</em> фрагмента в буфер (HTTPS или localhost).</p>
+<p>После завершения «Рассчитать» страница <strong>прокручивается</strong> к блоку FINRESP (<code>calc-result-hero</code>), чтобы результаты были в центре экрана.</p>
 
 <h4>Маркеры входа и выхода</h4>
 <p>Маркеры ставятся при смене позиции в симуляции (в т.ч. flip long↔short и SL с повторным входом на одном баре). У △/▲ — <strong>подпись</strong>: первая строка — <strong>имя логики</strong> (L1, UT, SMA…), вторая — фрагмент из парсера (<code>Op(Long(...))</code>, <code>Cl(Short(...))</code>, <code>SL[…×ATR]</code> и т.п.). При наведении — полная подсказка.</p>
@@ -595,7 +597,7 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 <p>Блок <strong>«Тех. информация»</strong> внизу формы: после открытия графиков — строки <code>chart.ТИКЕР: …</code> (число входов/выходов, posStop, линия FINRESP). Скопируйте и пришлите при сбое отображения.</p>
 
 <h4>Файлы и версия</h4>
-<p>Интерактивная отрисовка — <code>MultiLogic_FinrespCalculator.charts.js</code> (рядом с <code>engine.js</code>, <code>stop-monitor.js</code> и <code>live.js</code>). Версия страницы — бейдж <code>pageVersion</code> на форме (например <code>2026-06-18-protocol-export-v13</code>). После обновления — <strong>Ctrl+Shift+R</strong> (скрипты с параметром <code>?v=</code> в URL).</p>
+<p>Интерактивная отрисовка — <code>MultiLogic_FinrespCalculator.charts.js</code> (рядом с <code>engine.js</code>, <code>cycle-cooperative.js</code>, <code>stop-monitor.js</code>, <code>live.js</code>). Версия страницы — бейдж <code>pageVersion</code> (актуальная: <code>2026-06-18-instruments-picker-unlock-v28</code>). После обновления — <strong>Ctrl+Shift+R</strong>.</p>
 
 <h3>10.2. Equity портфеля (<code>calc-chart-equity</code>)</h3>
 <p>Отдельный блок ниже ползунков: кривая equity <strong>только по выбранным в списке «Логика»</strong> стратегиям (не по всему каталогу), справочные кривые — тоже только для отмеченных логик, портфельный стоппер. Формат — линия по equity, без свечей и без pan/zoom.</p>
@@ -621,7 +623,7 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 <tr><td><strong>Песочница (фейк)</strong></td><td>Галочка под заголовком «Реальная торговля», по умолчанию выключена. Включена — спокойная <em>зелёная</em> тема блока; робот и ручные заявки <strong>не уходят на биржу</strong>, а симулируются: портфель меняется от суммы счёта на момент включения, комиссия — по полю <strong>Commission, %</strong> калькулятора. Продажа без лонга открывает <strong>шорт</strong>. Действует <strong>портфельный лимит gross</strong> (§9.1.1). В «Позициях» — открытые и закрытые фейк-позиции с пометкой <code>(фейк)</code>. Снятие галочки — все фейк-позиции и фейк-заявки удаляются, портфель снова показывает <strong>текущую реальную</strong> сумму T-Bank</td></tr>
 <tr><td><strong>Бейдж «Логики»</strong></td><td>Рядом со статусом — краткий список выбранных логик (<code>UT → L5 +2</code>). <strong>Клик</strong> раскрывает полный порядок приоритета (как в блоке «Логика» калькулятора). Обновляется при смене выбора</td></tr>
 <tr><td>Бейдж статуса</td><td>«остановлена» / «торговля активна» / «внимание» (оранжевый) / «ошибка» (красный, в т.ч. в зелёной песочнице); в песочнице — «· песочница (фейк)». При старте — <strong>подготовка: свечи … и FINRESP N/M…</strong> (прогресс <code>liveFinrespBootstrap</code> в тех. информации)</td></tr>
-<tr><td><strong>Бейдж версии</strong> (<code>pageVersion</code>)</td><td>Справа от статуса — версия страницы калькулятора (для проверки обновления после Ctrl+Shift+R). Актуальная: <code>2026-06-18-protocol-export-v13</code></td></tr>
+<tr><td><strong>Бейдж версии</strong> (<code>pageVersion</code>)</td><td>Справа от статуса — версия страницы (проверка после Ctrl+Shift+R). Актуальная: <code>2026-06-18-instruments-picker-unlock-v28</code></td></tr>
 <tr><td><strong>@@PauseOnDrawdown</strong> (toolbar)</td><td>Галочки в панели live — синхронизируются с «Параметрами управления»: <strong>портфельная</strong> пауза (§5.2) и <strong>@@PauseOnDrawdownPerLogic</strong> (отключение отдельных логик без остановки сессии)</td></tr>
 <tr><td><strong>Чипы логик «отключена»</strong></td><td>В свёрнутом выборе логик — пометка у логик, временно исключённых из стека по просадке (PerLogic). Состояние сохраняется в config и live-сессии</td></tr>
 <tr><td><strong>Монитор стопов</strong></td><td>Фоновый опрос ~8 с: портфельный @@SL/@@TP, @@PauseOnDrawdown, позиционные SL/TP (уведомления). В песочнице портфельный Stopper <em>закрывает</em> фейк-позиции; на реале — только notify (§9.4)</td></tr>
@@ -647,8 +649,21 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 
 <h2 id="changelog">13. Изменения</h2>
 
-<h3 id="changelog-2026-06-18">13.1. 18.06.2026</h3>
-<p>Сводка доработок за 18.06.2026. Актуальная сборка: <code>pageVersion=2026-06-18-ctg-futures-help-v20</code>.</p>
+<h3 id="changelog-2026-06-18-v28">13.1. 18.06.2026 — отзывчивость UI, графики (v25–v28)</h3>
+<p>Сборка: <code>pageVersion=2026-06-18-instruments-picker-unlock-v28</code>.</p>
+<table>
+<tr><th>Тема</th><th>Что сделано</th></tr>
+<tr><td><strong>Зависание на 99%</strong></td><td>Кооперативный расчёт: <code>cycle-cooperative.js</code>, <code>cycleBeat</code>, <code>yieldToUi</code> в boot/live; переиспользование equity при нескольких логиках; «лёгкие» графики без массового enrich индикаторов при отрисовке</td></tr>
+<tr><td><strong>Выбор логик</strong></td><td>Сворачиваемый <code>calc-logic-picker</code>: чипы, «Изменить», панель Ctrl+клик. Блок <em>не блокируется</em> во время расчёта (<code>setFormLocked</code> пропускает <code>#calc-logic-picker</code>)</td></tr>
+<tr><td><strong>Инструменты и месяц</strong></td><td>Angular: <code>calc-sec-visible</code>, <code>formControlName</code> для месяца; мост <code>__mlFinrespBridge</code> без циклов DOM↔Angular при смене выбора</td></tr>
+<tr><td><strong>Индикаторы на графиках</strong></td><td>Кнопка «Показать индикаторы» на каждом mini-графике; только ценовые линии (SMA, CMA, LinReg, Boll, VWAP); предпрогрев в фоне</td></tr>
+<tr><td><strong>Прокрутка к результату</strong></td><td>После «Рассчитать» — <code>scrollResultsIntoView</code> к блоку FINRESP</td></tr>
+<tr><td><strong>Откат PIK / PIKH</strong></td><td>Экспериментальные логики корзины <code>PIK</code> / <code>PIKH</code> (пики средней цены) <strong>удалены</strong> из каталога и движка — не документируются и не выбираются в форме</td></tr>
+</table>
+<p class="note">Тесты: <code>cycle-cooperative.test.mjs</code>, полный <code>npm run test:finresp</code>.</p>
+
+<h3 id="changelog-2026-06-18">13.2. 18.06.2026 — CtgStoch, пауза, протокол</h3>
+<p>Ранее в тот же день. Сборка справки: <code>2026-06-18-ctg-futures-help-v20</code>.</p>
 <table>
 <tr><th>Тема</th><th>Что сделано</th></tr>
 <tr><td><strong>CtgStoch — только фьючерсы</strong></td><td>Индикаторы контанго (<code>indicators/ctg/*</code>, сейчас CtgStoch): на не-фьючерсах атомы убираются из Op/Cl, spot и ряд контанго не строятся. Смешанный портфель — per-instrument фильтр в <code>engine.js</code>. Тесты <code>ctg-stoch.test.mjs</code></td></tr>
@@ -660,7 +675,7 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 </table>
 <p class="note">Тесты: <code>engine.recovery-stop.test.mjs</code> (per-logic pause), <code>live.source-contracts.test.mjs</code> (pause UI, protocol blob, sessionEvents), <code>live.refresh-guards.test.mjs</code>.</p>
 
-<h3 id="changelog-2026-06-17">13.2. 17.06.2026</h3>
+<h3 id="changelog-2026-06-17">13.3. 17.06.2026</h3>
 <p>Сводка доработок калькулятора и live-торговли за 17.06.2026. Сборка: <code>pageVersion=2026-06-17-stop-monitor-sandbox-v1</code>.</p>
 <table>
 <tr><th>Тема</th><th>Что сделано</th></tr>
@@ -689,7 +704,7 @@ SL[@SL] TP[@TP] Note(SMA+стакан)</pre>
 </table>
 <p>Содержит: версию страницы (<code>pageVersion</code>), режим кошелька, <code>brokerProvider</code>, ТФ, период, выбор инструментов, состояние кэша, live-поля (<code>liveFinrespBootstrap</code>, <code>liveCandleRefreshBusy</code>, <code>liveObTrendConfirm</code>, <code>logicUsesObTrend</code>, <code>logicUsesObSignals</code>, <code>liveOpenPositionsCount</code>, источник свечей), блок <code>liveApiForbidden</code> (тикер, sec, name, uid — запрещённые для API инструменты), <code>liveReconcile.*</code> (в т.ч. пропуски по <code>@OBT</code> и <code>OB.*</code>), журнал <code>errors:</code> со строками <code>live-forbidden-instrument:</code>, <code>live-obt-skip</code>, <code>live-orderbook</code> (до 128 строк), трассировка <code>brokerEvents</code> / <code>brokerTraceLocal</code>. Обновляется при старте, расчёте, live-торговле и ошибках брокера.</p>
 
-<p class="note">Версия справки: 2026-06-18 (CtgStoch только фьючерсы, per-logic pause, протокол) · синхронизирована с формой <code>2026-06-18-ctg-futures-help-v20</code> · при изменении контролов калькулятора обновляйте <code>MultiLogic_FinrespCalculator_Help.html</code></p>
+<p class="note">Версия справки: 2026-06-19 (v28: picker, ленивые индикаторы, откат PIK/PIKH) · форма <code>2026-06-18-instruments-picker-unlock-v28</code> · при изменении контролов обновляйте <code>MultiLogic_FinrespCalculator_Help.html</code></p>
 
 <div class="btn-row">
 <a class="calc-btn" href="../../finresp">Вернуться в калькулятор</a>

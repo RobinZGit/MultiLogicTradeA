@@ -23,7 +23,6 @@
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
   const CALC_PAGE_VERSION = "2026-06-18-instruments-picker-unlock-v28";
-  const CHART_ENRICH_LIGHT_MIN_INSTRUMENTS = 16;
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -3393,9 +3392,22 @@
   async function scrollResultsIntoView() {
     collapseExtraParamsIfOpen();
     await yieldToUi();
-    await yieldToUi();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const el = $("calc-result-hero") || $("finresp-calc");
-    if (!el || typeof el.scrollIntoView !== "function") return;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.height > 0) {
+      const top = Math.max(
+        0,
+        rect.top + window.scrollY - (window.innerHeight - rect.height) / 2
+      );
+      try {
+        window.scrollTo({ top, behavior: "smooth" });
+      } catch (_) {
+        window.scrollTo(0, top);
+      }
+    }
+    if (typeof el.scrollIntoView !== "function") return;
     try {
       el.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
     } catch (_) {
@@ -4248,7 +4260,6 @@
 
   const DEFAULT_LOGIC_LINE_KEYS = [
     "RND", "TBC", "UT", "UCT", "L5", "L1", "L2", "L3", "L4", "CML", "CMS",
-    "PIK", "PIKH",
     "sma_below", "sma_above", "sma_corridor_trend", "sma_corridor_anti",
     "OB_SMA", "OB_ONLY"
   ];
@@ -6858,6 +6869,123 @@
   }
 
   const chartIndicatorCacheByPack = new WeakMap();
+  let chartIndicatorSpecsCache = null;
+  let chartIndicatorColumnsBySec = null;
+  let chartIndicatorPrewarmGen = null;
+
+  function resetChartIndicatorSpecsCache() {
+    chartIndicatorSpecsCache = null;
+    chartIndicatorColumnsBySec = null;
+    chartIndicatorPrewarmGen = null;
+  }
+
+  async function buildChartIndicatorColumnsAsync(cache, specs, indicators, packLen, onYield) {
+    if (E.warmChartDisplayIndicatorSeries) {
+      E.warmChartDisplayIndicatorSeries(cache, specs, indicators);
+    }
+    if (onYield) await onYield();
+    const columns = {};
+    const CHUNK = 64;
+    for (let idx = 0; idx < packLen; idx++) {
+      const ind = E.collectChartIndicatorsForDisplay
+        ? E.collectChartIndicatorsForDisplay(cache, specs, indicators, idx)
+        : E.collectChartIndicatorsForSpecs(cache, specs, idx);
+      for (const [k, v] of Object.entries(ind)) {
+        if (v == null) continue;
+        if (!columns[k]) columns[k] = new Array(packLen);
+        columns[k][idx] = v;
+      }
+      if (onYield && idx > 0 && idx % CHUNK === 0) await onYield();
+    }
+    return columns;
+  }
+
+  async function ensureChartIndicatorColumns(sec, rows) {
+    if (!chartIndicatorColumnsBySec) chartIndicatorColumnsBySec = Object.create(null);
+    if (chartIndicatorColumnsBySec[sec]) return chartIndicatorColumnsBySec[sec];
+    const packFull = packForSec(sec);
+    if (!packFull?.length || !rows?.length) return null;
+    const { pack } = packWindowForRows(packFull, rows);
+    const cache = indicatorCacheForPack(pack);
+    if (!cache) return null;
+    await yieldToUi();
+    const columns = await buildChartIndicatorColumnsAsync(
+      cache,
+      chartIndicatorSpecs(),
+      indicatorSelection(),
+      pack.length,
+      () => yieldToUi()
+    );
+    chartIndicatorColumnsBySec[sec] = columns;
+    return columns;
+  }
+
+  /** Наложить предрасчитанные колонки индикаторов на строки графика (in-place). */
+  async function applyChartIndicatorsInPlace(rows, sec) {
+    if (!rows?.length) return rows;
+    await yieldToUi();
+    const columns = await ensureChartIndicatorColumns(sec, rows);
+    if (!columns) return rows;
+    const { timeToIdx } = packWindowForRows(packForSec(sec), rows);
+    const keys = Object.keys(columns);
+    const CHUNK = 80;
+    for (let ri = 0; ri < rows.length; ri++) {
+      const idx = timeToIdx.get(rows[ri].time);
+      if (idx == null) continue;
+      const row = rows[ri];
+      for (let ki = 0; ki < keys.length; ki++) {
+        const v = columns[keys[ki]][idx];
+        if (v != null) row[keys[ki]] = v;
+      }
+      if (ri > 0 && ri % CHUNK === 0) await yieldToUi();
+    }
+    return rows;
+  }
+
+  async function queueChartIndicatorPrewarm(entries) {
+    const gen = state.runGeneration;
+    chartIndicatorPrewarmGen = gen;
+    for (const entry of entries) {
+      if (entry.kind !== "ok" || chartIndicatorPrewarmGen !== gen) return;
+      const rawRows = entry.row?.rows;
+      const sec = entry.row?.sec;
+      if (!sec || !rawRows?.length) continue;
+      if (chartIndicatorColumnsBySec?.[sec]) continue;
+      await ensureChartIndicatorColumns(sec, rawRows);
+      await yieldToUi();
+    }
+  }
+
+  function chartIndicatorSpecs() {
+    if (chartIndicatorSpecsCache) return chartIndicatorSpecsCache;
+    const p = params();
+    const indicators = indicatorSelection();
+    chartIndicatorSpecsCache = selectedLogicIds()
+      .map((id) => E.resolveLogicSpec(id, state.customLines, p, indicators))
+      .filter((s) => s && !s.disabled);
+    return chartIndicatorSpecsCache;
+  }
+
+  /** Узкое окно свечей под строки графика (быстрее кэш индикаторов). */
+  function packWindowForRows(pack, rows) {
+    if (!pack?.length || !rows?.length) {
+      return { pack, timeToIdx: new Map(pack?.map((c, i) => [c.time, i]) || []) };
+    }
+    const fullIdx = new Map(pack.map((c, i) => [c.time, i]));
+    let min = Infinity;
+    let max = -1;
+    for (const r of rows) {
+      const i = fullIdx.get(r.time);
+      if (i == null) continue;
+      if (i < min) min = i;
+      if (i > max) max = i;
+    }
+    if (!Number.isFinite(min)) {
+      return { pack, timeToIdx: fullIdx };
+    }
+    const sliced = pack.slice(min, max + 1);
+    return { pack: sliced, timeToIdx: new Map(sliced.map((c, i) => [c.time, i])) };
+  }
 
   /** Кэш индикаторов по пакету свечей (один раз на инструмент за отрисовку). */
   function indicatorCacheForPack(pack) {
@@ -6870,13 +6998,11 @@
     return cache;
   }
 
-  /** OHLC + индикаторы всех выбранных логик для строк графика. */
-  function enrichChartRowsForDisplay(rows, sec, enrichOpts) {
-    const pack = packForSec(sec);
-    if (!pack?.length || !rows?.length) return rows;
-    const timeToIdx = new Map(pack.map((c, i) => [c.time, i]));
-    const light = enrichOpts?.light
-      ?? (state.lastInstruments?.length || 0) >= CHART_ENRICH_LIGHT_MIN_INSTRUMENTS;
+  /** OHLC + (опционально) индикаторы выбранных логик для строк графика. */
+  async function enrichChartRowsForDisplay(rows, sec, enrichOpts) {
+    const packFull = packForSec(sec);
+    if (!packFull?.length || !rows?.length) return rows;
+    const { pack, timeToIdx } = packWindowForRows(packFull, rows);
     let prevPos = 0;
     const withOhlc = (r, idx) => {
       const posAfter = r?.pos ?? 0;
@@ -6894,26 +7020,49 @@
         low: r.low ?? candle?.low ?? r.close
       };
     };
-    if (light) {
-      return rows.map((r) => withOhlc(r, timeToIdx.get(r.time)));
+    if (enrichOpts?.withIndicators !== true) {
+      const out = new Array(rows.length);
+      for (let ri = 0; ri < rows.length; ri++) {
+        out[ri] = withOhlc(rows[ri], timeToIdx.get(rows[ri].time));
+      }
+      return out;
     }
-    const cache = indicatorCacheForPack(pack);
-    if (!cache) return rows.map((r) => withOhlc(r, timeToIdx.get(r.time)));
-    const p = params();
-    const indicators = indicatorSelection();
-    const specs = selectedLogicIds()
-      .map((id) => E.resolveLogicSpec(id, state.customLines, p, indicators))
-      .filter((s) => s && !s.disabled);
-    prevPos = 0;
-    return rows.map((r) => {
-      const idx = timeToIdx.get(r.time);
-      const row = withOhlc(r, idx);
-      if (idx == null) return row;
-      const ind = E.collectChartIndicatorsForSpecs
-        ? E.collectChartIndicatorsForSpecs(cache, specs, idx)
-        : {};
-      return { ...row, ...ind };
+    await applyChartIndicatorsInPlace(rows, sec);
+    return rows;
+  }
+
+  /** Кнопка «Показать индикаторы» для одного графика (после расчёта). */
+  function wireChartIndicatorButton(btn, sec, rawRows, onRowsReady) {
+    if (!btn || !rawRows?.length) return;
+    let loaded = false;
+    btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      if (loaded) return;
+      btn.disabled = true;
+      const prev = btn.textContent;
+      btn.textContent = "Загрузка…";
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      try {
+        await applyChartIndicatorsInPlace(rawRows, sec);
+        loaded = true;
+        btn.textContent = "Индикаторы на графике";
+        btn.classList.add("ml-chart-copy-btn--ok");
+        await Promise.resolve(onRowsReady(rawRows));
+      } catch (_) {
+        btn.disabled = false;
+        btn.textContent = prev;
+      }
     });
+  }
+
+  function createChartIndicatorButton(sec, rawRows, onRowsReady) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ml-chart-copy-btn";
+    btn.textContent = "Показать индикаторы";
+    btn.title = "Загрузить линии выбранных индикаторов и легенду только для этого графика";
+    wireChartIndicatorButton(btn, sec, rawRows, onRowsReady);
+    return btn;
   }
 
   /** Диагностика графика по инструменту (raw vs enriched rows). */
@@ -6925,7 +7074,7 @@
       if (r?.tradeIn) rawTradeIn += 1;
       if (r?.tradeOut) rawTradeOut += 1;
     }
-    const enriched = enrichedRows ?? enrichChartRowsForDisplay(rows, sec);
+    const enriched = enrichedRows ?? rawRows;
     const sum = (typeof MLInstrumentChart !== "undefined" && MLInstrumentChart.summarizeChartRows)
       ? MLInstrumentChart.summarizeChartRows(enriched)
       : { rows: enriched.length, tradeIn: 0, tradeOut: 0, samples: [] };
@@ -8296,8 +8445,9 @@ ${referenceBlock}
 
     for (let ei = 0; ei < entries.length; ei++) {
       const entry = entries[ei];
+      const entrySec = entry.sec || entry.row?.sec || "";
       if (onProgress) {
-        await Promise.resolve(onProgress(ei, entries.length, sec));
+        await Promise.resolve(onProgress(ei, entries.length, entrySec));
       }
       if (entry.kind === "fail") {
         const failEl = document.createElement("div");
@@ -8318,12 +8468,16 @@ ${referenceBlock}
         continue;
       }
       const displayFin = liveSession ? liveDisplayFinresp(p.sec, p.finresp) : p.finresp;
-      const chartRows = enrichChartRowsForDisplay(rows.length ? rows : p.rows, p.sec);
-      chartDiags.push(analyzeChartInstrument(p.sec, rows.length ? rows : p.rows, chartRows));
+      const rawRows = rows.length ? rows : p.rows;
+      const chartRows = await enrichChartRowsForDisplay(rawRows, p.sec);
+      chartDiags.push(analyzeChartInstrument(p.sec, rawRows, chartRows));
       const stopV = chartStopLines(chartRows, portfolioEvents);
       const orderV = liveSession ? orderMarkersForChart(p.sec, chartRows) : [];
       const vLines = [...stopV, ...orderV];
       const decor = chartDecorFromRows(chartRows, vLines);
+      const indicatorLoader = (!liveSession && typeof MLInstrumentChart !== "undefined")
+        ? () => applyChartIndicatorsInPlace(chartRows, p.sec)
+        : null;
 
       const mini = document.createElement("div");
       mini.className = "chart-mini";
@@ -8347,22 +8501,48 @@ ${referenceBlock}
           secTitle: p.sec,
           compact,
           decor,
-          format: chartFormat
+          format: chartFormat,
+          indicatorLoader
         });
       } else {
+        const header = document.createElement("div");
+        header.className = "chart-mini-header";
         const titleEl = document.createElement("p");
         titleEl.className = "chart-sec-title";
         titleEl.textContent = p.sec;
-        mini.appendChild(titleEl);
+        header.appendChild(titleEl);
+        const actions = document.createElement("div");
+        actions.className = "chart-mini-header-actions";
+        if (indicatorLoader) {
+          actions.appendChild(createChartIndicatorButton(p.sec, chartRows, async (enriched) => {
+            const body = mini.querySelector(".chart-mini-body");
+            if (!body) return;
+            const stopV2 = chartStopLines(enriched, portfolioEvents);
+            const orderV2 = liveSession ? orderMarkersForChart(p.sec, enriched) : [];
+            const decor2 = chartDecorFromRows(enriched, [...stopV2, ...orderV2]);
+            await yieldToUi();
+            const svg = buildChartSvg(enriched, displayFin, `График ${p.sec}`, compact, [...stopV2, ...orderV2], decor2);
+            body.innerHTML = svg || `<p class="chart-fail-msg">Нет данных для графика в выбранном окне.</p>`;
+            const legendEl = body.querySelector(".ml-chart-ind-legend-wrap");
+            if (legendEl && typeof MLInstrumentChart !== "undefined" && MLInstrumentChart.buildIndicatorLegend) {
+              legendEl.innerHTML = MLInstrumentChart.buildIndicatorLegend(enriched);
+            }
+          }));
+        }
+        header.appendChild(actions);
+        mini.appendChild(header);
+        const body = document.createElement("div");
+        body.className = "chart-mini-body";
         const svg = buildChartSvg(chartRows, displayFin, `График ${p.sec}`, compact, vLines, decor);
         if (!svg) {
-          mini.innerHTML += `<p class="chart-fail-msg">Нет данных для графика в выбранном окне.</p>`;
+          body.innerHTML = `<p class="chart-fail-msg">Нет данных для графика в выбранном окне.</p>`;
         } else {
-          mini.insertAdjacentHTML("beforeend", svg);
+          body.innerHTML = svg;
           if (typeof MLInstrumentChart !== "undefined" && MLInstrumentChart.buildIndicatorLegend) {
-            mini.insertAdjacentHTML("beforeend", MLInstrumentChart.buildIndicatorLegend(chartRows));
+            body.insertAdjacentHTML("beforeend", `<div class="ml-chart-ind-legend-wrap">${MLInstrumentChart.buildIndicatorLegend(chartRows)}</div>`);
           }
         }
+        mini.appendChild(body);
         stack.appendChild(mini);
       }
       if (onProgress) await yieldToUi();
@@ -8371,6 +8551,7 @@ ${referenceBlock}
     if (stack.childNodes.length) {
       chartBox.appendChild(stack);
       showInstrumentChartBox(chartBox);
+      if (!liveSession) void queueChartIndicatorPrewarm(entries);
       if (calcState) {
         calcState.lastChartDiag = {
           builtAt: new Date().toISOString(),
@@ -8702,6 +8883,7 @@ ${referenceBlock}
     const maxD = maxCalcDays(interval, instruments.length);
     state.runCancelRequested = false;
     state.runCheckpoint = null;
+    resetChartIndicatorSpecsCache();
     const shouldCancel = () => isRunCancelled(runGen);
     let partialApplied = false;
     let focusResultsAfterRun = false;
@@ -8786,6 +8968,8 @@ ${referenceBlock}
         }
       } else {
         applyResult(result, { redrawCharts: false, liveSession: false });
+        focusResultsAfterRun = true;
+        await scrollResultsIntoView();
         const { a: ra, b: rb, perSec, stopper } = result;
         setCalcProgress("Графики по инструментам…", CALC_PROGRESS.CHARTS_START);
         await cycleBeat({ phase: "charts", note: "instruments-start" });

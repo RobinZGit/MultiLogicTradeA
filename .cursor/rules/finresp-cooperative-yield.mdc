@@ -1,0 +1,48 @@
+---
+description: FINRESP — кооперативные процедуры (yield), UI не блокировать; тесты на производительность
+globs: src/finresp/**,tests/finresp/**,src/app/finresp/**
+alwaysApply: false
+---
+
+# FINRESP: кооперативные процедуры и производительность
+
+## Длинную работу — только кооперативной процедурой
+
+Любой расчёт, отрисовка, загрузка индикаторов, цикл по барам/инструментам **нельзя** держать в одном синхронном куске на главном потоке.
+
+Оборачивать в **async-процедуру с отдачей UI** (cooperative yield):
+
+- `yieldToUi()` — минимум после смены текста кнопки/статуса и перед тяжёлой работой
+- `cycleBeat({ phase, i, total, sec })` — в циклах расчёта FINRESP / графиков / загрузки MOEX
+- чанки (32–80 итераций) + `await yieldToUi()` внутри цикла
+- `requestAnimationFrame` (двойной) перед sync-работой по клику, чтобы успела отрисоваться «Загрузка…»
+- фоновый предрасчёт (`queue…Prewarm`) там, где кнопка иначе ждёт секунды
+
+Перед первым `await` **не** вызывать тяжёлый warm/cache/render — сначала отдать кадр UI.
+
+```javascript
+// ❌ Плохо — UI «зависает», «Загрузка…» не видна
+btn.textContent = 'Загрузка…';
+const data = heavySync(rows);
+
+// ✅ Хорошо
+btn.textContent = 'Загрузка…';
+btn.disabled = true;
+await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+await buildColumnsAsync(rows, () => yieldToUi());
+await new Promise((r) => requestAnimationFrame(r));
+render();
+```
+
+Использовать существующие точки: `MultiLogicFinrespCycleCoop`, `yieldToUi`, `cycleBegin` / `cycleEnd` в `boot.js`.
+
+## Тесты при проблемах с производительностью
+
+Если исправляли зависание UI, регресс по времени или лишний sync-цикл:
+
+1. Добавить/расширить тест в `tests/finresp/` (Node, без браузера где возможно).
+2. Проверять контракт: наличие yield, чанков, отсутствие sync-тяжёлого пути, кэш/колонки in-place.
+3. Запуск: `npm run test:finresp`.
+4. Для smoke perf — `npm run test:finresp:perf:smoke` при изменении engine/boot циклов.
+
+Не оставлять perf-фикс без теста, если воспроизведение описуемо (размер окна, N инструментов, клик по кнопке).

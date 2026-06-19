@@ -1854,6 +1854,63 @@
     return ind;
   }
 
+  /** Предрасчёт серий индикаторов для графика (один проход, без цикла по барам). */
+  function warmChartIndicatorCacheForSpecs(cache, specs) {
+    if (!cache?.candles?.length || !specs?.length) return;
+    const last = cache.candles.length - 1;
+    collectChartIndicatorsForSpecs(cache, specs, 0);
+    if (last > 0) collectChartIndicatorsForSpecs(cache, specs, last);
+  }
+
+  /** Только линии на графике цены (не Stoch/CCI/MACD — отдельная шкала). */
+  function warmChartDisplayIndicatorSeries(cache, specs, indicatorSelection) {
+    warmChartIndicatorCacheForSpecs(cache, specs);
+    const sel = normalizeIndicatorSelection(indicatorSelection);
+    if (sel.sma) cache.sma(100);
+    if (sel.cma) cache.cma(100, 1);
+    if (sel.linreg) cache.linreg(20, 2);
+    if (sel.bollinger) cache.bollinger(20, 2);
+    if (sel.vwap) cache.vwap();
+  }
+
+  /** Индикаторы для отображения на графике: из логики + выбранные ценовые. */
+  function collectChartIndicatorsForDisplay(cache, specs, indicatorSelection, idx) {
+    const ind = collectChartIndicatorsForSpecs(cache, specs, idx);
+    const sel = normalizeIndicatorSelection(indicatorSelection);
+    if (sel.sma && ind.sma == null) ind.sma = cache.sma(100)[idx];
+    if (sel.cma && ind.cma == null) ind.cma = cache.cma(100, 1)[idx];
+    if (sel.linreg && ind.linregMid == null) {
+      const lr = cache.linreg(20, 2);
+      ind.linregMid = lr.center[idx];
+      ind.linregUp = lr.up[idx];
+      ind.linregDn = lr.down[idx];
+    }
+    if (sel.bollinger && ind.bollingerMid == null) {
+      const bb = cache.bollinger(20, 2);
+      ind.bollingerMid = bb.center[idx];
+      ind.bollingerUp = bb.up[idx];
+      ind.bollingerDn = bb.down[idx];
+    }
+    if (sel.vwap && ind.vwap == null) ind.vwap = cache.vwap()[idx];
+    return ind;
+  }
+
+  /** Колонки индикаторов по барам пакета (для быстрого наложения на строки графика). */
+  function buildChartDisplayIndicatorColumns(cache, specs, indicatorSelection) {
+    warmChartDisplayIndicatorSeries(cache, specs, indicatorSelection);
+    const n = cache.candles.length;
+    const columns = {};
+    for (let idx = 0; idx < n; idx++) {
+      const ind = collectChartIndicatorsForDisplay(cache, specs, indicatorSelection, idx);
+      for (const [k, v] of Object.entries(ind)) {
+        if (v == null) continue;
+        if (!columns[k]) columns[k] = new Array(n);
+        columns[k][idx] = v;
+      }
+    }
+    return columns;
+  }
+
   /** Кэш индикаторов по свечам (для обогащения строк графика). */
   function createIndicatorCache(candles) { return new IndicatorCache(candles); }
 
@@ -5939,6 +5996,10 @@
     conjugateLogicLineVariants,
     tradeSignalHint,
     createIndicatorCache,
-    collectChartIndicatorsForSpecs
+    collectChartIndicatorsForSpecs,
+    warmChartIndicatorCacheForSpecs,
+    warmChartDisplayIndicatorSeries,
+    collectChartIndicatorsForDisplay,
+    buildChartDisplayIndicatorColumns
   };
 })(typeof window !== "undefined" ? window : globalThis);

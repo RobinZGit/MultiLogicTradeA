@@ -4,7 +4,7 @@
 (function (root) {
   "use strict";
 
-  const CHARTS_MODULE_VERSION = "2026-06-14-marker-labels-v1";
+  const CHARTS_MODULE_VERSION = "2026-06-19-indicator-toggle-v3";
 
   const PRICE_KEYS = [
     "high", "low", "open", "close",
@@ -570,7 +570,7 @@ ${finBadgeSvg}
    */
   function mount(host, options) {
     if (!host) return null;
-    const rows = options?.rows || [];
+    let rows = options?.rows || [];
     if (!rows.length) {
       host.innerHTML = "";
       return null;
@@ -583,12 +583,14 @@ ${finBadgeSvg}
     let lastTapAt = 0;
     let interactRaf = 0;
     let pendingView = null;
+    let indicatorsOnChart = false;
 
     host.innerHTML = "";
     const wrap = document.createElement("div");
     wrap.className = "ml-instrument-chart";
 
     let copyBtn = null;
+    let indBtn = null;
     if (options?.secTitle) {
       const header = document.createElement("div");
       header.className = "chart-mini-header";
@@ -602,8 +604,41 @@ ${finBadgeSvg}
       copyBtn.title = "Скопировать видимый график в буфер обмена (PNG)";
       const actions = document.createElement("div");
       actions.className = "chart-mini-header-actions";
-      actions.appendChild(buildChartNavToolbar());
+      if (typeof options?.indicatorLoader === "function") {
+        indBtn = document.createElement("button");
+        indBtn.type = "button";
+        indBtn.className = "ml-chart-copy-btn";
+        indBtn.textContent = "Показать индикаторы";
+        indBtn.title = "Загрузить линии выбранных индикаторов и легенду только для этого графика";
+        indBtn.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          if (indicatorsOnChart) return;
+          indBtn.disabled = true;
+          const prev = indBtn.textContent;
+          indBtn.textContent = "Загрузка…";
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          try {
+            await options.indicatorLoader();
+            if (!rows?.length) {
+              indBtn.disabled = false;
+              indBtn.textContent = prev;
+              return;
+            }
+            indicatorsOnChart = true;
+            view = { start: 0, end: rows.length - 1 };
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+            render();
+            indBtn.textContent = "Индикаторы на графике";
+            indBtn.classList.add("ml-chart-copy-btn--ok");
+          } catch (_) {
+            indBtn.disabled = false;
+            indBtn.textContent = prev;
+          }
+        });
+      }
       actions.appendChild(copyBtn);
+      if (indBtn) actions.appendChild(indBtn);
+      actions.appendChild(buildChartNavToolbar());
       header.appendChild(titleEl);
       header.appendChild(actions);
       wrap.appendChild(header);
@@ -897,6 +932,18 @@ ${finBadgeSvg}
       resetView() {
         view = { start: 0, end: rows.length - 1 };
         render();
+      },
+      setRows(newRows) {
+        if (!newRows?.length) return;
+        rows = newRows;
+        indicatorsOnChart = true;
+        view = { start: 0, end: rows.length - 1 };
+        render();
+        if (indBtn) {
+          indBtn.textContent = "Индикаторы на графике";
+          indBtn.classList.add("ml-chart-copy-btn--ok");
+          indBtn.disabled = true;
+        }
       },
       panByBars,
       zoomIn() {
