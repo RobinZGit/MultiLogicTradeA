@@ -97,6 +97,7 @@
     const logicSessionEventSink = d.logicSessionEventSink;
     const isDrawdownRecoveryActive = (...a) => d.isDrawdownRecoveryActive(...a);
     const clearDrawdownRecoveryState = (...a) => d.clearDrawdownRecoveryState(...a);
+    const resetLogicStackAndCachesForBroom = (...a) => d.resetLogicStackAndCachesForBroom(...a);
     const commissionPctValue = (...a) => d.commissionPctValue(...a);
     const noteLiveTech = (...a) => d.noteLiveTech(...a);
     const noteTechError = (...a) => d.noteTechError(...a);
@@ -7078,6 +7079,10 @@ ${renderBlock}
     cachedArchivedTrades = null;
     cachedArchivedSessionId = null;
     state.live.sessionEvents = [];
+    resetLogicStackAndCachesForBroom();
+    resetLiveSessionChartBaselines();
+    syncRecoveryStopBanner();
+    invalidateFormChange({ skipSave: true });
     if (sandbox) {
       const dep = +($("vol-deposit")?.value || 0) || defaultProvisionalDepositRub();
       await resetSandboxLedgerToBaseline(dep);
@@ -7099,6 +7104,7 @@ ${renderBlock}
     scheduleRenderLivePositionsPanel(true);
     renderLivePortfolioStats();
     syncLiveTradingUi({ skipGoalCheck: true });
+    refreshLiveEquityChartsUi();
     noteLiveTech("live-session-clear", `${brokerId} sandbox=${sandbox}`);
   }
 
@@ -7110,8 +7116,8 @@ ${renderBlock}
       const sandbox = isLiveSandbox();
       const label = sandbox ? "песочницы (фейк)" : "кэша сделок";
       const extra = sandbox
-        ? " Позиции и журнал песочницы будут сброшены к депозиту."
-        : " Позиции на бирже не затрагиваются — очищается только сохранённый журнал в браузере.";
+        ? " Позиции и журнал песочницы будут сброшены к депозиту. В стек вернутся все логики каталога, сбросятся паузы просадки и кэш equity."
+        : " Позиции на бирже не затрагиваются — очищается журнал в браузере. В стек вернутся все логики каталога, сбросятся паузы просадки и кэш equity.";
       if (!confirm(`Очистить сохранённый журнал ${label}?${extra}`)) return;
       void clearLiveSessionCache();
     });

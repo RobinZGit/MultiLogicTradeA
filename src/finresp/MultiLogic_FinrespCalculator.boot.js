@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-19-tbru-delta-reconcile-v30";
+  const CALC_PAGE_VERSION = "2026-06-19-broom-logic-reset-v31";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -2425,6 +2425,7 @@
     get portfolioDrawdownState() { return ensurePortfolioDrawdownState; },
     get isDrawdownRecoveryActive() { return isDrawdownRecoveryActive; },
     get clearDrawdownRecoveryState() { return clearDrawdownRecoveryState; },
+    get resetLogicStackAndCachesForBroom() { return resetLogicStackAndCachesForBroom; },
     get commissionPctValue() { return commissionPctValue; },
     noteLiveTech, noteTechError, noteBrokerTech, updateTechInfo, saveConfig,
     get selectedInstruments() { return selectedInstruments; },
@@ -2775,6 +2776,36 @@
   function resetLogicRecovery(keys) {
     clearDrawdownRecoveryState();
     for (const key of keys || selectedLogicIds()) logicRecoveryEntry(key);
+  }
+
+  /**
+   * Метла live-сессии: все логики каталога в стеке + сброс кэшей equity/просадки.
+   */
+  function resetLogicStackAndCachesForBroom() {
+    ensureLogicLineKeys();
+    const allIds = state.logicLineKeys.slice();
+    const prev = selectedLogicIds();
+    state.logicSelectionCleared = false;
+    if (prev.length !== allIds.length || allIds.some((id) => !prev.includes(id))) {
+      logicSessionEventSink.record({
+        action: "broom_reset",
+        scope: "stack",
+        reason: "live_session_clear",
+        stackBefore: prev,
+        stackAfter: allIds
+      });
+    }
+    if (!bridgeApplyLogicSelection(allIds, false)) {
+      const sel = $("calc-logic");
+      if (sel) {
+        for (const o of sel.options) o.selected = true;
+      }
+    }
+    state.equityRunsCache = null;
+    state.lastEquityChartCtx = null;
+    state.logicModelEquity = {};
+    clearDrawdownRecoveryState();
+    syncLogicSelectedHint();
   }
 
   function applyLogicRecoveryFromEvents(events) {
