@@ -593,6 +593,12 @@ body.calc-running .live-trading-panel--active .live-trading-toolbar{
 .live-trading-panel--sandbox .live-trading-stat-free-cash span{color:#14532d;}
 .live-trading-stats-hint{grid-column:1/-1;margin:0;font-size:.78rem;color:#6b7280;line-height:1.45;}
 .live-trading-stat-free-cash span.live-cash-negative{color:#b91c1c;}
+.live-trading-stat-finresult--dual{grid-column:span 2;min-width:min(100%,220px);}
+.live-finresult-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:.15rem .45rem;margin:0 0 .28rem;}
+.live-finresult-row:last-child{margin-bottom:0;}
+.live-finresult-row b{font-size:.76rem;line-height:1.25;}
+.live-finresult-row .live-finresult-value{font-size:1.05rem;font-weight:700;}
+.live-finresult-row--model b{color:#6b7280;font-weight:600;}
 .live-trading-stat-finresult span.live-fin-positive{color:#047857;}
 .live-trading-stat-finresult span.live-fin-negative{color:#b91c1c;}
 .live-trading-panel--sandbox .live-trading-stat-finresult span.live-fin-positive{color:#15803d;}

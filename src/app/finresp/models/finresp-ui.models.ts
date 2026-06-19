@@ -49,7 +49,14 @@ export interface FinrespLiveViewModel {
   freeCashText: string;
   commissionText: string;
   commissionColor: string;
+  /** @deprecated combined; use finresultRealText + finresultModelText */
   finresultText: string;
+  finresultRealText: string;
+  finresultModelText: string;
+  finresultRealPositive: boolean;
+  finresultRealNegative: boolean;
+  finresultModelPositive: boolean;
+  finresultModelNegative: boolean;
   statsHintText: string;
   toggleText: string;
   toggleActive: boolean;
@@ -71,6 +78,12 @@ export const EMPTY_FINRESP_LIVE: FinrespLiveViewModel = {
   commissionText: '0',
   commissionColor: '#b91c1c',
   finresultText: '—',
+  finresultRealText: '—',
+  finresultModelText: '—',
+  finresultRealPositive: false,
+  finresultRealNegative: false,
+  finresultModelPositive: false,
+  finresultModelNegative: false,
   statsHintText: 'Портфель = деньги (свободные RUB) + стоимость открытых позиций по текущим ценам.',
   toggleText: 'Начать торговлю',
   toggleActive: false,

@@ -63,9 +63,9 @@
 <tr><th>Деньги, свободно</th><td>${fmtRub(ps.freeCashRub)}</td><td class="proto-hint">${esc(hc.freeCash || "")}</td></tr>
 <tr><th>Позиции (MTM)</th><td>${fmtRub(ps.positionsMtmRub)}</td><td class="proto-hint">Стоимость открытых позиций по текущим ценам</td></tr>
 <tr><th>Комиссии уплачено</th><td class="neg">−${fmt(ps.commissionPaidRub)} ₽</td><td class="proto-hint">Сумма комиссий сессии</td></tr>
-<tr><th>FINRESP Σ (модель)</th><td>${fmtSignedRub(ps.modelFinrespRub)}</td><td class="proto-hint">${esc(hc.modelFinresp || "")}</td></tr>
-<tr><th>Портфель Δ</th><td>${fmtSignedRub(ps.portfolioDeltaRub)}</td><td class="proto-hint">${esc(hc.portfolioDelta || "")} Baseline: ${fmtRub(ps.sessionPortfolioBaselineRub)}</td></tr>
+<tr><th>Портфель Δ (факт)</th><td class="fin">${fmtSignedRub(ps.portfolioDeltaRub)}</td><td class="proto-hint">${esc(hc.portfolioDelta || "")} Baseline: ${fmtRub(ps.sessionPortfolioBaselineRub)}</td></tr>
 <tr><th>Σ закрытий FIFO</th><td class="fin">${fmtSignedRub(t.sumFin)}</td><td class="proto-hint">${esc(hc.closeFinresp || "")}</td></tr>
+<tr><th>FINRESP Σ (модель)</th><td>${fmtSignedRub(ps.modelFinrespRub)}</td><td class="proto-hint">${esc(hc.modelFinresp || "")}</td></tr>
 </table>
 <p class="proto-formula">Σ закрытий = прод ${fmt(t.sumSale)} − покуп ${fmt(t.sumPurchase)} − buy ${fmt(t.sumBuyFee)} − sell ${fmt(t.sumSellFee)} · портфель Δ ${fmtSignedRub(t.portfolioDelta)}</p>
 </section>`;

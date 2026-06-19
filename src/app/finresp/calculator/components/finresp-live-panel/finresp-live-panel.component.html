@@ -88,8 +88,16 @@
 <div class="live-trading-stat live-trading-stat-free-cash" id="live-free-cash-stat" title="RUB на счёте, не вложенные в бумаги: старт − комиссии − покупки + выручка от продаж">
 <b id="live-free-cash-label">Деньги, свободно (₽)</b><span id="live-free-cash-value">{{ live.freeCashText }}</span></div>
 <div class="live-trading-stat live-trading-stat-commission"><b id="live-commission-label">{{ live.commissionLabel }}</b><span id="live-commission-paid" [style.color]="live.commissionColor">{{ live.commissionText }}</span></div>
-<div class="live-trading-stat live-trading-stat-finresult" id="live-finresult-stat" title="FINRESP Σ по модели сигналов — то же значение, что в блоке результатов расчёта ниже (не дельта портфеля T-Bank)">
-<b id="live-finresult-label">FINRESP Σ (модель), ₽</b><span id="live-finresult-value">{{ live.finresultText }}</span></div>
+<div class="live-trading-stat live-trading-stat-finresult live-trading-stat-finresult--dual" id="live-finresult-stat" title="Портфель Δ — факт по счёту/журналу. FINRESP Σ (модель) — симуляция по сигналам на свечах (для цели % и PauseOnDrawdown).">
+<div class="live-finresult-row live-finresult-row--real">
+<b id="live-finresult-real-label">Портфель Δ (факт), ₽</b>
+<span id="live-finresult-real-value" class="live-finresult-value" [class.live-fin-positive]="live.finresultRealPositive" [class.live-fin-negative]="live.finresultRealNegative">{{ live.finresultRealText }}</span>
+</div>
+<div class="live-finresult-row live-finresult-row--model">
+<b id="live-finresult-model-label">FINRESP Σ (модель), ₽</b>
+<span id="live-finresult-model-value" class="live-finresult-value" [class.live-fin-positive]="live.finresultModelPositive" [class.live-fin-negative]="live.finresultModelNegative">{{ live.finresultModelText }}</span>
+</div>
+</div>
 <p class="live-trading-stats-hint" id="live-trading-stats-hint">{{ live.statsHintText }}</p>
 </div>
 <details class="live-manual-order" id="live-manual-order-panel">

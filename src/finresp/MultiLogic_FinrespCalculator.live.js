@@ -986,16 +986,8 @@
     const mtm = livePositionsMtmRub();
     const pv = view.portfolioValue;
     const comm = view.commissionPaid;
-    const fin = liveFinResultRub();
-    const modelFin = state.live.modelFinresp;
     if (Number.isFinite(cash) && Number.isFinite(mtm) && Number.isFinite(pv)) {
       const commTxt = Number.isFinite(comm) && comm > 0 ? ` · комиссии: −${fmt(comm, 2)} ₽` : "";
-      const modelTxt = Number.isFinite(modelFin)
-        ? ` · FINRESP Σ (модель): ${fmtSignedRub(modelFin, 2)} ₽ = блок расчёта`
-        : "";
-      const portTxt = Number.isFinite(fin)
-        ? ` · портфель Δ: ${fmtSignedRub(fin, 2)} ₽`
-        : "";
       const histFin = (() => {
         try {
           const done = (state.live.tradeHistory || []).filter((h) => !h.active);
@@ -1003,11 +995,11 @@
         } catch (_) { return NaN; }
       })();
       const histTxt = Number.isFinite(histFin)
-        ? ` · Σ закрытий (FIFO): ${fmtSignedRub(histFin, 2)} ₽`
+        ? ` · Σ закрытий FIFO: ${fmtSignedRub(histFin, 2)} ₽`
         : "";
       el.textContent =
         `Портфель = деньги + позиции: ${fmt(cash, 2)} + ${fmt(mtm, 2)} = ${fmt(pv, 2)} ₽`
-        + ` · «Деньги, свободно» — не в бумагах (старт − комиссии ± сделки)${commTxt}${modelTxt}${portTxt}${histTxt}`;
+        + ` · деньги свободно — не в бумагах${commTxt}${histTxt}`;
       return;
     }
     if (isLiveSandbox()) {
@@ -1073,21 +1065,61 @@
     }
   }
 
+  /** Поля FINRESP для live-панели и Angular bridge. */
+  function liveFinresultViewFields() {
+    const inSession = isLiveTradingSession();
+    const realV = inSession ? liveFinResultRub() : NaN;
+    const modelV = inSession && Number.isFinite(state.live.modelFinresp)
+      ? state.live.modelFinresp
+      : NaN;
+    const format = (v) => (Number.isFinite(v) ? `${fmtSignedRub(v, 2)} ₽` : "—");
+    return {
+      finresultRealText: format(realV),
+      finresultModelText: format(modelV),
+      finresultRealPositive: Number.isFinite(realV) && realV > 0,
+      finresultRealNegative: Number.isFinite(realV) && realV < 0,
+      finresultModelPositive: Number.isFinite(modelV) && modelV > 0,
+      finresultModelNegative: Number.isFinite(modelV) && modelV < 0,
+      finresultText: format(realV)
+    };
+  }
+
+  function applyFinresultValueEl(el, v) {
+    if (!el) return;
+    el.textContent = Number.isFinite(v) ? `${fmtSignedRub(v, 2)} ₽` : "—";
+    el.classList.toggle("live-fin-negative", Number.isFinite(v) && v < 0);
+    el.classList.toggle("live-fin-positive", Number.isFinite(v) && v > 0);
+    el.style.color = "";
+  }
+
   /** Отрисовка элемента live-панели: `renderLiveFinResultStat`. */
   function renderLiveFinResultStat() {
     const stat = $("live-finresult-stat");
-    const el = $("live-finresult-value");
-    if (!el) return;
+    const realEl = $("live-finresult-real-value");
+    const modelEl = $("live-finresult-model-value");
+    const legacyEl = $("live-finresult-value");
+    if (!realEl && !modelEl && !legacyEl) return;
     if (stat) stat.hidden = !isLiveMode();
-    const v = isLiveTradingSession() && Number.isFinite(state.live.modelFinresp)
+
+    const inSession = isLiveTradingSession();
+    const realV = inSession ? liveFinResultRub() : NaN;
+    const modelV = inSession && Number.isFinite(state.live.modelFinresp)
       ? state.live.modelFinresp
       : NaN;
-    el.textContent = Number.isFinite(v) ? `${fmtSignedRub(v, 2)} ₽` : "—";
-    const neg = Number.isFinite(v) && v < 0;
-    const pos = Number.isFinite(v) && v > 0;
-    el.classList.toggle("live-fin-negative", neg);
-    el.classList.toggle("live-fin-positive", pos);
-    el.style.color = neg ? "#b91c1c" : (pos ? "#047857" : "");
+
+    const realLabel = $("live-finresult-real-label");
+    if (realLabel) {
+      realLabel.textContent = isLiveSandbox()
+        ? "Портфель Δ (факт, фейк), ₽"
+        : "Портфель Δ (факт), ₽";
+    }
+
+    applyFinresultValueEl(realEl, realV);
+    applyFinresultValueEl(modelEl, modelV);
+    if (legacyEl && !realEl) applyFinresultValueEl(legacyEl, modelV);
+
+    const fields = liveFinresultViewFields();
+    bridgeSetLive(fields);
   }
 
   /** Сброс baseline FINRESP при старте торговли (отсчёт с «Начать торговлю»). */
@@ -3034,14 +3066,10 @@
     const sumSellFee = totals?.sumSellFee ?? 0;
     const sumSale = totals?.sumSale ?? 0;
     const sumPurchase = totals?.sumPurchase ?? 0;
-    const portDelta = totals?.portfolioDelta;
     const finCls = sumFin > 0 ? "trade-finresp-pos" : sumFin < 0 ? "trade-finresp-neg" : "";
     const finStr = `${sumFin >= 0 ? "+" : ""}${fmt(sumFin, 2)} ₽`;
     const formula = `прод ${fmt(sumSale, 2)} − покуп ${fmt(sumPurchase, 2)} − buy ${fmt(sumBuyFee, 2)} − sell ${fmt(sumSellFee, 2)}`;
-    const portStr = Number.isFinite(portDelta)
-      ? ` · портфель Δ ${portDelta >= 0 ? "+" : ""}${fmt(portDelta, 2)} ₽`
-      : "";
-    return `<div class="live-trade-history-totals" role="status" aria-label="Итоги закрытий FIFO" title="FINRESPΔ = Σ продажи − Σ покупки (FIFO) − комиссии buy − sell. Портфель Δ = текущий портфель − старт сессии (включает нереализованное по открытым позициям). FINRESP Σ (модель) вверху — по сигналам расчёта, не по журналу сделок."><span class="live-trade-history-totals-label">Итоги (закрытия FIFO):</span> <span class="live-trade-history-totals-fin ${finCls}">FINRESPΔ ${finStr}</span> <span class="live-trade-history-totals-sep">=</span> <span class="live-trade-history-totals-formula">${formula}</span>${portStr}</div>`;
+    return `<div class="live-trade-history-totals" role="status" aria-label="Итоги закрытий FIFO" title="FINRESPΔ = Σ продажи − Σ покупки (FIFO) − комиссии buy − sell. Портфель Δ и модель — в блоке FINRESP выше."><span class="live-trade-history-totals-label">Итоги (закрытия FIFO):</span> <span class="live-trade-history-totals-fin ${finCls}">FINRESPΔ ${finStr}</span> <span class="live-trade-history-totals-sep">=</span> <span class="live-trade-history-totals-formula">${formula}</span></div>`;
   }
 
   /** Отрисовка элемента live-панели: `renderLiveOrdersPanel`. */
@@ -3325,8 +3353,8 @@
         freeCash: isLiveSandbox()
           ? "Деньги свободно (фейк) = старт песочницы − комиссии − покупки + выручка продаж."
           : "Деньги свободно = RUB на счёте T-Bank, не в бумагах.",
-        portfolioDelta: "Портфель Δ = текущий портфель − baseline на старт live-сессии.",
-        modelFinresp: "FINRESP Σ (модель) = результат расчёта по сигналам логики (блок «Рассчитать»), не журнал сделок.",
+        portfolioDelta: "Портфель Δ (факт) = текущий портфель − baseline на старт live-сессии (деньги + MTM открытых позиций).",
+        modelFinresp: "FINRESP Σ (модель) = симуляция по сигналам на свечах; для цели % годовых и PauseOnDrawdown, не дублирует журнал сделок.",
         closeFinresp: "FINRESPΔ закрытия = Σ продажи − Σ покупки (FIFO-пакеты) − комиссия buy − комиссия sell.",
         fifoPackets: "Каждое закрытие ссылается на openTradeId покупок/продаж открытия через fifoPackets."
       }
@@ -4769,7 +4797,7 @@ ${renderBlock}
       freeCashText: $("live-free-cash-value")?.textContent ?? "—",
       commissionText: commissionEl?.textContent ?? "0",
       commissionColor: commissionEl?.style.color ?? "#b91c1c",
-      finresultText: $("live-finresult-value")?.textContent ?? "—",
+      ...liveFinresultViewFields(),
       statsHintText: $("live-trading-stats-hint")?.textContent ?? "",
       commissionLabel: $("live-commission-label")?.textContent ?? "",
       journalMetaText: $("live-trade-history-meta")?.textContent ?? "",
