@@ -95,21 +95,84 @@ describe("buildTbruLiveReconcileTargets", () => {
   const holdings = data.holdings.slice(0, 4);
   const unit = 980;
 
-  it("добавляет цель 0 для ISIN вне списка фонда (продать лишнее)", () => {
+  it("orphan в deploy-конверте — продаёт лишнее внутри конверта", () => {
+    const orphanSec = "RU000A10ORFA1";
     const prices = Object.fromEntries(holdings.map((h) => [h.sec, unit]));
     const rows = proc.buildTbruLiveReconcileTargets({
       holdings,
       deployCapRub: 100000,
       wealthRub: 100000,
       cashRub: 50000,
-      positionsBySec: { [holdings[0].sec]: 2, ORPHANBOND1: 3 },
-      pricesBySec: { ...prices, ORPHANBOND1: unit },
+      positionsBySec: { [holdings[0].sec]: 2, [orphanSec]: 3 },
+      pricesBySec: { ...prices, [orphanSec]: unit },
       minTradeRub: 500
     });
-    const orphan = rows.find((r) => r.sec === "ORPHANBOND1");
+    const orphan = rows.find((r) => r.sec === orphanSec);
     assert.ok(orphan);
     assert.equal(orphan.pos, 0);
     assert.equal(orphan.orphan, true);
+  });
+
+  it("orphan вне deploy-конверта — не продаёт", () => {
+    const orphanSec = "RU000A10ORFA2";
+    const rows = proc.buildTbruLiveReconcileTargets({
+      holdings: holdings.slice(0, 2),
+      deployCapRub: 500,
+      positionsBySec: { [orphanSec]: 2 },
+      pricesBySec: { [orphanSec]: 980 },
+      minTradeRub: 500
+    });
+    const orphan = rows.find((r) => r.sec === orphanSec);
+    assert.ok(orphan);
+    assert.equal(orphan.currentPieces, 2);
+    assert.equal(orphan.pos, 2, "вне конверта — цель = текущая");
+    assert.equal(orphan.outsideCap, true);
+  });
+
+  it("дельта: 3 шт. на счёте, цель 4 — докупить 1", () => {
+    const hi = [
+      { sec: "RU000A10ERE6", weight: 100, nominal: 1000, pricePct: 98, couponAnnualPct: 16, couponsPerYear: 2 }
+    ];
+    const prices = { RU000A10ERE6: 980 };
+    const rows = proc.buildTbruDeltaReconcileTargets({
+      holdings: hi,
+      deployCapRub: 3920,
+      positionsBySec: { RU000A10ERE6: 3 },
+      pricesBySec: prices,
+      commissionPct: 0
+    });
+    const row = rows.find((r) => r.sec === "RU000A10ERE6");
+    assert.ok(row);
+    assert.equal(row.currentPieces, 3);
+    assert.equal(row.pos, 4);
+    assert.equal(row.pos - row.currentPieces, 1);
+  });
+
+  it("дельта: 2 шт. лишней бумаги — продать 1", () => {
+    const hi = [
+      { sec: "RU000A10ERE6", weight: 50, nominal: 1000, pricePct: 98, couponAnnualPct: 16, couponsPerYear: 2 },
+      { sec: "SU26254RMFS1", weight: 50, nominal: 1000, pricePct: 98, couponAnnualPct: 11, couponsPerYear: 2 }
+    ];
+    const prices = { RU000A10ERE6: 980, SU26254RMFS1: 980 };
+    const rows = proc.buildTbruDeltaReconcileTargets({
+      holdings: hi,
+      deployCapRub: 1960,
+      positionsBySec: { SU26254RMFS1: 2 },
+      pricesBySec: prices,
+      commissionPct: 0
+    });
+    const row = rows.find((r) => r.sec === "SU26254RMFS1");
+    assert.ok(row);
+    assert.equal(row.currentPieces, 2);
+    assert.equal(row.pos, 1);
+  });
+
+  it("bondPositionsFromMap отсекает акции", () => {
+    const fund = [{ sec: "RU000A10ERE6", weight: 1 }];
+    const bonds = proc.bondPositionsFromMap({ GAZP: 10, RU000A10ERE6: 2, RU000A10ORFA3: 1 }, fund);
+    assert.equal(bonds.RU000A10ERE6, 2);
+    assert.equal(bonds.RU000A10ORFA3, 1);
+    assert.equal(bonds.GAZP, undefined);
   });
 
   it("при пустом портфеле жадно покупает", () => {

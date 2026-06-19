@@ -4575,6 +4575,7 @@ ${renderBlock}
         const sec = String(pos.sec || pos.ticker || "").toUpperCase();
         const pieces = pos.side === "short" ? -Math.abs(+pos.pieces || 0) : Math.abs(+pos.pieces || 0);
         if (!pieces) continue;
+        if (pos.market !== "bonds" && !proc.isBondIsin(sec)) continue;
         positionsBySec[sec] = (positionsBySec[sec] || 0) + pieces;
         const h = data.holdingBySec(sec);
         const px = bondSandboxUnitPrice(h || { sec, nominal: 1000, pricePct: 98 });
@@ -4589,7 +4590,7 @@ ${renderBlock}
         for (const [, pos] of actual) {
           const sec = String(pos.sec || pos.ticker || "").toUpperCase();
           const pieces = Math.max(0, Math.trunc(+pos.pieces || 0));
-          if (!pieces) continue;
+          if (!pieces || !proc.isBondIsin(sec)) continue;
           positionsBySec[sec] = pieces;
         }
         let mtm = 0;

@@ -185,6 +185,161 @@
     });
   }
 
+  function sortHoldingsByPriceAsc(holdings, pricesBySec) {
+    return (holdings || []).slice().sort((a, b) => {
+      const pa = bondUnitPriceRub(a, pricesBySec?.[a.sec]);
+      const pb = bondUnitPriceRub(b, pricesBySec?.[b.sec]);
+      if (Math.abs(pa - pb) > 1e-9) return pa - pb;
+      return String(a.sec).localeCompare(String(b.sec));
+    });
+  }
+
+  /** ISIN российских облигаций (ОФЗ / корп). */
+  function isBondIsin(sec) {
+    const u = String(sec || "").trim().toUpperCase();
+    return /^SU[0-9A-Z]{9,12}$/.test(u) || /^RU[0-9A-Z]{9,12}$/.test(u);
+  }
+
+  /** Только облигации: ISIN из фонда или распознанный bond-ISIN. */
+  function bondPositionsFromMap(positionsBySec, fundHoldings) {
+    const fundSet = new Set((fundHoldings || []).map((h) => String(h.sec).toUpperCase()));
+    const out = {};
+    for (const [sec, pieces] of Object.entries(positionsBySec || {})) {
+      const u = String(sec).toUpperCase();
+      const p = Math.max(0, Math.trunc(+pieces || 0));
+      if (!p) continue;
+      if (fundSet.has(u) || isBondIsin(u)) out[u] = p;
+    }
+    return out;
+  }
+
+  /**
+   * Упаковка позиций на счёте в deploy-cap: round-robin +1 шт. от дешёвых к дорогим.
+   * Возвращает inCap (в конверте) и outside (штуки вне конверта — не трогать).
+   */
+  function packBondPiecesIntoCap(positionsBySec, pricesBySec, fundHoldings, deployCapRub) {
+    const inCap = {};
+    const avail = {};
+    const hmap = holdingBySecMap(fundHoldings || []);
+    for (const [sec, pieces] of Object.entries(positionsBySec || {})) {
+      const p = Math.max(0, Math.trunc(+pieces || 0));
+      if (p) avail[String(sec).toUpperCase()] = p;
+    }
+    const secs = Object.keys(avail).sort((a, b) => {
+      const pa = bondUnitPriceRub(hmap.get(a) || { sec: a }, pricesBySec?.[a]);
+      const pb = bondUnitPriceRub(hmap.get(b) || { sec: b }, pricesBySec?.[b]);
+      if (Math.abs(pa - pb) > 1e-9) return pa - pb;
+      return a.localeCompare(b);
+    });
+    let spent = 0;
+    const cap = Math.max(0, +deployCapRub || 0);
+    let progressed = true;
+    while (progressed && cap > 0) {
+      progressed = false;
+      for (const sec of secs) {
+        if ((avail[sec] || 0) <= 0) continue;
+        const unit = bondUnitPriceRub(hmap.get(sec) || { sec }, pricesBySec?.[sec]);
+        if (unit <= 0 || spent + unit > cap + 1e-6) continue;
+        inCap[sec] = (inCap[sec] || 0) + 1;
+        avail[sec] -= 1;
+        spent += unit;
+        progressed = true;
+      }
+    }
+    const outside = {};
+    for (const [sec, total] of Object.entries(positionsBySec || {})) {
+      const u = String(sec).toUpperCase();
+      const t = Math.max(0, Math.trunc(+total || 0));
+      const inside = inCap[u] || 0;
+      if (t > inside) outside[u] = t - inside;
+    }
+    return { inCap, outside, spent };
+  }
+
+  /** Целевой портфель внутри deploy: жадно по yield с пустого. */
+  function computeTbruGreedyTargetMap(holdings, deployCapRub, pricesBySec, commissionPct) {
+    const rows = computeTbruGreedyTargets(
+      holdings,
+      { cash: Math.max(0, +deployCapRub || 0), positions: {} },
+      pricesBySec,
+      commissionPct || 0
+    );
+    const map = {};
+    for (const r of rows) {
+      const p = Math.max(0, Math.trunc(+r.pos || 0));
+      if (p) map[String(r.sec).toUpperCase()] = p;
+    }
+    return map;
+  }
+
+  /**
+   * Минимальные сделки: счёт (только bonds) в deploy-конверте по цене × цель фонда по yield.
+   * Вне конверта — удержание; дельта только по «управляемой» части.
+   */
+  function buildTbruDeltaReconcileTargets(opts) {
+    const o = opts || {};
+    const holdings = o.holdings || [];
+    const deployCapRub = Math.max(0, +o.deployCapRub || 0);
+    const pricesBySec = o.pricesBySec || {};
+    const bondPos = bondPositionsFromMap(o.positionsBySec || {}, holdings);
+    const commissionPct = o.commissionPct || 0;
+    const hmap = holdingBySecMap(holdings);
+    const inFund = new Set(holdings.map((h) => String(h.sec).toUpperCase()));
+
+    const { inCap, outside } = packBondPiecesIntoCap(bondPos, pricesBySec, holdings, deployCapRub);
+    const targetInCap = computeTbruGreedyTargetMap(holdings, deployCapRub, pricesBySec, commissionPct);
+
+    const rowBySec = new Map();
+    const allSecs = new Set([...Object.keys(bondPos), ...Object.keys(targetInCap)]);
+
+    for (const sec of allSecs) {
+      const totalHeld = bondPos[sec] || 0;
+      const outsideP = outside[sec] || 0;
+      const inCapP = inCap[sec] || 0;
+      const tgtInCap = targetInCap[sec] || 0;
+      const unit = pricesBySec[sec] || bondUnitPriceRub(hmap.get(sec) || { sec });
+      const orphan = totalHeld > 0 && !inFund.has(sec);
+
+      if (inCapP === 0 && tgtInCap === 0 && totalHeld > 0) {
+        rowBySec.set(sec, {
+          sec,
+          market: "bonds",
+          pos: totalHeld,
+          finresp: 0,
+          targetRub: 0,
+          unitPrice: unit,
+          currentPieces: totalHeld,
+          inCapPieces: 0,
+          targetInCap: 0,
+          outsidePieces: totalHeld,
+          outsideCap: true,
+          orphan,
+          weight: 0
+        });
+        continue;
+      }
+
+      const finalTarget = tgtInCap + outsideP;
+      rowBySec.set(sec, {
+        sec,
+        market: "bonds",
+        pos: finalTarget,
+        finresp: 0,
+        targetRub: tgtInCap * unit,
+        unitPrice: unit,
+        currentPieces: totalHeld,
+        inCapPieces: inCapP,
+        targetInCap: tgtInCap,
+        outsidePieces: outsideP,
+        outsideCap: false,
+        orphan,
+        weight: hmap.get(sec)?.normWeight || 0
+      });
+    }
+
+    return finalizeTbruReconcileRows([...rowBySec.values()], holdings, bondPos, pricesBySec);
+  }
+
   function targetGrossRub(rows) {
     return (rows || []).reduce(
       (s, r) => s + Math.max(0, +r.pos || 0) * Math.max(0, +r.unitPrice || 0),
@@ -214,42 +369,9 @@
     }));
   }
 
-  /** Целевые позиции: всегда жадно по current yield, в пределах deploy-cap. */
+  /** Целевые позиции: дельта-сверка deploy-конверт × жадная цель по yield. */
   function resolveTbruAllocationTargets(opts) {
-    const o = opts || {};
-    const holdings = o.holdings || [];
-    const positionsBySec = o.positionsBySec || {};
-    const pricesBySec = o.pricesBySec || {};
-    const deployCapRub = Math.max(0, +o.deployCapRub || 0);
-    const wealthRub = Math.max(0, +o.wealthRub || 0);
-    const cashForGreedy = Math.max(0, +o.cashForGreedy || 0);
-    const fundHeld = holdings.some((h) => Math.trunc(+positionsBySec[h.sec] || 0) > 0);
-    const mtm = bondMtmRub(holdings, positionsBySec, pricesBySec);
-    const investRub = Math.min(deployCapRub, wealthRub);
-    const roomRub = Math.max(0, investRub - mtm);
-    const buyCash = Math.min(cashForGreedy, roomRub);
-
-    if (buyCash > 0 && holdings.length) {
-      return computeTbruGreedyTargets(
-        holdings,
-        { cash: buyCash, positions: positionsBySec },
-        pricesBySec,
-        o.commissionPct || 0
-      );
-    }
-    if (fundHeld) {
-      return holdingsHoldRows(holdings, positionsBySec, pricesBySec);
-    }
-    return sortHoldingsByYield(holdings, pricesBySec).map((h) => ({
-      sec: h.sec,
-      market: "bonds",
-      pos: 0,
-      finresp: 0,
-      targetRub: 0,
-      unitPrice: pricesBySec[h.sec] || bondUnitPriceRub(h),
-      currentPieces: 0,
-      weight: h.normWeight
-    }));
+    return buildTbruDeltaReconcileTargets(opts || {});
   }
 
   /**
@@ -328,49 +450,11 @@
   }
 
   /**
-   * Live reconcile: жадные цели по доходности, удержание при нулевом room,
-   * продажа ISIN вне списка porti.
+   * Live reconcile: только облигации на счёте, deploy-конверт по цене,
+   * цель фонда по yield, минимальная дельта сделок.
    */
   function buildTbruLiveReconcileTargets(opts) {
-    const o = opts || {};
-    const holdings = o.holdings || [];
-    const positionsBySec = o.positionsBySec || {};
-    const pricesBySec = o.pricesBySec || {};
-    const deployCapRub = Math.max(0, +o.deployCapRub || 0);
-    const wealthRub = Math.max(0, +o.wealthRub || 0);
-    const cashRub = Math.max(0, +o.cashRub ?? wealthRub);
-    const minTradeRub = Math.max(0, +o.minTradeRub ?? 500);
-    const inFund = new Set(holdings.map((h) => String(h.sec).toUpperCase()));
-
-    let rows = resolveTbruAllocationTargets({
-      holdings,
-      deployCapRub,
-      wealthRub,
-      cashForGreedy: cashRub,
-      positionsBySec,
-      pricesBySec,
-      minTradeRub,
-      commissionPct: o.commissionPct || 0
-    });
-
-    const rowBySec = new Map(rows.map((r) => [String(r.sec).toUpperCase(), r]));
-    for (const [sec, pieces] of Object.entries(positionsBySec)) {
-      const u = String(sec).toUpperCase();
-      const cur = Math.max(0, Math.trunc(+pieces || 0));
-      if (!cur || inFund.has(u)) continue;
-      rowBySec.set(u, {
-        sec: u,
-        market: "bonds",
-        pos: 0,
-        finresp: 0,
-        targetRub: 0,
-        unitPrice: pricesBySec[u] || bondUnitPriceRub({ sec: u }),
-        currentPieces: cur,
-        weight: 0,
-        orphan: true
-      });
-    }
-    return finalizeTbruReconcileRows([...rowBySec.values()], holdings, positionsBySec, pricesBySec);
+    return buildTbruDeltaReconcileTargets(opts || {});
   }
 
   function finalizeTbruReconcileRows(rows, holdings, positionsBySec, pricesBySec) {
@@ -749,6 +833,12 @@
     bondCleanPriceRub,
     bondCurrentYieldPct,
     sortHoldingsByYield,
+    sortHoldingsByPriceAsc,
+    isBondIsin,
+    bondPositionsFromMap,
+    packBondPiecesIntoCap,
+    computeTbruGreedyTargetMap,
+    buildTbruDeltaReconcileTargets,
     targetGrossRub,
     bondMtmRub,
     resolveTbruAllocationTargets,
