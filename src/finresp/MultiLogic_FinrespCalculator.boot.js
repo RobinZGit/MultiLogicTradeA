@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-19-live-finresp-dual-v32";
+  const CALC_PAGE_VERSION = "2026-06-19-broom-keep-stack-v33";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -2779,32 +2779,29 @@
   }
 
   /**
-   * Метла live-сессии: все логики каталога в стеке + сброс кэшей equity/просадки.
+   * Метла live-сессии: стек логик не меняется; сброс пауз @@PauseOnDrawdown и кэшей equity.
    */
   function resetLogicStackAndCachesForBroom() {
-    ensureLogicLineKeys();
-    const allIds = state.logicLineKeys.slice();
-    const prev = selectedLogicIds();
-    state.logicSelectionCleared = false;
-    if (prev.length !== allIds.length || allIds.some((id) => !prev.includes(id))) {
-      logicSessionEventSink.record({
-        action: "broom_reset",
-        scope: "stack",
-        reason: "live_session_clear",
-        stackBefore: prev,
-        stackAfter: allIds
-      });
-    }
-    if (!bridgeApplyLogicSelection(allIds, false)) {
-      const sel = $("calc-logic");
-      if (sel) {
-        for (const o of sel.options) o.selected = true;
-      }
+    const stack = selectedLogicIds();
+    const hadDisabled = drawdownDisabledLogicIds().length > 0;
+    const api = bridgeApi();
+    if (api?.closeLogicPickerIfOpen) {
+      try { api.closeLogicPickerIfOpen(); } catch (_) { /* ignore */ }
     }
     state.equityRunsCache = null;
     state.lastEquityChartCtx = null;
     state.logicModelEquity = {};
     clearDrawdownRecoveryState();
+    if (hadDisabled && stack.length) {
+      logicSessionEventSink.record({
+        action: "broom_reset",
+        scope: "drawdown",
+        reason: "live_session_clear",
+        stackBefore: stack,
+        stackAfter: stack,
+        meta: { reenabledDrawdown: true }
+      });
+    }
     syncLogicSelectedHint();
   }
 

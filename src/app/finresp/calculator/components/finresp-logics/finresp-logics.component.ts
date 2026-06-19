@@ -30,6 +30,9 @@ export class FinrespLogicsComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.syncDrawdownSet(this.catalog.logicDrawdownDisabledIds);
+    this.bridge.registerCloseLogicPicker(() => {
+      if (this.pickerOpen) this.closePicker(false);
+    });
     this.sub = this.bridge.formCatalog$.subscribe((value) => {
       const optionsChanged = value.logicOptions !== this.catalog.logicOptions;
       const drawdownChanged =
@@ -38,7 +41,10 @@ export class FinrespLogicsComponent implements OnInit, OnDestroy {
       if (drawdownChanged) {
         this.syncDrawdownSet(value.logicDrawdownDisabledIds);
       }
-      if (this.pickerOpen && optionsChanged) {
+      if (!this.pickerOpen && value.logicChips !== this.catalog.logicChips) {
+        this.draftIds = [...this.logicIds.value];
+      }
+      if (this.pickerOpen && (optionsChanged || drawdownChanged)) {
         queueMicrotask(() => this.syncVisibleSelect(this.draftIds));
       }
     });

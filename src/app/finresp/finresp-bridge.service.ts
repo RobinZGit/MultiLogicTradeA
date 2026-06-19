@@ -41,6 +41,8 @@ export interface FinrespBridgeApi {
   registerInstrumentAppliedHandler: (handler: () => void) => void;
   registerLogicChipsRefresh: (handler: () => void) => void;
   refreshLogicChips: () => void;
+  registerCloseLogicPicker: (handler: () => void) => void;
+  closeLogicPickerIfOpen: () => void;
   syncFormFromDom: () => void;
   onBootReady: () => void;
 }
@@ -82,6 +84,7 @@ export class FinrespBridgeService {
   private logicAppliedHandler: (() => void) | null = null;
   private instrumentAppliedHandler: (() => void) | null = null;
   private logicChipsRefreshHandler: (() => void) | null = null;
+  private closeLogicPickerHandler: (() => void) | null = null;
   private windowSyncHandler: ((view: FinrespWindowViewModel) => void) | null = null;
 
   constructor(private readonly ngZone: NgZone) {}
@@ -121,6 +124,10 @@ export class FinrespBridgeService {
         this.logicChipsRefreshHandler = () => this.ngZone.run(() => handler());
       },
       refreshLogicChips: () => this.ngZone.run(() => this.logicChipsRefreshHandler?.()),
+      registerCloseLogicPicker: (handler) => {
+        this.closeLogicPickerHandler = () => this.ngZone.run(() => handler());
+      },
+      closeLogicPickerIfOpen: () => this.ngZone.run(() => this.closeLogicPickerHandler?.()),
       syncFormFromDom: () => this.ngZone.run(() => this.formSyncHandler?.()),
       onBootReady: () => this.ngZone.run(() => this.bootReadyHandler?.()),
     };
@@ -192,6 +199,10 @@ export class FinrespBridgeService {
 
   registerLogicChipsRefresh(handler: () => void): void {
     this.logicChipsRefreshHandler = handler;
+  }
+
+  registerCloseLogicPicker(handler: () => void): void {
+    this.closeLogicPickerHandler = handler;
   }
 
   notifyLogicChipsRefresh(): void {
