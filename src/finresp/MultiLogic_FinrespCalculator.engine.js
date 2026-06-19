@@ -5918,6 +5918,7 @@
     bondDeployPct: (vol) => (root.MultiLogicFinrespBondTbruProc?.bondDeployPct(vol) ?? 0),
     bondDeployCapRub: (vol) => (root.MultiLogicFinrespBondTbruProc?.bondDeployCapRub(vol) ?? 0),
     computeTbruTargets: (opts) => root.MultiLogicFinrespBondTbruProc?.computeTbruTargets(opts) || [],
+    buildTbruLiveReconcileTargets: (opts) => root.MultiLogicFinrespBondTbruProc?.buildTbruLiveReconcileTargets(opts) || [],
     runBondTbruBacktestAsync: (opts) => root.MultiLogicFinrespBondTbruProc?.simulateBondTbruBacktestAsync(opts),
     createPortfolioCap,
     runPacksOnTimeGrid,

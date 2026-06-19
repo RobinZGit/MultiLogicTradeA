@@ -4565,37 +4565,37 @@ ${renderBlock}
     }
 
     let wealthRub = Math.max(0, +vol.deposit || 0);
+    let cashRub = wealthRub;
     if (isLiveSandbox()) {
       const sb = ensureSandboxState();
       ensureSandboxCash(sb);
+      cashRub = Math.max(0, +sb.cash || 0);
       let mtm = 0;
       for (const pos of sb.open.values()) {
         const sec = String(pos.sec || pos.ticker || "").toUpperCase();
         const pieces = pos.side === "short" ? -Math.abs(+pos.pieces || 0) : Math.abs(+pos.pieces || 0);
-        if (pos.market === "bonds" || holdings.some((x) => x.sec === sec)) {
-          positionsBySec[sec] = (positionsBySec[sec] || 0) + pieces;
-          const h = data.holdingBySec(sec);
-          const px = bondSandboxUnitPrice(h || { sec, nominal: 1000, pricePct: 98 });
-          mtm += pieces * px;
-        }
+        if (!pieces) continue;
+        positionsBySec[sec] = (positionsBySec[sec] || 0) + pieces;
+        const h = data.holdingBySec(sec);
+        const px = bondSandboxUnitPrice(h || { sec, nominal: 1000, pricePct: 98 });
+        pricesBySec[sec] = px;
+        mtm += pieces * px;
       }
-      wealthRub = Math.max(0, (+sb.cash || 0) + mtm);
+      wealthRub = Math.max(0, cashRub + mtm);
     } else if (activeBrokerState().token && activeBrokerState().selectedAccountId
       && (await ensureTbankTokenUnlocked({ interactive: false, openUi: false }))) {
       try {
         const actual = await tbankPositionsByTicker();
+        for (const [, pos] of actual) {
+          const sec = String(pos.sec || pos.ticker || "").toUpperCase();
+          const pieces = Math.max(0, Math.trunc(+pos.pieces || 0));
+          if (!pieces) continue;
+          positionsBySec[sec] = pieces;
+        }
         let mtm = 0;
         for (const h of holdings) {
-          let pieces = 0;
-          for (const [, pos] of actual) {
-            const sec = String(pos.sec || pos.ticker || "").toUpperCase();
-            if (sec === h.sec || String(pos.ticker || "").toUpperCase() === h.sec) {
-              pieces = +pos.pieces || 0;
-              break;
-            }
-          }
-          positionsBySec[h.sec] = pieces;
           let px = pricesBySec[h.sec];
+          const pieces = Math.max(0, Math.trunc(+positionsBySec[h.sec] || 0));
           try {
             const im = await resolveLiveInstrumentMeta(h.sec, "bonds");
             if (im?.instrumentId) {
@@ -4606,23 +4606,56 @@ ${renderBlock}
           pricesBySec[h.sec] = px;
           mtm += pieces * px;
         }
-        const cash = Number.isFinite(state.live.freeCashRub) ? state.live.freeCashRub : 0;
-        wealthRub = Math.max(0, cash + mtm);
+        for (const [sec, pieces] of Object.entries(positionsBySec)) {
+          if (pricesBySec[sec] != null) continue;
+          const px = bondSandboxUnitPrice({ sec, nominal: 1000, pricePct: 98 });
+          pricesBySec[sec] = px;
+          mtm += (+pieces || 0) * px;
+        }
+        cashRub = Number.isFinite(state.live.freeCashRub) ? state.live.freeCashRub : 0;
+        wealthRub = Math.max(0, cashRub + mtm);
       } catch (err) {
         noteLiveTech("bond-tbru-wealth", err.message);
       }
     }
 
-    const rows = proc.computeTbruTargets({
+    const rows = proc.buildTbruLiveReconcileTargets({
       holdings,
       deployCapRub,
       wealthRub,
+      cashRub,
       positionsBySec,
       pricesBySec,
-      minTradeRub: 500
+      minTradeRub: 500,
+      commissionPct: commissionPctValue()
     });
     state.live.bondTbruTargets = rows;
     return rows;
+  }
+
+  /** TBRU live: porti → цели → reconcile сразу (без ожидания свечей). */
+  async function runBondTbruLiveSync(opts) {
+    const o = opts || {};
+    if (!bondTbruActive() || !isLiveMode() || !state.live.chartSession) return false;
+    await refreshTbruHoldingsFromPorti({
+      force: !!o.force || !!state.live.active,
+      minIntervalMs: state.live.active ? 0 : (o.minIntervalMs ?? 30000)
+    });
+    if (isLiveSandbox()) {
+      const sb = ensureSandboxState();
+      const holdings = bondTbruData()?.holdings || [];
+      bondTbruProc()?.accrueSandboxBondCoupons(sb, holdings);
+      bondTbruProc()?.redeemSandboxBondMaturities(sb, holdings);
+      ensureSandboxCash(sb);
+    }
+    await refreshBondTbruTargets();
+    state.live.lastCandleRefreshAt = new Date().toISOString();
+    state.live.candleSource = "bond-tbru";
+    if (state.live.active && liveFinrespReady()
+      && !state.live.tradingActionBusy && !state.live.sellAllInFlight && !state.live.reconcileBusy) {
+      await liveTradingReconcile();
+    }
+    return true;
   }
 
   /** Строки FINRESP для reconcile: текущий расчёт или снимок до live-сессии. */
@@ -9397,20 +9430,7 @@ ${referenceBlock}
     const opts = options || {};
     if (!isLiveMode() || !state.live.chartSession) return false;
     if (bondTbruActive()) {
-      if (isLiveSandbox()) {
-        const sb = ensureSandboxState();
-        await refreshTbruHoldingsFromPorti({ minIntervalMs: 30000 });
-        const holdings = bondTbruData()?.holdings || [];
-        bondTbruProc()?.accrueSandboxBondCoupons(sb, holdings);
-        bondTbruProc()?.redeemSandboxBondMaturities(sb, holdings);
-        ensureSandboxCash(sb);
-      } else {
-        await refreshTbruHoldingsFromPorti({ minIntervalMs: 30000 });
-      }
-      await refreshBondTbruTargets();
-      state.live.lastCandleRefreshAt = new Date().toISOString();
-      state.live.candleSource = "bond-tbru";
-      return true;
+      return await runBondTbruLiveSync({ force: !!opts.force, minIntervalMs: opts.minIntervalMs });
     }
     const needsBootstrap = !liveHasAnyCandles() || !liveFinrespReady();
     if (state.live.candleRefreshBusy) return false;
@@ -9670,7 +9690,7 @@ ${referenceBlock}
       for (const p of targets) {
         const secU = String(p.sec || "").toUpperCase();
         const instMeta = selectedInstruments().find((i) => String(i.sec).toUpperCase() === secU);
-        const market = instMeta?.market || "shares";
+        const market = instMeta?.market || (bondTbruActive() || p.market === "bonds" ? "bonds" : "shares");
         let im;
         try {
           im = await resolveLiveInstrumentMeta(p.sec, market);
@@ -9866,13 +9886,9 @@ ${referenceBlock}
   async function livePollTickAfterRefresh() {
     if (!isLiveMode() || !state.live.chartSession) return false;
     if (bondTbruActive()) {
-      const ok = await refreshLiveCandleStream({ silent: true });
-      if (!ok) return false;
-      if (state.live.active && liveFinrespReady() && !state.live.tradingActionBusy && !state.live.sellAllInFlight) {
-        await liveTradingReconcile();
-        queueLiveChartsRefresh();
-      }
-      return true;
+      const ok = await runBondTbruLiveSync({ force: state.live.active });
+      if (ok) queueLiveChartsRefresh();
+      return ok;
     }
     const ok = await refreshLiveCandleStream({ silent: true });
     if (!ok) return false;
@@ -10030,7 +10046,7 @@ ${referenceBlock}
           } else {
             await updateSandboxPortfolioDisplay();
           }
-          await livePollTickAfterRefresh();
+          await runBondTbruLiveSync({ force: true });
           await refreshLiveOrders();
         } catch (err) {
           state.live.lastError = err.message;
@@ -10062,7 +10078,7 @@ ${referenceBlock}
     if (!state.live.pollTimer) startLiveModePoll();
     void (async () => {
       try {
-        await livePollTickAfterRefresh();
+        await runBondTbruLiveSync({ force: true });
         await refreshLiveOrders();
       } catch (err) {
         state.live.lastError = err.message;

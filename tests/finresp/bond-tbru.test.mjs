@@ -91,8 +91,108 @@ describe("computeTbruTargets", () => {
   });
 });
 
+describe("buildTbruLiveReconcileTargets", () => {
+  const holdings = data.holdings.slice(0, 4);
+  const unit = 980;
+
+  it("добавляет цель 0 для ISIN вне списка фонда (продать лишнее)", () => {
+    const prices = Object.fromEntries(holdings.map((h) => [h.sec, unit]));
+    const rows = proc.buildTbruLiveReconcileTargets({
+      holdings,
+      deployCapRub: 100000,
+      wealthRub: 100000,
+      cashRub: 50000,
+      positionsBySec: { [holdings[0].sec]: 2, ORPHANBOND1: 3 },
+      pricesBySec: { ...prices, ORPHANBOND1: unit },
+      minTradeRub: 500
+    });
+    const orphan = rows.find((r) => r.sec === "ORPHANBOND1");
+    assert.ok(orphan);
+    assert.equal(orphan.pos, 0);
+    assert.equal(orphan.orphan, true);
+  });
+
+  it("при пустом портфеле жадно покупает", () => {
+    const prices = Object.fromEntries(holdings.map((h) => [h.sec, unit]));
+    const rows = proc.buildTbruLiveReconcileTargets({
+      holdings,
+      deployCapRub: 10000,
+      wealthRub: 10000,
+      cashRub: 10000,
+      positionsBySec: {},
+      pricesBySec: prices,
+      minTradeRub: 500
+    });
+    const pieces = rows.reduce((s, r) => s + r.pos, 0);
+    assert.ok(pieces > 0);
+  });
+
+  it("жадная покупка начинается с более доходной бумаги", () => {
+    const hi = [
+      { sec: "SU26254RMFS1", weight: 50, nominal: 1000, pricePct: 98, couponAnnualPct: 11, couponsPerYear: 2 },
+      { sec: "RU000A10ERE6", weight: 50, nominal: 1000, pricePct: 98, couponAnnualPct: 16, couponsPerYear: 2 }
+    ];
+    const prices = Object.fromEntries(hi.map((h) => [h.sec, 980]));
+    const rows = proc.computeTbruGreedyTargets(hi, { cash: 1000, positions: {} }, prices, 0);
+    const bought = rows.filter((r) => r.pos > 0);
+    assert.equal(bought.length, 1);
+    assert.equal(bought[0].sec, "RU000A10ERE6");
+  });
+
+  it("депозит 10000 — жадно по доходности, не только 2 ОФЗ по весу", () => {
+    const rows = proc.resolveTbruAllocationTargets({
+      holdings: data.holdings,
+      deployCapRub: 10000,
+      wealthRub: 10000,
+      cashForGreedy: 10000,
+      positionsBySec: {},
+      pricesBySec: Object.fromEntries(data.holdings.map((h) => [h.sec, 980])),
+      minTradeRub: 500,
+      commissionPct: 0.02
+    });
+    const pieces = rows.reduce((s, r) => s + r.pos, 0);
+    const gross = proc.targetGrossRub(rows);
+    assert.ok(pieces >= 8, `ожидалось >=8 шт., получено ${pieces}`);
+    assert.ok(gross >= 7000, `ожидалось >=7000 ₽ в облигациях, получено ${gross}`);
+    const ofz = rows.find((r) => r.sec === "SU26254RMFS1" && r.pos > 0);
+    const corp = rows.filter((r) => r.sec.startsWith("RU") && r.pos > 0);
+    assert.ok(corp.length > 0, "должны быть корпоративные (выше купон)");
+    if (ofz) {
+      const maxCorpYield = Math.max(...corp.map((r) => {
+        const h = data.holdingBySec(r.sec);
+        return proc.bondCurrentYieldPct(h, 980);
+      }));
+      const ofzYield = proc.bondCurrentYieldPct(data.holdingBySec("SU26254RMFS1"), 980);
+      assert.ok(maxCorpYield > ofzYield);
+    }
+  });
+
+  it("resolveTbruAllocationTargets всегда жадно — и на большом депозите", () => {
+    const prices = Object.fromEntries(data.holdings.map((h) => [h.sec, 980]));
+    const rows = proc.resolveTbruAllocationTargets({
+      holdings: data.holdings,
+      deployCapRub: 100000,
+      wealthRub: 100000,
+      cashForGreedy: 100000,
+      positionsBySec: {},
+      pricesBySec: prices,
+      commissionPct: 0.02
+    });
+    const bought = rows.filter((r) => r.pos > 0);
+    const sorted = proc.sortHoldingsByYield(data.holdings, prices);
+    const topSec = sorted[0].sec;
+    const topPos = rows.find((r) => r.sec === topSec)?.pos || 0;
+    assert.ok(bought.length > 5, `куплено ISIN: ${bought.length}`);
+    assert.ok(topPos >= 1, "самая доходная бумага в портфеле");
+    const minBoughtPos = Math.min(...bought.map((r) => r.pos));
+    assert.ok(topPos >= minBoughtPos, "у лидера по yield не меньше штук, чем у остальных");
+    const gross = proc.targetGrossRub(rows);
+    assert.ok(gross >= 95000, `вложено ${gross}, ожидалось ~100k`);
+  });
+});
+
 describe("sandbox bond coupons and maturity", () => {
-  it("accrueSandboxBondCoupons начисляет купон раз в день", () => {
+  it("accrueSandboxBondCoupons платит в купонный день, не каждый день", () => {
     const sb = {
       cash: 10000,
       cashDelta: 0,
@@ -106,13 +206,39 @@ describe("sandbox bond coupons and maturity", () => {
       ])
     };
     const holdings = [{ sec: "SU26254RMFS1", nominal: 1000, couponAnnualPct: 11, couponsPerYear: 2 }];
-    const paid = proc.accrueSandboxBondCoupons(sb, holdings, new Date("2026-06-18T12:00:00Z"));
+    let couponDate = null;
+    for (let d = 1; d <= 365; d++) {
+      const dt = new Date(Date.UTC(2026, 0, d, 12, 0, 0));
+      if (proc.bondCouponCycleInfo(holdings[0], dt).isCouponDay) {
+        couponDate = dt;
+        break;
+      }
+    }
+    assert.ok(couponDate, "найден купонный день");
+    const paid = proc.accrueSandboxBondCoupons(sb, holdings, couponDate);
     assert.ok(paid > 0);
     assert.ok(sb.cash > 10000);
-    const again = proc.accrueSandboxBondCoupons(sb, holdings, new Date("2026-06-18T15:00:00Z"));
+    const again = proc.accrueSandboxBondCoupons(sb, holdings, couponDate);
     assert.equal(again, 0);
-    const nextDay = proc.accrueSandboxBondCoupons(sb, holdings, new Date("2026-06-19T12:00:00Z"));
-    assert.ok(nextDay > 0);
+    const nextDay = proc.accrueSandboxBondCoupons(sb, holdings, new Date(couponDate.getTime() + 86400000));
+    assert.equal(nextDay, 0);
+  });
+
+  it("bondDirtyQuote даёт зубчик откупона в день купона", () => {
+    const h = { sec: "SU26254RMFS1", nominal: 1000, pricePct: 98, couponAnnualPct: 11, couponsPerYear: 2 };
+    let couponDate = null;
+    let prev = null;
+    for (let d = 1; d <= 365; d++) {
+      const dt = new Date(Date.UTC(2026, 0, d, 12, 0, 0));
+      const q = proc.bondDirtyQuote(h, dt, prev);
+      if (proc.bondCouponCycleInfo(h, dt).isCouponDay) {
+        couponDate = dt;
+        assert.ok(q.close < (prev ?? q.close + 1), "откупон: close ниже предыдущего dirty");
+        break;
+      }
+      prev = q.close;
+    }
+    assert.ok(couponDate);
   });
 
   it("redeemSandboxBondMaturities возвращает номинал и закрывает позицию", () => {
@@ -233,7 +359,7 @@ describe("simulateBondTbruBacktestAsync", () => {
     assert.ok(withBuy, "ожидается маркер входа");
     const sample = out.bondCharts[0];
     assert.ok(sample.rows[0].close > 0);
-    assert.equal(sample.rows[0].open, sample.rows[0].close);
+    assert.ok(Number.isFinite(sample.rows[0].nkd));
   });
 
   it("при депозите ~6334 ₽ покупает облигации и даёт ненулевой FINRESP за май", async () => {
@@ -249,5 +375,20 @@ describe("simulateBondTbruBacktestAsync", () => {
     assert.ok(out.agg.pos > 0, "должны быть купленные облигации");
     assert.ok(out.agg.buys > 0, "сумма покупок > 0");
     assert.ok(out.agg.finresp !== 0 || out.agg.cash !== 6334, "ожидается движение equity");
+  });
+
+  it("при депозите 10000 ₽ жадно покупает ~10 облигаций и выше FINRESP чем 2 ОФЗ", async () => {
+    const out = await proc.simulateBondTbruBacktestAsync({
+      volConfig: { deposit: 10000, volume: 10, maxPositions: 10 },
+      from: "2026-02-11",
+      till: "2026-05-31",
+      calcTf: "24",
+      commissionPct: 0.02,
+      holdings: data.holdings,
+      yieldUi: async () => {}
+    });
+    assert.ok(out.agg.pos >= 8, `pos=${out.agg.pos}`);
+    assert.ok(out.agg.buys >= 7000, `buys=${out.agg.buys}`);
+    assert.ok(out.agg.finresp > 200, `finresp=${out.agg.finresp}`);
   });
 });

@@ -263,6 +263,10 @@
         const tip = esc(label || (kind === "order-buy" ? "Покупка" : "Продажа"));
         return `<g opacity="0.92"><line x1="${xi}" y1="${top}" x2="${xi}" y2="${bottom}" stroke="${stroke}" stroke-width="1.8" stroke-dasharray="3 3"/><title>${tip}</title></g>`;
       }
+      if (kind === "bond-coupon") {
+        const tip = esc(label || "Купон");
+        return `<g opacity="0.85"><line x1="${xi}" y1="${top}" x2="${xi}" y2="${bottom}" stroke="#ca8a04" stroke-width="1.4" stroke-dasharray="5 5"/><title>${tip}</title></g>`;
+      }
       const stroke = kind === "tp" ? "#16a34a" : "#dc2626";
       const dash = scope === "portfolio" ? "7 4" : "4 3";
       const width = scope === "portfolio" ? 2 : 1.3;

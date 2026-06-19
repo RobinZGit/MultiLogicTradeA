@@ -6939,6 +6939,11 @@
           .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
         return `<g opacity="0.92"><line x1="${xi}" y1="${top}" x2="${xi}" y2="${bottom}" stroke="${stroke}" stroke-width="1.8" stroke-dasharray="3 3"/><title>${tip}</title></g>`;
       }
+      if (kind === "bond-coupon") {
+        const tip = String(label || "Купон")
+          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+        return `<g opacity="0.85"><line x1="${xi}" y1="${top}" x2="${xi}" y2="${bottom}" stroke="#ca8a04" stroke-width="1.4" stroke-dasharray="5 5"/><title>${tip}</title></g>`;
+      }
       if (kind === "logic-pause-start" || kind === "logic-pause-end") {
         const tip = String(label || (kind === "logic-pause-start" ? "логика отключена" : "логика включена"))
           .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
@@ -9029,7 +9034,7 @@ ${referenceBlock}
       rootEl.appendChild(bondTitle);
       const bondNote = document.createElement("p");
       bondNote.className = "note";
-      bondNote.textContent = "▲ вход (покупка) · ▼ выход (продажа). Цена — чистая, % от номинала в каталоге.";
+      bondNote.textContent = "▲ покупка · ▼ продажа · жёлтый штрих — день купона · цена грязная (НКД), в день купона — откупон (зубчик вниз).";
       rootEl.appendChild(bondNote);
       const bondScroll = document.createElement("div");
       bondScroll.className = "chart-equity-logic-scroll";
@@ -9042,9 +9047,15 @@ ${referenceBlock}
         const p = bondCharts[i];
         const chartRowsBond = (p.rows || []).slice();
         if (!chartRowsBond.length) continue;
+        const couponVLines = (typeof MultiLogicFinrespBondTbruProc !== "undefined"
+          && MultiLogicFinrespBondTbruProc.bondCouponVLineIndices)
+          ? MultiLogicFinrespBondTbruProc.bondCouponVLineIndices(chartRowsBond, (v) => fmt(v))
+          : chartRowsBond.map((r, idx) => (r.couponDay
+            ? { idx, kind: "bond-coupon", label: "Купон" }
+            : null)).filter(Boolean);
         const mini = document.createElement("div");
         mini.className = "chart-mini";
-        const decor = chartDecorFromRows(chartRowsBond, []);
+        const decor = chartDecorFromRows(chartRowsBond, couponVLines);
         if (useInteractive) {
           const host = document.createElement("div");
           host.className = "ml-instrument-chart-host";
