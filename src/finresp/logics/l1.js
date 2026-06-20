@@ -10,6 +10,7 @@
  *   - `SMA(100)(Ab)` цена выше SMA(100)
  *   - `LinReg(@LR;Dev=2)(AbUp)` линрег-канал вверх/цена у верхней части (трендовое подтверждение)
  *   - `ATR(14;Gr=3%;Lb=5)(GrOk)` ATR растёт (фильтр «есть движение»)
+ *   - `ADX(14;Min=25)(TrOk)` сила тренда ≥ 25
  *   - `CCI(20)(CCI>=100)` CCI в сильной зоне тренда
  *   - `MACD(12,26,9)(Macd>Sig)` MACD выше сигнальной
  * - Long выход (`Cl(Long(...))`) когда одновременно:
@@ -27,7 +28,7 @@
     name: "L1 — лонг, тренд",
     defaultLine:
       F("TREND_REGIME")
-      + "Op(Long(SMA(100)(Ab) AND LinReg(@LR;Dev=2)(AbUp) AND ATR(14;Gr=3%;Lb=5)(GrOk) AND CCI(20;Lmin=100;Smax=-100)(CCI>=100) AND MACD(12,26,9)(Macd>Sig))) "
+      + "Op(Long(SMA(100)(Ab) AND LinReg(@LR;Dev=2)(AbUp) AND ATR(14;Gr=3%;Lb=5)(GrOk) AND ADX(14;Min=25)(TrOk) AND CCI(20;Lmin=100;Smax=-100)(CCI>=100) AND MACD(12,26,9)(Macd>Sig))) "
       + "Cl(Long(SMA(100)(Bl) AND LinReg(@LR;Dev=2)(BlLo) AND CCI(20;Lmin=100;Smax=-100)(CCI<=-100) AND MACD(12,26,9)(Macd<Sig)) OnFlip(Close))"
       + F("SLTP") + "Note(lon-trend)"
   });

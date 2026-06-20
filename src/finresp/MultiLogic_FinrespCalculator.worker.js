@@ -10,6 +10,7 @@
   imp("indicators/sma.js");
   imp("indicators/cma.js");
   imp("indicators/atr.js");
+  imp("indicators/adx.js");
   imp("indicators/stoch.js");
   imp("indicators/tot/totstoch.js");
   imp("indicators/ctg/contango-series.js");
@@ -55,12 +56,13 @@
   imp("MultiLogic_FinrespCalculator.engine.js");
 
   self.onmessage = async (e) => {
-    const { id, packs, spec, startIdx, endIdx, params, volConfig, stopperConfig, randomPriceShift, ctgSpotPacks, tradingPeriods, calcTf, recoveryStopConfig, isoLogicSpecs, isoEqByLogic } = e.data || {};
+    const { id, packs, spec, startIdx, endIdx, params, volConfig, stopperConfig, randomPriceShift, stopPacks, ctgSpotPacks, tradingPeriods, calcTf, recoveryStopConfig, isoLogicSpecs, isoEqByLogic } = e.data || {};
     try {
       const E = self.MultiLogicFinrespEngine;
       if (!E?.runMulti) throw new Error("engine not loaded in worker");
       const runOpts = {
         ...(randomPriceShift ? { signalPacks: E.applyRandomPriceShift(packs) } : {}),
+        ...(stopPacks ? { stopPacks } : {}),
         ...(ctgSpotPacks ? { ctgSpotPacks } : {}),
         ...(tradingPeriods ? { tradingPeriods, calcTf } : {}),
         ...(recoveryStopConfig ? { recoveryStopConfig } : {}),

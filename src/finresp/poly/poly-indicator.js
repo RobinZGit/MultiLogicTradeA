@@ -798,6 +798,10 @@
       const len = pm.L || parseInt(params, 10) || 14;
       return idxSeries(() => cache.atr(len));
     }
+    if (k === "adx") {
+      const len = pm.L || parseInt(params, 10) || 14;
+      return idxSeries(() => cache.adx(len).adx);
+    }
     if (k === "cci") {
       const len = pm.L || parseInt(params, 10) || 20;
       return idxSeries(() => cache.cci(len));

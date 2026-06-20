@@ -15,6 +15,7 @@ const INDICATOR_SCRIPTS = [
   'sma.js',
   'cma.js',
   'atr.js',
+  'adx.js',
   'stoch.js',
   'linreg.js',
   'bollinger.js',

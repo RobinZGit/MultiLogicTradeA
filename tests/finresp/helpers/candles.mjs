@@ -27,6 +27,7 @@ export const ALL_INDICATORS = {
   sma: true,
   cma: true,
   atr: true,
+  adx: true,
   stoch: true,
   linreg: true,
   macd: true,

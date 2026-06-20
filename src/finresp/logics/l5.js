@@ -25,9 +25,9 @@
     name: "L5 — LmaxTrend, лонг+шорт тренд",
     defaultLine:
       F("TREND_REGIME")
-      + "Op(Long(SMA(100)(Ab) AND LinReg(@LR;Dev=2)(AbUp) AND Bollinger(20;Dev=2)(AbUp) AND VWAP()(Ab) AND ATR(14;Gr=3%;Lb=5)(GrOk) AND Stoch(14-3-3;Lmin=80;Smax=20)(K>=80) AND CCI(20;Lmin=100;Smax=-100)(CCI>=100) AND Momentum(10)(MOM>0) AND MACD(12,26,9)(Macd>Sig))) "
+      + "Op(Long(SMA(100)(Ab) AND LinReg(@LR;Dev=2)(AbUp) AND Bollinger(20;Dev=2)(AbUp) AND VWAP()(Ab) AND ATR(14;Gr=3%;Lb=5)(GrOk) AND ADX(14;Min=25)(TrOk) AND Stoch(14-3-3;Lmin=80;Smax=20)(K>=80) AND CCI(20;Lmin=100;Smax=-100)(CCI>=100) AND Momentum(10)(MOM>0) AND MACD(12,26,9)(Macd>Sig))) "
       + "Cl(Long(SMA(100)(Bl) AND LinReg(@LR;Dev=2)(BlLo) AND Bollinger(20;Dev=2)(BlLo) AND VWAP()(Bl) AND Stoch(14-3-3;Lmin=80;Smax=20)(K<=20) AND CCI(20;Lmin=100;Smax=-100)(CCI<=-100) AND Momentum(10)(MOM<0) AND MACD(12,26,9)(Macd<Sig)) OnFlip(Close)) "
-      + "Op(Short(SMA(100)(Bl) AND LinReg(@LR;Dev=2)(BlLo) AND Bollinger(20;Dev=2)(BlLo) AND VWAP()(Bl) AND ATR(14;Gr=3%;Lb=5)(GrOk) AND Stoch(14-3-3;Lmin=80;Smax=20)(K<=20) AND CCI(20;Lmin=100;Smax=-100)(CCI<=-100) AND Momentum(10)(MOM<0) AND MACD(12,26,9)(Macd<Sig))) "
+      + "Op(Short(SMA(100)(Bl) AND LinReg(@LR;Dev=2)(BlLo) AND Bollinger(20;Dev=2)(BlLo) AND VWAP()(Bl) AND ATR(14;Gr=3%;Lb=5)(GrOk) AND ADX(14;Min=25)(TrOk) AND Stoch(14-3-3;Lmin=80;Smax=20)(K<=20) AND CCI(20;Lmin=100;Smax=-100)(CCI<=-100) AND Momentum(10)(MOM<0) AND MACD(12,26,9)(Macd<Sig))) "
       + "Cl(Short(SMA(100)(Ab) AND LinReg(@LR;Dev=2)(AbUp) AND Bollinger(20;Dev=2)(AbUp) AND VWAP()(Ab) AND Stoch(14-3-3;Lmin=80;Smax=20)(K>=80) AND CCI(20;Lmin=100;Smax=-100)(CCI>=100) AND Momentum(10)(MOM>0) AND MACD(12,26,9)(Macd>Sig)) OnFlip(Close))"
       + F("SLTP") + "Note(LmaxTrend)"
   });

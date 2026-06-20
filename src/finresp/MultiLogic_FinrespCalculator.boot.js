@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-20-indicator-constructor-v58";
+  const CALC_PAGE_VERSION = "2026-06-20-indicator-constructor-v59";
   const BOOT_BACKGROUND_TIMEOUT_MS = 60000;
   const BOOT_BANNER_WATCHDOG_MS = 20000;
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
@@ -1257,6 +1257,8 @@
     windowSkipped: [],
     lastInstruments: [],
     lastLoadMeta: null,
+    lastStopLoadMeta: null,
+    stopPacks: null,
     lastResult: null,
     lastResultMeta: null,
     lastProtocol: null,
@@ -1399,6 +1401,7 @@
     { key: "sma", label: "SMA" },
     { key: "cma", label: "CMA" },
     { key: "atr", label: "ATR" },
+    { key: "adx", label: "ADX" },
     { key: "stoch", label: "Stoch" },
     { key: "totstoch", label: "TotStoch" },
     { key: "ctgstoch", label: "CtgStoch" },
@@ -1410,7 +1413,7 @@
     { key: "vwap", label: "VWAP" },
     { key: "rand", label: "Rand" }
   ];
-  const INDICATOR_KEYS_DEFAULT_ON = new Set(["totstoch", "ctgstoch"]);
+  const INDICATOR_KEYS_DEFAULT_ON = new Set(["adx", "totstoch", "ctgstoch"]);
   const INDICATOR_LABELS = Object.fromEntries(INDICATOR_OPTIONS.map((x) => [x.key, x.label]));
   const P = typeof MultiLogicFinrespPoly !== "undefined" ? MultiLogicFinrespPoly : null;
   const INDICATOR_CONSTRUCTOR_HELP = "MultiLogic_FinrespCalculator_IndicatorConstructor.html";
@@ -1562,6 +1565,7 @@
         exchange: $("alor-exchange")?.value || "MOEX"
       },
       timeframe: formSnap?.timeframe || $("calc-tf")?.value || "60",
+      stopTimeframe: $("calc-stop-tf")?.value || $("calc-tf")?.value || "60",
       from: formSnap?.from || $("calc-from")?.value || "",
       till: formSnap?.till || $("calc-till")?.value || "",
       logic: logicPick.ids[0] || "RND",
@@ -1844,6 +1848,7 @@
       if (cfg.alor?.portfolioId != null) setValueIfExists("alor-portfolio-id", cfg.alor.portfolioId);
       if (cfg.alor?.exchange != null) setValueIfExists("alor-exchange", cfg.alor.exchange);
       setValueIfExists("calc-tf", cfg.timeframe);
+      setValueIfExists("calc-stop-tf", cfg.stopTimeframe ?? cfg.timeframe ?? "60");
       setValueIfExists("calc-from", cfg.from);
       setValueIfExists("calc-till", cfg.till);
       state.restoredLogicIds = Array.isArray(cfg.logics)
@@ -2715,6 +2720,27 @@
     return !!$("random-price-shift")?.checked;
   }
 
+  /** ТФ позиционных @SL/@TP в бэктесте (live не использует). */
+  function resolveStopTf(calcTf) {
+    const main = String(calcTf || $("calc-tf")?.value || "60");
+    const stopEl = $("calc-stop-tf");
+    const stop = String(stopEl?.value || main);
+    return stop || main;
+  }
+
+  function syncStopTfToCalcTf() {
+    const tf = $("calc-tf")?.value || "60";
+    const stopEl = $("calc-stop-tf");
+    if (stopEl && stopEl.value !== tf) stopEl.value = tf;
+  }
+
+  /** Подпрограмма `stopPacksForCalc`. */
+  function stopPacksForCalc() {
+    const calcTf = $("calc-tf")?.value || "60";
+    if (resolveStopTf(calcTf) === calcTf) return null;
+    return state.stopPacks;
+  }
+
   /** Подпрограмма `signalPacksForCalc`. */
   function signalPacksForCalc() {
     if (!randomPriceShiftEnabled()) return null;
@@ -2724,13 +2750,17 @@
   /** Подпрограмма `finrespRunOptions`. */
   function finrespRunOptions(extra) {
     const signalPacks = signalPacksForCalc();
+    const stopPacks = stopPacksForCalc();
     const reverseSignals = !!$("param-reverse-signals")?.checked;
+    const calcTf = $("calc-tf")?.value || "60";
     const opts = {
       tradingPeriods: readTradingPeriodsConfigFromDom(),
-      calcTf: $("calc-tf")?.value || "60"
+      calcTf,
+      slTpTf: resolveStopTf(calcTf)
     };
     if (reverseSignals) opts.reverseSignals = true;
     if (signalPacks) opts.signalPacks = signalPacks;
+    if (stopPacks) opts.stopPacks = stopPacks;
     if (state.ctgSpotPacks && Object.keys(state.ctgSpotPacks).length) {
       opts.ctgSpotPacks = state.ctgSpotPacks;
     }
@@ -3804,6 +3834,7 @@
   async function finishCancelledRun(runGen, loadedData) {
     if (loadedData?.packs?.length) {
       state.packs = loadedData.packs;
+      state.stopPacks = loadedData.stopPacks || null;
       state.ctgSpotPacks = loadedData.ctgSpotPacks || {};
       state.failedInstruments = loadedData.failures || [];
       state.lastLoadMeta = {
@@ -3871,10 +3902,12 @@
   function runMultiInWorker(packs, spec, a, b, params, volConfig, sc, randomPriceShift, runOptions) {
     const ro = runOptions || {};
     const finOpts = finrespRunOptions();
+    const stopPacks = stopPacksForCalc();
     const worker = getCalcWorker();
     const progressOpts = {
       ...finOpts,
       ...(randomPriceShift ? { signalPacks: E.applyRandomPriceShift(packs) } : {}),
+      ...(stopPacks ? { stopPacks } : {}),
       ...(ro.ctgSpotPacks ? { ctgSpotPacks: ro.ctgSpotPacks } : {}),
       ...(ro.tradingPeriods ? { tradingPeriods: ro.tradingPeriods, calcTf: ro.calcTf } : {}),
       shouldCancel: ro.shouldCancel,
@@ -3912,6 +3945,7 @@
       worker.postMessage({
         id, packs, spec, startIdx: a, endIdx: b, params, volConfig, stopperConfig: sc,
         randomPriceShift: !!randomPriceShift,
+        stopPacks: stopPacks || undefined,
         ctgSpotPacks: ro.ctgSpotPacks || finOpts.ctgSpotPacks || undefined,
         tradingPeriods: ro.tradingPeriods || finOpts.tradingPeriods || undefined,
         calcTf: ro.calcTf || finOpts.calcTf || undefined,
@@ -3999,6 +4033,7 @@
     const p = optimCtx?.params ?? params();
     const sc = optimCtx?.stopper ?? stopperConfig();
     const indicators = optimCtx?.indicators ?? indicatorSelection();
+    if (!requireLogicIdsForCalc({ silent: !!optimCtx || !!ro.silent })) return null;
     const spec = resolveCalcLogicSpec(p, indicators);
     if (!spec) return null;
 
@@ -4704,6 +4739,13 @@
       if (s === "GrOk") return "волатильность/ATR растёт (есть движение)";
       return "условие по ATR";
     }
+    if (k === "ADX") {
+      if (s === "TrOk") return "сила тренда ADX ≥ порога (Min, обычно 25)";
+      if (s === "WkOk") return "слабый тренд / флэт: ADX < порога (Max, обычно 25)";
+      if (s === "DI+" || s === "PlusDI") return "+DI выше −DI (давление покупателей)";
+      if (s === "DI-" || s === "MinusDI") return "−DI выше +DI (давление продавцов)";
+      return "условие по ADX";
+    }
     if (k === "Stoch" || k === "TotStoch" || k === "CtgStoch") {
       const name = k === "TotStoch" ? "TotStoch" : k === "CtgStoch" ? "CtgStoch" : "Stoch";
       if (/K<=\s*10/.test(s) || /K<=\s*20/.test(s)) return `${name}: перепроданность (низкие K)`;
@@ -4829,6 +4871,19 @@
       if (!line || !def) continue;
       if (/TotStoch/i.test(line) && /CtgStoch/i.test(line)) continue;
       if (/CtgStoch/i.test(line) || /TotStoch/i.test(line)) {
+        state.customLines[k] = def;
+      }
+    }
+    for (const k of ["L1", "L2", "L3", "L4", "L5", "UT", "UCT", "TBC"]) {
+      if (hidden.has(k)) continue;
+      const line = state.customLines[k];
+      const def = E.DEFAULT_LOGIC_LINES[k];
+      if (!line || !def) continue;
+      const hasAtrGrOk = /ATR\s*\([^)]*\)\s*\(\s*GrOk\s*\)/i.test(line);
+      const hasAdx = /ADX\s*\(/i.test(line);
+      const wrongBokovikAdx = (k === "L2" || k === "L4" || k === "TBC")
+        && /ADX\s*\([^)]*Min=25[^)]*\)\s*\(\s*TrOk\s*\)/i.test(line);
+      if ((hasAtrGrOk && !hasAdx) || wrongBokovikAdx) {
         state.customLines[k] = def;
       }
     }
@@ -5140,6 +5195,136 @@
     return Array.isArray(proto?.perSec) && proto.perSec.some((p) => Array.isArray(p?.rows) && p.rows.length > 0);
   }
 
+  function protocolIndicatorsFromLogicSpec(logicSpec) {
+    const specs = logicSpec?.specs;
+    if (!Array.isArray(specs)) return null;
+    const merged = {};
+    for (const s of specs) {
+      const ind = s?.parsed?.indicators;
+      if (!ind || typeof ind !== "object") continue;
+      for (const [k, v] of Object.entries(ind)) {
+        if (!(k in merged)) merged[k] = !!v;
+        else merged[k] = merged[k] || !!v;
+      }
+    }
+    return Object.keys(merged).length ? merged : null;
+  }
+
+  /** Параметры расчёта, логики и индикаторы из протокола → форма (перед пересчётом). */
+  function applyProtocolCalcSettings(proto) {
+    if (!proto || typeof proto !== "object") return;
+    const p = proto.params || {};
+    setValueIfExists("param-sl", p.SL ?? p.sl);
+    setValueIfExists("param-tp", p.TP ?? p.tp);
+    setValueIfExists("param-atr-sl", p.slTpAtrLen ?? p.atrSl);
+    setValueIfExists("param-sma-corridor", p.smaCorridorAtr ?? p.smaCorridor);
+    setValueIfExists("param-cma-len", p.CmaLen ?? p.cmaLen);
+    setValueIfExists("param-cma-pow", p.CmaPow ?? p.cmaPow);
+    setValueIfExists("param-lr", p.LR ?? p.lr);
+    setValueIfExists("param-lin-k", p.LinK ?? p.linK);
+    setValueIfExists("param-strict", p.Strict ?? p.strict);
+    if ($("param-reverse")) {
+      $("param-reverse").checked = !!(p.ReverseSides ?? p.Reverse ?? p.reverse);
+    }
+    if ($("param-auto-reverses")) {
+      $("param-auto-reverses").checked = !!(p.AutoReverses ?? p.autoReverses);
+    }
+    setValueIfExists("param-auto-reverses-lookback", p.AutoLookback ?? p.autoLookback);
+    setValueIfExists("param-auto-reverses-step", p.AutoStep ?? p.autoStep);
+    if ($("param-pause-on-drawdown")) {
+      $("param-pause-on-drawdown").checked = !!(p.PauseOnDrawdown ?? p.pauseOnDrawdown);
+    }
+    if ($("param-pause-on-drawdown-per-logic")) {
+      $("param-pause-on-drawdown-per-logic").checked = !!(
+        p.PauseOnDrawdownPerLogic ?? p.pauseOnDrawdownPerLogic
+      );
+    }
+    setValueIfExists("param-pause-drawdown-pct", p.DrawdownPct ?? p.drawdownPct);
+    const sc = proto.stopper || {};
+    if ($("stopper-use-sl")) $("stopper-use-sl").checked = sc.useSl !== false;
+    if ($("stopper-use-tp")) $("stopper-use-tp").checked = sc.useTp !== false;
+    setValueIfExists("stopper-sl-mult", sc.slMult);
+    setValueIfExists("stopper-tp-mult", sc.tpMult);
+    setValueIfExists("stopper-atr-len", sc.atrLen);
+    setValueIfExists("stopper-ref", sc.refEquity);
+    const vol = proto.volume || {};
+    setValueIfExists("vol-type", vol.volumeType ?? vol.type);
+    setValueIfExists("vol-value", vol.volume ?? vol.value);
+    setValueIfExists("vol-deposit", vol.deposit);
+    setValueIfExists("vol-maxpos", vol.maxPositions);
+    const comm = vol.commission || {};
+    if (comm.type === "Percent" && comm.value != null) {
+      setValueIfExists("commission-pct", comm.value);
+    } else if (vol.commissionPct != null) {
+      setValueIfExists("commission-pct", vol.commissionPct);
+    }
+    const logicIds = proto.logicSpec?.logicIds;
+    if (Array.isArray(logicIds) && logicIds.length) {
+      state.restoredLogicIds = logicIds.filter(Boolean);
+      state.logicSelectionCleared = false;
+      fillLogicSelect();
+    }
+    const ind = protocolIndicatorsFromLogicSpec(proto.logicSpec);
+    if (ind) {
+      const lines = (proto.logicSpec?.specs || []).map((s) => s.line || "").join(" ");
+      if (/ADX\s*\(/i.test(lines)) ind.adx = true;
+      applyIndicatorSelection(ind);
+    }
+    syncVolumeFields();
+    renderFromParams();
+  }
+
+  function buildResultFromProtocol(proto) {
+    const agg = proto.agg || {};
+    const perSec = (proto.perSec || []).map((p) => ({
+      sec: normalizeProtocolTicker(p) || "?",
+      ticker: normalizeProtocolTicker(p) || "?",
+      finresp: p.finresp ?? null,
+      commission: p.commission ?? null,
+      rows: [],
+      protocol: p
+    }));
+    return {
+      perSec,
+      agg,
+      preStopperAgg: proto.preStopperAgg || agg,
+      stopper: { events: [] },
+      a: proto.window?.a ?? null,
+      b: proto.window?.b ?? null,
+      skipped: [],
+      finrespMode: "protocol"
+    };
+  }
+
+  function pushProtocolAggToUi(proto, hintExtra) {
+    const agg = proto?.agg;
+    if (!agg || typeof agg !== "object") return;
+    const grossFin = (agg.finresp || 0) + (agg.commission || 0);
+    const winLen = proto.window?.b != null && proto.window?.a != null
+      ? String(proto.window.b - proto.window.a + 1)
+      : "—";
+    const hint = "Загружен протокол"
+      + (hintExtra ? ` · ${hintExtra}` : "")
+      + ". Для % годовых и полных графиков нужен пересчёт по свечам.";
+    bridgeSetResults({
+      finrespText: `${fmt(agg.finresp)} ₽`,
+      finrespColor: agg.finresp < 0 ? "#b91c1c" : "#047857",
+      grossText: `${fmt(grossFin)} ₽`,
+      grossColor: grossFin < 0 ? "#b91c1c" : grossFin > 0 ? "#047857" : "",
+      commissionText: commissionDisplayText(agg.commission || 0),
+      commissionColor: "#b91c1c",
+      candleCount: winLen,
+      position: fmt(agg.pos, 4),
+      cash: `${fmt(agg.cash)} ₽`,
+      bySecText: formatBySec(agg.bySec) || "—",
+      annSimpleText: "—",
+      annSimpleColor: "",
+      annCompoundText: "—",
+      annCompoundColor: "",
+      annHintText: hint
+    });
+  }
+
   function applyLoadedProtocol(proto) {
     const fmtProto = proto?.format || "?";
     if (!proto || typeof proto !== "object") {
@@ -5159,57 +5344,20 @@
       return;
     }
 
+    applyProtocolCalcSettings(proto);
+
     // Render a lightweight step chart from protocol events (no candles required).
     try {
       renderProtocolStepCharts(proto);
     } catch (_) { /* ignore */ }
 
-    // Apply metrics to UI as if a run happened.
+    const result = buildResultFromProtocol(proto);
     const agg = proto.agg || {};
-    const perSec = proto.perSec.map((p) => ({
-      sec: normalizeProtocolTicker(p) || "?",
-      ticker: normalizeProtocolTicker(p) || "?",
-      finresp: p.finresp ?? null,
-      commission: p.commission ?? null,
-      // For protocol v1, we do not have full rows; keep events for drill-down / future use.
-      rows: [],
-      protocol: p
-    }));
-
-    const result = {
-      perSec,
-      agg,
-      preStopperAgg: agg,
-      stopper: { events: [] },
-      a: proto.window?.a ?? null,
-      b: proto.window?.b ?? null,
-      skipped: [],
-      finrespMode: "protocol"
-    };
+    const perSec = result.perSec;
     state.lastResult = result;
     state.lastProtocol = proto;
     syncProtocolUi();
-
-    // Update results view.
-    const grossFin = (agg.finresp || 0) + (agg.commission || 0);
-    const winLen = proto.calc?.tf ? String(proto.window?.b ?? "—") : "—";
-    bridgeSetResults({
-      finrespText: `${fmt(agg.finresp)} ₽`,
-      finrespColor: agg.finresp < 0 ? "#b91c1c" : "#047857",
-      grossText: `${fmt(grossFin)} ₽`,
-      grossColor: grossFin < 0 ? "#b91c1c" : grossFin > 0 ? "#047857" : "",
-      commissionText: commissionDisplayText(agg.commission || 0),
-      commissionColor: "#b91c1c",
-      candleCount: String(proto.window?.b != null && proto.window?.a != null ? (proto.window.b - proto.window.a + 1) : "—"),
-      position: fmt(agg.pos, 4),
-      cash: `${fmt(agg.cash)} ₽`,
-      bySecText: formatBySec(agg.bySec) || "—",
-      annSimpleText: "—",
-      annSimpleColor: "",
-      annCompoundText: "—",
-      annCompoundColor: "",
-      annHintText: "Загружен протокол. Для % годовых и графиков нужны свечи/полные ряды."
-    });
+    pushProtocolAggToUi(proto);
 
     const baseMsg = `Загружен протокол: ${fmtProto} · период ${proto.calc?.periodFrom || "?"} — ${proto.calc?.periodTill || "?"} · инстр.: ${perSec.length} · FINRESP Σ: ${fmt(agg.finresp)} ₽.`;
     if (!protocolHasFullRows(proto)) {
@@ -5241,6 +5389,7 @@
       if (!auto) setCalcStatus("Дождитесь окончания текущего расчёта/оптимизации.");
       return;
     }
+    applyProtocolCalcSettings(proto);
     if (IS_FILE_PROTOCOL) {
       setCalcStatus("file://: загрузка свечей с MOEX заблокирована CORS. Запустите через run-dev.bat / run-prod.bat.");
       return;
@@ -5425,15 +5574,27 @@
     setCalcStatus(`Экспортировано ${payload.logicLineKeys.length} логик в файл.`);
   }
 
-  /** Сброс каталога к встроенным логикам (без диалога). */
+  /** Сброс каталога к встроенным логикам (без диалога). Выбор: убрать только id, которых нет в новом каталоге. */
   function restoreDefaultLogicCatalogCore() {
     readLogicEditor();
+    const prevSelected = selectedLogicIds().slice();
+    const wasCleared = state.logicSelectionCleared;
     state.hiddenLogicKeys = [];
     state.logicLineKeys = DEFAULT_LOGIC_LINE_KEYS.slice();
     state.logicLabels = {};
     state.customLines = { ...E.DEFAULT_LOGIC_LINES };
-    state.logicSelectionCleared = true;
-    state.restoredLogicIds = [];
+    const allowed = new Set(DEFAULT_LOGIC_LINE_KEYS);
+    const kept = prevSelected.filter((id) => allowed.has(id));
+    if (kept.length) {
+      state.restoredLogicIds = kept;
+      state.logicSelectionCleared = false;
+    } else if (wasCleared) {
+      state.restoredLogicIds = null;
+      state.logicSelectionCleared = true;
+    } else {
+      state.restoredLogicIds = null;
+      state.logicSelectionCleared = false;
+    }
     fillLogicEditor();
     fillLogicSelect();
   }
@@ -5471,6 +5632,7 @@
     });
     initPrefixFields();
     initInstrumentLists();
+    syncStopTfToCalcTf();
     syncVolumeFields();
     syncLeverageDisplay();
   }
@@ -5485,7 +5647,7 @@
     }
     const resetLogics = window.confirm(
       "Также сбросить каталог логик к встроенным?\n\n"
-      + "Да — восстановить строки Op/Cl из кода (выбор в списке «Логика» будет сброшен).\n"
+      + "Да — восстановить строки Op/Cl из кода. Из выбора уберутся только логики, которых нет во встроенном каталоге.\n"
       + "Нет — только параметры."
     );
     applyDefaultParamsToUi();
@@ -5497,17 +5659,17 @@
     syncLogicSelectedHint();
     setCalcStatus(
       resetLogics
-      ? "Параметры и каталог логик восстановлены по умолчанию. Выберите логику и нажмите «Рассчитать»."
-      : "Параметры установлены по умолчанию. Нажмите «Рассчитать»."
+        ? "Параметры и каталог логик восстановлены. Выбор сохранён для встроенных логик. Нажмите «Рассчитать»."
+        : "Параметры установлены по умолчанию. Нажмите «Рассчитать»."
     );
   }
 
-  /** Сброс каталога к встроенным логикам; выбор в списке «Логика» — пустой. */
+  /** Сброс каталога к встроенным логикам; из выбора убираются только отсутствующие во встроенном каталоге. */
   function restoreDefaultLogicCatalog() {
     if (!window.confirm(
       "Восстановить встроенные логики из кода?\n\n"
       + "Будут сброшены все правки строк, добавленные и удалённые логики. "
-      + "В списке «Логика» ничего не останется выбранным."
+      + "Из текущего выбора останутся только встроенные логики (U1, U2… и прочие пользовательские — снимутся)."
     )) {
       return;
     }
@@ -5515,7 +5677,12 @@
     saveConfig();
     invalidateFormChange();
     updatePositionSlHint();
-    setCalcStatus("Каталог логик восстановлен по умолчанию. Выберите логику для расчёта.");
+    const ids = selectedLogicIds();
+    setCalcStatus(
+      ids.length
+        ? `Каталог логик восстановлен. Сохранён выбор: ${ids.join(" → ")}.`
+        : "Каталог логик восстановлен. Выберите логику для расчёта."
+    );
   }
 
   /** Импорт каталога логик из JSON (замена текущего списка). */
@@ -5569,12 +5736,67 @@
     else importLogicCatalogFromData(data);
   }
 
+  /** Первая встроенная логика по умолчанию (UT → L1 → RND → первая в списке). */
+  function defaultLogicPickId() {
+    const sel = $("calc-logic");
+    const allowed = sel?.options?.length
+      ? [...sel.options].map((o) => o.value)
+      : (state.logicLineKeys || []);
+    const pick = ["UT", "L1", "RND", "L5", "UCT"].find((id) => allowed.includes(id));
+    return pick || allowed[0] || "UT";
+  }
+
+  /** Записать выбор логик в DOM и Angular-форму. */
+  function applyLogicSelection(ids) {
+    const next = (Array.isArray(ids) ? ids : []).map(String).filter(Boolean);
+    state.logicSelectionCleared = !next.length;
+    if (bridgeApplyLogicSelection(next, state.logicSelectionCleared)) {
+      syncLogicSelectedHint();
+      return;
+    }
+    const sel = $("calc-logic");
+    if (sel) {
+      const set = new Set(next);
+      for (const o of sel.options) o.selected = set.has(o.value);
+    }
+    syncLogicSelectedHint();
+  }
+
+  /**
+   * Перед расчётом: если логика не выбрана явно — подставить UT; если сброшена вручную — null + сообщение.
+   * @returns {string[]|null}
+   */
+  function requireLogicIdsForCalc(opts) {
+    const silent = !!opts?.silent;
+    let ids = selectedLogicIds().filter(Boolean);
+    if (!ids.length && !state.logicSelectionCleared) {
+      ids = [defaultLogicPickId()];
+      applyLogicSelection(ids);
+      if (!silent) setCalcStatus(`Логика не была выбрана — подставлена ${ids[0]}.`);
+    }
+    if (!ids.length) {
+      if (!silent) {
+        setCalcStatus(
+          "Не выбрана логика. В блоке «Логика» отметьте L1, UT или другую строку (Ctrl+клик — несколько)."
+        );
+      }
+      return null;
+    }
+    return ids;
+  }
+
   /** Функция: id выбранных логик в порядке приоритета (верх списка = первая). */
   function selectedLogicIds() {
     const api = bridgeApi();
     if (api?.getSelectedLogicIds) {
       try {
-        return api.getSelectedLogicIds();
+        const ids = api.getSelectedLogicIds();
+        if (ids.length) return ids;
+        if (!state.logicSelectionCleared) {
+          const dom = bridgeReadLogicIdsFromDom();
+          if (dom.length) return dom;
+        }
+        return ids;
       } catch (_) { /* fallback */ }
     }
     return bridgeReadLogicIdsFromDom();
@@ -10125,7 +10347,9 @@ ${referenceBlock}
       const packsN = state.packs?.length || 0;
       const skipped = state.windowSkipped?.length || 0;
       let msg = "Нет результата для выбранного окна.";
-      if (!packsN) msg = "Нет загруженных свечей — нажмите «Рассчитать».";
+      if (!selectedLogicIds().length) {
+        msg = "Не выбрана логика. В блоке «Логика» отметьте L1, UT или другую строку.";
+      } else if (!packsN) msg = "Нет загруженных свечей — нажмите «Рассчитать».";
       else if (skipped >= packsN) {
         const n = selectedInstrumentCount() || packsN;
         msg =
@@ -10196,11 +10420,36 @@ ${referenceBlock}
     if (hasFutures && packs.length) {
       ctgSpotPacks = await E.loadCtgSpotPacks(packs, from, till, interval, state.candleCache || null);
     }
+    const stopTf = resolveStopTf(interval);
+    let stopPacks = null;
+    if (stopTf !== String(interval)) {
+      const stopPeriodKey = loadMetaKey(from, till, stopTf);
+      const stopPeriodChanged = state.lastStopLoadMeta?.periodKey !== stopPeriodKey;
+      const stopByKey = stopPeriodChanged ? new Map() : packsByInstrumentKey(state.stopPacks || []);
+      const stopToLoad = stopPeriodChanged
+        ? instruments
+        : instruments.filter((i) => !stopByKey.has(instrumentKey(i)));
+      if (stopToLoad.length) {
+        const stopLoaded = await loadInstrumentPacks(stopToLoad, from, till, stopTf, onProgress, shouldCancel);
+        for (const pack of stopLoaded.packs) {
+          if (!pack?.[0]) continue;
+          stopByKey.set(instrumentKey(pack[0]), pack);
+        }
+      }
+      for (const key of [...stopByKey.keys()]) {
+        if (!wantKeys.has(key)) stopByKey.delete(key);
+      }
+      stopPacks = orderPacksForInstruments(instruments, stopByKey);
+      state.lastStopLoadMeta = { periodKey: stopPeriodKey, keys: instruments.map(instrumentKey) };
+    } else {
+      state.lastStopLoadMeta = null;
+    }
     return {
       packs,
       failures: failures.filter((f) => wantKeys.has(instrumentKey({ sec: f.sec, market: f.market }))),
       periodKey,
-      ctgSpotPacks
+      ctgSpotPacks,
+      stopPacks
     };
   }
 
@@ -10464,6 +10713,7 @@ ${referenceBlock}
         throw new Error(`MOEX не вернул свечи ни по одному инструменту${sample ? ` (${sample}${tail})` : ""}.`);
       }
       state.packs = loadedData.packs;
+      state.stopPacks = loadedData.stopPacks || null;
       state.ctgSpotPacks = loadedData.ctgSpotPacks || {};
       state.failedInstruments = loadedData.failures;
       state.windowSkipped = [];
@@ -10499,15 +10749,38 @@ ${referenceBlock}
         const packsN = state.packs?.length || 0;
         const skipped = state.windowSkipped?.length || 0;
         let msg = "Нет результата для выбранного окна.";
-        if (!packsN) msg = "Нет загруженных свечей.";
+        if (!selectedLogicIds().length) {
+          msg = "Не выбрана логика. В блоке «Логика» отметьте L1, UT или другую строку.";
+        } else if (!packsN) msg = "Нет загруженных свечей.";
         else if (skipped >= packsN) {
           msg = `Недостаточно истории для расчёта (~${maxCalcDays($("calc-tf").value, instruments.length)} дн.).`;
         }
-        $("calc-finresp").textContent = "—";
-        $("calc-commission").textContent = "—";
-        $("calc-ann-simple").textContent = "—";
-        $("calc-ann-compound").textContent = "—";
-        state.lastResult = null;
+        const emptyView = {
+          finrespText: "—",
+          finrespColor: "",
+          grossText: "—",
+          grossColor: "",
+          commissionText: "—",
+          commissionColor: "#b91c1c",
+          annSimpleText: "—",
+          annSimpleColor: "",
+          annCompoundText: "—",
+          annCompoundColor: "",
+          annHintText: ""
+        };
+        if (state.loadedProtocol?.agg && state.loadedProtocol.format === CALC_PROTOCOL_FORMAT) {
+          state.lastResult = buildResultFromProtocol(state.loadedProtocol);
+          pushProtocolAggToUi(state.loadedProtocol, "пересчёт не дал результата — показаны итоги из файла");
+          msg += " Показаны итоги из загруженного протокола.";
+        } else if (!bridgeSetResults(emptyView)) {
+          $("calc-finresp").textContent = "—";
+          $("calc-commission").textContent = "—";
+          $("calc-ann-simple").textContent = "—";
+          $("calc-ann-compound").textContent = "—";
+          state.lastResult = null;
+        } else {
+          state.lastResult = null;
+        }
         setCalcProgress(msg);
         if (instruments.length > 1 && loadedData.failures.length) {
           appendCalcStatus(` Загружено ${state.packs.length}/${instruments.length}; ошибок MOEX: ${loadedData.failures.length}.`);
@@ -10585,6 +10858,7 @@ ${referenceBlock}
       } catch (_) { /* status уже выставлен */ }
       return;
     }
+    if (!requireLogicIdsForCalc()) return;
     let instruments = selectedInstruments();
     if (!instruments.length) {
       setCalcStatus("Выберите хотя бы один инструмент в списке.");
@@ -10945,6 +11219,7 @@ ${referenceBlock}
   bindLivePauseOnDrawdownPerLogicPanelUi();
   bindLiveAutoReversesPanelUi();
   $("calc-tf").addEventListener("change", () => {
+    syncStopTfToCalcTf();
     const n = selectedInstrumentCount();
     if (n > 0 && enforceDateRange("till", n)) {
       clearWindowAnchor();
@@ -10960,6 +11235,11 @@ ${referenceBlock}
       startLiveModePoll();
       if (!state.live.candleRefreshBusy) void refreshLiveCandleStream({ silent: true });
     } else if (state.packs.length) invalidateFinrespResult();
+  });
+  $("calc-stop-tf")?.addEventListener("change", () => {
+    state.lastStopLoadMeta = null;
+    saveConfig();
+    if (state.packs.length) invalidateFinrespResult();
   });
   if (!bridgeApi()?.setFormCatalog) {
     $("calc-month").addEventListener("change", () => {
@@ -11078,6 +11358,7 @@ ${referenceBlock}
         till: cfg.till || "",
         accountMode: normalizeAccountMode(cfg.accountMode || "paper")
       });
+      setValueIfExists("calc-stop-tf", cfg.stopTimeframe ?? cfg.timeframe ?? "60");
       syncMonthInputFromDates();
       api.applyFormSnapshot({ month: $("calc-month")?.value || "" });
       if (Array.isArray(cfg.logics)) {

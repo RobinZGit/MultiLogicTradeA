@@ -10,6 +10,6 @@
   root.MultiLogicFinrespLogics.register({
     id: "sma_corridor_anti",
     name: "SMA-эталон, анти-тренд — коридор ATR",
-    defaultLine: "SMA(100;Spread=@SmaCorridor)(Anti) SL[@SL] TP[@TP] Note(SMA-Spread-anti)"
+    defaultLine: "SMA(100;Spread=@SmaCorridor)(Anti) ADX(14;Max=25)(WkOk) SL[@SL] TP[@TP] Note(SMA-Spread-anti)"
   });
 })(typeof window !== "undefined" ? window : globalThis);

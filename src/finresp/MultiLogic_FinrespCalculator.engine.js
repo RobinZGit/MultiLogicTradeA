@@ -81,6 +81,7 @@
     { key: "sma", label: "SMA" },
     { key: "cma", label: "CMA" },
     { key: "atr", label: "ATR" },
+    { key: "adx", label: "ADX" },
     { key: "stoch", label: "Stoch" },
     { key: "totstoch", label: "TotStoch" },
     { key: "ctgstoch", label: "CtgStoch" },
@@ -478,23 +479,137 @@
   /** Проверка позиционного SL/TP: ATR-кратность и/или % от цены входа. */
   function checkPositionSlTp(pos, entryPrice, price, parsed, atrValue) {
     if (!pos || entryPrice == null || !Number.isFinite(price)) return null;
-    const slPct = Math.max(0, +parsed?.slPct || 0);
-    const tpPct = Math.max(0, +parsed?.tpPct || 0);
-    const slAtr = Math.max(0, +parsed?.slAtr || 0);
-    const tpAtr = Math.max(0, +parsed?.tpAtr || 0);
+    const candle = { close: price, high: price, low: price };
+    return checkPositionSlTpOnCandle(pos, entryPrice, candle, slTpSpecFromParsed(parsed), atrValue);
+  }
+
+  function slTpSpecFromParsed(parsed) {
+    return {
+      slAtr: Math.max(0, +parsed?.slAtr || 0),
+      tpAtr: Math.max(0, +parsed?.tpAtr || 0),
+      slPct: Math.max(0, +parsed?.slPct || 0),
+      tpPct: Math.max(0, +parsed?.tpPct || 0),
+      slTpAtrLen: parsed?.slTpAtrLen || DEFAULT_PARAMS.slTpAtrLen
+    };
+  }
+
+  function slTpSpecFromOpts(opts) {
+    return {
+      slAtr: Math.max(0, Number(opts?.slAtr) || 0),
+      tpAtr: Math.max(0, Number(opts?.tpAtr) || 0),
+      slPct: 0,
+      tpPct: 0,
+      slTpAtrLen: Math.max(2, Number(opts?.slTpAtrLen) || DEFAULT_PARAMS.slTpAtrLen)
+    };
+  }
+
+  function positionStopsEnabledSpec(spec) {
+    if (!spec) return false;
+    return spec.slAtr > 0 || spec.tpAtr > 0 || spec.slPct > 0 || spec.tpPct > 0;
+  }
+
+  /** SL/TP на одной свече (high/low для внутрибаровой проверки). */
+  function checkPositionSlTpOnCandle(pos, entryPrice, candle, spec, atrValue) {
+    if (!pos || entryPrice == null || !candle) return null;
+    const price = candle.close;
+    const hi = candle.high ?? price;
+    const lo = candle.low ?? price;
+    const slPct = Math.max(0, +spec?.slPct || 0);
+    const tpPct = Math.max(0, +spec?.tpPct || 0);
+    const slAtr = Math.max(0, +spec?.slAtr || 0);
+    const tpAtr = Math.max(0, +spec?.tpAtr || 0);
     const a = Number.isFinite(atrValue) && atrValue > 0 ? atrValue : null;
     if (pos > 0) {
-      if (slPct > 0 && price <= entryPrice * (1 - slPct)) return "sl";
-      if (tpPct > 0 && price >= entryPrice * (1 + tpPct)) return "tp";
-      if (a != null && slAtr > 0 && price <= entryPrice - slAtr * a) return "sl";
-      if (a != null && tpAtr > 0 && price >= entryPrice + tpAtr * a) return "tp";
+      if (slPct > 0 && lo <= entryPrice * (1 - slPct)) return "sl";
+      if (tpPct > 0 && hi >= entryPrice * (1 + tpPct)) return "tp";
+      if (a != null && slAtr > 0 && lo <= entryPrice - slAtr * a) return "sl";
+      if (a != null && tpAtr > 0 && hi >= entryPrice + tpAtr * a) return "tp";
     } else if (pos < 0) {
-      if (slPct > 0 && price >= entryPrice * (1 + slPct)) return "sl";
-      if (tpPct > 0 && price <= entryPrice * (1 - tpPct)) return "tp";
-      if (a != null && slAtr > 0 && price >= entryPrice + slAtr * a) return "sl";
-      if (a != null && tpAtr > 0 && price <= entryPrice - tpAtr * a) return "tp";
+      if (slPct > 0 && hi >= entryPrice * (1 + slPct)) return "sl";
+      if (tpPct > 0 && lo <= entryPrice * (1 - tpPct)) return "tp";
+      if (a != null && slAtr > 0 && hi >= entryPrice + slAtr * a) return "sl";
+      if (a != null && tpAtr > 0 && lo <= entryPrice - tpAtr * a) return "tp";
     }
     return null;
+  }
+
+  function stopBarIndicesForMainBar(calcCandles, stopCandles, mainIdx) {
+    if (!calcCandles?.length || !stopCandles?.length || mainIdx < 0) return [];
+    const tEnd = calcCandles[mainIdx]?.time;
+    if (!tEnd) return [];
+    if (mainIdx === 0) {
+      const idx = findCandleIndexAtOrBefore(stopCandles, tEnd);
+      return idx >= 0 ? [idx] : [];
+    }
+    const tStart = calcCandles[mainIdx - 1]?.time;
+    const out = [];
+    for (let j = 0; j < stopCandles.length; j++) {
+      const ts = stopCandles[j]?.time;
+      if (!ts) continue;
+      if (ts > tStart && ts <= tEnd) out.push(j);
+      else if (ts > tEnd) break;
+    }
+    if (!out.length) {
+      const idx = findCandleIndexAtOrBefore(stopCandles, tEnd);
+      if (idx >= 0) out.push(idx);
+    }
+    return out;
+  }
+
+  /** ATR @SL/@TP на отдельном ТФ (бэктест); live не использует. */
+  function createPositionStopHelper(calcCandles, stopCandles, opts) {
+    if (!stopCandles?.length || stopCandles === calcCandles) {
+      return { sameTf: true };
+    }
+    const stopCache = opts?.stopIndicatorCache || new IndicatorCache(stopCandles);
+    const atrByLen = new Map();
+    const getAtr = (len) => {
+      const n = Math.max(2, Number(len) || DEFAULT_PARAMS.slTpAtrLen);
+      if (!atrByLen.has(n)) atrByLen.set(n, stopCache.atr(n));
+      return atrByLen.get(n);
+    };
+    return {
+      sameTf: false,
+      stopCandles,
+      checkOnMainBar(mainIdx, pos, entryPrice, spec) {
+        if (!positionStopsEnabledSpec(spec) || !pos || entryPrice == null) return null;
+        const needAtr = spec.slAtr > 0 || spec.tpAtr > 0;
+        const atrSeries = needAtr ? getAtr(spec.slTpAtrLen) : null;
+        for (const si of stopBarIndicesForMainBar(calcCandles, stopCandles, mainIdx)) {
+          const candle = stopCandles[si];
+          const a = atrSeries ? atrSeries[si] : null;
+          const stop = checkPositionSlTpOnCandle(pos, entryPrice, candle, spec, a);
+          if (stop) return { stop, price: candle.close };
+        }
+        return null;
+      }
+    };
+  }
+
+  function resolvePositionStopHelper(opts, calcCandles) {
+    if (opts?.positionStopHelper) return opts.positionStopHelper;
+    const stopCandles = opts?.stopCandles;
+    if (!stopCandles || stopCandles === calcCandles) return null;
+    const helper = createPositionStopHelper(calcCandles, stopCandles, opts);
+    opts.positionStopHelper = helper;
+    return helper;
+  }
+
+  function tryPositionStopOnMainBar(candles, mainIdx, pos, entryPrice, spec, opts, atrOnMain) {
+    const helper = resolvePositionStopHelper(opts, candles);
+    if (helper && !helper.sameTf) {
+      const hit = helper.checkOnMainBar(mainIdx, pos, entryPrice, spec);
+      if (hit) return { hit: true, posStop: hit.stop, exitPrice: hit.price };
+      return { hit: false };
+    }
+    const stop = checkPositionSlTp(pos, entryPrice, candles[mainIdx]?.close, {
+      slAtr: spec.slAtr,
+      tpAtr: spec.tpAtr,
+      slPct: spec.slPct,
+      tpPct: spec.tpPct
+    }, atrOnMain);
+    if (stop) return { hit: true, posStop: stop, exitPrice: candles[mainIdx]?.close };
+    return { hit: false };
   }
 
   function positionStopsEnabled(parsed) {
@@ -668,7 +783,47 @@
     });
   }
 
-  /** Индикаторы контанго (папка indicators/ctg/) — только для фьючерсов. */
+  /** Тренд / флэт по тексту строки логики (для ADX-компаньона к ATR). */
+  function inferAdxModeFromLogicLine(line) {
+    const l = String(line || "");
+    if (/\(Anti\)|Entry=FlatOnly|SlopeDead=|Note\([^)]*bokovik|counter.?trend|WkOk/i.test(l)) return "flat";
+    if (/\bUCT\b|universal-counter/i.test(l)) return "flat";
+    return "trend";
+  }
+
+  function defaultAdxAtom(mode) {
+    return mode === "flat"
+      ? { kind: "adx", params: "14;Max=25", signal: "WkOk" }
+      : { kind: "adx", params: "14;Min=25", signal: "TrOk" };
+  }
+
+  const ATR_GROK_RE = /ATR\s*\(\s*14\s*;\s*Gr=3%\s*;\s*Lb=5\s*\)\s*\(\s*GrOk\s*\)/i;
+
+  /** Вставить ADX сразу после ATR(GrOk) в строке, если ADX ещё нет. */
+  function ensureAdxInLogicLineString(line) {
+    const s = String(line || "");
+    if (!s || /ADX\s*\(/i.test(s)) return s;
+    if (!ATR_GROK_RE.test(s)) return s;
+    const adx = inferAdxModeFromLogicLine(s) === "flat"
+      ? "ADX(14;Max=25)(WkOk)"
+      : "ADX(14;Min=25)(TrOk)";
+    return s.replace(ATR_GROK_RE, (m) => `${m} AND ${adx}`);
+  }
+
+  /** Добавить атом ADX после каждого ATR в Op-списке (если в строке нет ADX). */
+  function injectAdxAfterAtrAtoms(atoms, line) {
+    if (!atoms?.length || /ADX\s*\(/i.test(String(line || ""))) return atoms;
+    if (atoms.some((a) => indicatorKey(a?.kind) === "adx")) return atoms;
+    if (!atoms.some((a) => indicatorKey(a?.kind) === "atr")) return atoms;
+    const adx = defaultAdxAtom(inferAdxModeFromLogicLine(line));
+    const out = [];
+    for (const a of atoms) {
+      out.push(a);
+      if (indicatorKey(a?.kind) === "atr") out.push({ ...adx });
+    }
+    return out;
+  }
+
   function isCtgIndicatorKind(kind) {
     const k = indicatorKey(kind);
     return k === "ctg" || k.startsWith("ctg");
@@ -876,6 +1031,11 @@
     return requireIndFn("atrSeries")(candles, len);
   }
 
+  /** Подпрограмма `adxSeries`. */
+  function adxSeries(candles, len) {
+    return requireIndFn("adxSeries")(candles, len);
+  }
+
   /** Подпрограмма `stochSeries`. */
   function stochSeries(candles, kLen, kSmooth, dSmooth) {
     return requireIndFn("stochSeries")(candles, kLen, kSmooth, dSmooth);
@@ -926,6 +1086,7 @@
       this._sma = new Map();
       this._cma = new Map();
       this._atr = new Map();
+      this._adx = new Map();
       this._stoch = new Map();
       this._totStoch = new Map();
       this._ctgStoch = new Map();
@@ -952,6 +1113,10 @@
     atr(len) {
       if (!this._atr.has(len)) this._atr.set(len, atrSeries(this.candles, len));
       return this._atr.get(len);
+    }
+    adx(len) {
+      if (!this._adx.has(len)) this._adx.set(len, adxSeries(this.candles, len));
+      return this._adx.get(len);
     }
     stoch(k1, k2, d) {
       const key = `${k1}-${k2}-${d}`;
@@ -1061,6 +1226,31 @@
       const prev = idx >= lb ? atr[idx - lb] : null;
       if (cur == null || prev == null || prev === 0) return false;
       if (sigU === "GROK" || sigU.includes("GROK")) return cur >= prev * (1 + gr);
+      return false;
+    }
+    if (kind === "adx") {
+      const len = pm.L || parseInt(atom.params, 10) || 14;
+      const minThr = parseFloat(pm.Min ?? pm.min ?? "25");
+      const maxThr = parseFloat(pm.Max ?? pm.max ?? "25");
+      const bands = cache.adx(len);
+      const a = bands.adx[idx];
+      const pdi = bands.plusDi[idx];
+      const mdi = bands.minusDi[idx];
+      if (a == null) return false;
+      if (sigU === "TROK" || sigU.includes("TROK")) {
+        const thr = Number.isFinite(minThr) ? minThr : 25;
+        return a >= thr;
+      }
+      if (sigU === "WKOK" || sigU.includes("WKOK")) {
+        const thr = Number.isFinite(maxThr) ? maxThr : 25;
+        return a < thr;
+      }
+      if (sigU === "DI+" || sigU === "PLUSDI" || sigU === "PLUSD") {
+        return pdi != null && mdi != null && pdi > mdi;
+      }
+      if (sigU === "DI-" || sigU === "MINUSDI" || sigU === "MINUSD") {
+        return pdi != null && mdi != null && mdi > pdi;
+      }
       return false;
     }
     if (kind === "stoch") {
@@ -2135,6 +2325,7 @@
     sma: "100",
     cma: "100;P=1",
     atr: "14",
+    adx: "14;Min=25",
     stoch: "14-3-3",
     totstoch: "14-3-3",
     ctgstoch: "14-3-3",
@@ -2622,15 +2813,16 @@
         const parsed = parsedList[activeIdx];
         const activeLogicId = logicSpecs[activeIdx]?.logicId || opts.logicId || "?";
         if (positionStopsEnabled(parsed) && entryPrice != null) {
-          const needAtr = (parsed.slAtr > 0 || parsed.tpAtr > 0);
-          const a = needAtr ? atrByLen.get(parsed.slTpAtrLen || DEFAULT_PARAMS.slTpAtrLen)?.[i] : null;
-          const stop = checkPositionSlTp(pos, entryPrice, price, parsed, a);
-          if (stop) {
-            posStop = stop;
+          const spec = slTpSpecFromParsed(parsed);
+          const needAtr = spec.slAtr > 0 || spec.tpAtr > 0;
+          const a = needAtr ? atrByLen.get(spec.slTpAtrLen)?.[i] : null;
+          const stopHit = tryPositionStopOnMainBar(candles, i, pos, entryPrice, spec, opts, a);
+          if (stopHit.hit) {
+            posStop = stopHit.posStop;
             markerMeta.tradeOutLogic = activeLogicId;
             markerMeta.tradeOutSignal = posStop;
             markerMeta.tradeOutExpr = markerSlTpLabel(parsed, posStop);
-            sell += flatten(price);
+            sell += flatten(stopHit.exitPrice);
           }
         }
         if (pos !== 0) {
@@ -2773,14 +2965,16 @@
       let posStop = null;
       const markerMeta = {};
       if (!tradesBlocked && pos !== 0 && positionStopsEnabled(parsed) && entryPrice != null) {
-        const a = needAtrStops ? atrSlTp[i] : null;
-        const stop = checkPositionSlTp(pos, entryPrice, price, parsed, a);
-        if (stop) {
-          posStop = stop;
+        const spec = slTpSpecFromParsed(parsed);
+        const needAtr = spec.slAtr > 0 || spec.tpAtr > 0;
+        const a = needAtr ? atrSlTp[i] : null;
+        const stopHit = tryPositionStopOnMainBar(candles, i, pos, entryPrice, spec, opts, a);
+        if (stopHit.hit) {
+          posStop = stopHit.posStop;
           markerMeta.tradeOutLogic = logicId;
           markerMeta.tradeOutSignal = posStop;
           markerMeta.tradeOutExpr = markerSlTpLabel(parsed, posStop);
-          sell += flatten(price);
+          sell += flatten(stopHit.exitPrice);
         }
       }
 
@@ -2897,36 +3091,19 @@
       const tradesBlocked = tradesBlockedOnBar(candle, opts);
 
       if (!tradesBlocked && useStops && pos !== 0 && entryPrice != null) {
-        const a = atrSlTp[i];
-        if (a != null && a > 0) {
-          let hit = false;
-          if (pos > 0) {
-            if (slAtr > 0 && price <= entryPrice - slAtr * a) {
-              hit = true;
-              posStop = "sl";
-            } else if (tpAtr > 0 && price >= entryPrice + tpAtr * a) {
-              hit = true;
-              posStop = "tp";
-            }
-          } else {
-            if (slAtr > 0 && price >= entryPrice + slAtr * a) {
-              hit = true;
-              posStop = "sl";
-            } else if (tpAtr > 0 && price <= entryPrice - tpAtr * a) {
-              hit = true;
-              posStop = "tp";
-            }
-          }
-          if (hit) {
-            cash += pos * price;
-            const comm = commissionCost(price, Math.abs(pos), volConfig);
-            cash -= comm;
-            commissionPaid += comm;
-            sells += Math.abs(pos);
-            pos = 0;
-            entryPrice = null;
-            portfolioSyncPos(opts, 0, price);
-          }
+        const spec = slTpSpecFromOpts(opts);
+        const stopHit = tryPositionStopOnMainBar(candles, i, pos, entryPrice, spec, opts, atrSlTp?.[i]);
+        if (stopHit.hit) {
+          posStop = stopHit.posStop;
+          const exitPx = stopHit.exitPrice ?? price;
+          cash += pos * exitPx;
+          const comm = commissionCost(exitPx, Math.abs(pos), volConfig);
+          cash -= comm;
+          commissionPaid += comm;
+          sells += Math.abs(pos);
+          pos = 0;
+          entryPrice = null;
+          portfolioSyncPos(opts, 0, exitPx);
         }
       }
 
@@ -3031,36 +3208,19 @@
       const tradesBlocked = tradesBlockedOnBar(candle, opts);
 
       if (!tradesBlocked && useStops && pos !== 0 && entryPrice != null) {
-        const a = atrSlTp[i];
-        if (a != null && a > 0) {
-          let hit = false;
-          if (pos > 0) {
-            if (slAtr > 0 && price <= entryPrice - slAtr * a) {
-              hit = true;
-              posStop = "sl";
-            } else if (tpAtr > 0 && price >= entryPrice + tpAtr * a) {
-              hit = true;
-              posStop = "tp";
-            }
-          } else {
-            if (slAtr > 0 && price >= entryPrice + slAtr * a) {
-              hit = true;
-              posStop = "sl";
-            } else if (tpAtr > 0 && price <= entryPrice - tpAtr * a) {
-              hit = true;
-              posStop = "tp";
-            }
-          }
-          if (hit) {
-            cash += pos * price;
-            const comm = commissionCost(price, Math.abs(pos), volConfig);
-            cash -= comm;
-            commissionPaid += comm;
-            sells += Math.abs(pos);
-            pos = 0;
-            entryPrice = null;
-            portfolioSyncPos(opts, 0, price);
-          }
+        const spec = slTpSpecFromOpts(opts);
+        const stopHit = tryPositionStopOnMainBar(candles, i, pos, entryPrice, spec, opts, atrSlTp?.[i]);
+        if (stopHit.hit) {
+          posStop = stopHit.posStop;
+          const exitPx = stopHit.exitPrice ?? price;
+          cash += pos * exitPx;
+          const comm = commissionCost(exitPx, Math.abs(pos), volConfig);
+          cash -= comm;
+          commissionPaid += comm;
+          sells += Math.abs(pos);
+          pos = 0;
+          entryPrice = null;
+          portfolioSyncPos(opts, 0, exitPx);
         }
       }
 
@@ -3119,8 +3279,14 @@
     };
   }
 
+  /** ADX(14;Min=25)(TrOk) в строке SMA-коридора (опционально). */
+  function parseAdxAtomFromLine(line) {
+    const m = String(line || "").match(/ADX\s*\(\s*([^)]*)\s*\)\s*\(\s*([^)]+)\s*\)/i);
+    if (!m) return null;
+    return { kind: "adx", params: m[1].trim(), signal: m[2].trim() };
+  }
+
   /**
-   * SMA-эталон с коридором ±K×ATR вокруг SMA.
    * trend: выше верхней границы — покупка, ниже нижней — продажа (объём ∝ выход за коридор).
    * anti: наоборот. Внутри коридора — без новых сделок по сигналу.
    */
@@ -3172,38 +3338,30 @@
       let smaLower = null;
       const tradesBlocked = tradesBlockedOnBar(candle, opts);
 
-      if (!tradesBlocked && useStops && pos !== 0 && entryPrice != null && a != null && a > 0) {
-        let hit = false;
-        if (pos > 0) {
-          if (slAtr > 0 && price <= entryPrice - slAtr * a) {
-            hit = true;
-            posStop = "sl";
-          } else if (tpAtr > 0 && price >= entryPrice + tpAtr * a) {
-            hit = true;
-            posStop = "tp";
-          }
-        } else {
-          if (slAtr > 0 && price >= entryPrice + slAtr * a) {
-            hit = true;
-            posStop = "sl";
-          } else if (tpAtr > 0 && price <= entryPrice - tpAtr * a) {
-            hit = true;
-            posStop = "tp";
-          }
-        }
-        if (hit) {
-          cash += pos * price;
-          const comm = commissionCost(price, Math.abs(pos), volConfig);
+      if (!tradesBlocked && useStops && pos !== 0 && entryPrice != null) {
+        const spec = slTpSpecFromOpts(opts);
+        const stopHit = tryPositionStopOnMainBar(candles, i, pos, entryPrice, spec, opts, a);
+        if (stopHit.hit) {
+          posStop = stopHit.posStop;
+          const exitPx = stopHit.exitPrice ?? price;
+          cash += pos * exitPx;
+          const comm = commissionCost(exitPx, Math.abs(pos), volConfig);
           cash -= comm;
           commissionPaid += comm;
           sells += Math.abs(pos);
           pos = 0;
           entryPrice = null;
-          portfolioSyncPos(opts, 0, price);
+          portfolioSyncPos(opts, 0, exitPx);
         }
       }
 
       if (!tradesBlocked && s != null && a != null && a > 0) {
+        const adxAtom = opts.adxAtom;
+        const adxOk = !adxAtom || evaluateAtom(adxAtom, cache, i, null, opts);
+        if (!adxOk) {
+          buy = 0;
+          sell = 0;
+        } else {
         const band = corridorK * a;
         smaUpper = s + band;
         smaLower = s - band;
@@ -3229,6 +3387,7 @@
         buys += buy;
         sells += sell;
         portfolioSyncPos(opts, pos, price);
+        }
       }
 
       if (pos === 0) {
@@ -3384,7 +3543,7 @@
     if (!String(rawLine).trim()) {
       return { type: "logic_line", parsed: null, line: "", logicId, disabled: true };
     }
-    const line = substituteParams(rawLine, p);
+    const line = ensureAdxInLogicLineString(substituteParams(rawLine, p));
     const smaModel = PARSER.parseSmaModelFromLine(line);
     if (smaModel?.model === "spread") {
       return {
@@ -3404,17 +3563,25 @@
       const corridorRaw = smaModel.corridorAtr != null && Number.isFinite(smaModel.corridorAtr)
         ? smaModel.corridorAtr
         : Number(p.smaCorridorAtr);
+      const mode = smaModel.mode;
+      const adxAtom = parseAdxAtomFromLine(line)
+        || (mode === "anti"
+          ? { kind: "adx", params: "14;Max=25", signal: "WkOk" }
+          : { kind: "adx", params: "14;Min=25", signal: "TrOk" });
       return {
         type: "sma_corridor",
         smaLen: smaModel.smaLen,
-        mode: smaModel.mode,
+        mode,
         corridorAtr: Number.isFinite(corridorRaw) ? Math.max(0, corridorRaw) : DEFAULT_PARAMS.smaCorridorAtr,
+        adxAtom,
         line,
         logicId,
         slAtr: Math.max(0, Number(p.SL) || 0),
         tpAtr: Math.max(0, Number(p.TP) || 0),
         slTpAtrLen: Math.max(2, Number(p.slTpAtrLen) || DEFAULT_PARAMS.slTpAtrLen),
-        disabled: !isIndicatorEnabled(indicatorSelection, "sma") || !isIndicatorEnabled(indicatorSelection, "atr"),
+        disabled: !isIndicatorEnabled(indicatorSelection, "sma")
+          || !isIndicatorEnabled(indicatorSelection, "atr")
+          || !isIndicatorEnabled(indicatorSelection, "adx"),
         indicators: normalizeIndicatorSelection(indicatorSelection)
       };
     }
@@ -3435,10 +3602,12 @@
       };
     }
     const baseParsed = PARSER.parseLogicLine(line);
-    const opLongAtoms = filterAtomsByIndicators(baseParsed.opLongAtoms, indicatorSelection);
-    const opShortAtoms = filterAtomsByIndicators(baseParsed.opShortAtoms, indicatorSelection);
+    let opLongAtoms = filterAtomsByIndicators(baseParsed.opLongAtoms, indicatorSelection);
+    let opShortAtoms = filterAtomsByIndicators(baseParsed.opShortAtoms, indicatorSelection);
     const clLongAtoms = filterAtomsByIndicators(baseParsed.clLongAtoms, indicatorSelection);
     const clShortAtoms = filterAtomsByIndicators(baseParsed.clShortAtoms, indicatorSelection);
+    opLongAtoms = injectAdxAfterAtrAtoms(opLongAtoms, line);
+    opShortAtoms = injectAdxAfterAtrAtoms(opShortAtoms, line);
     const parsed = applySlTpParams({
       ...baseParsed,
       opLongAtoms,
@@ -3581,7 +3750,8 @@
         logicId: spec.logicId,
         slAtr: spec.slAtr,
         tpAtr: spec.tpAtr,
-        slTpAtrLen: spec.slTpAtrLen
+        slTpAtrLen: spec.slTpAtrLen,
+        adxAtom: spec.adxAtom
       });
     }
     if (spec.type === "cma_spread") {
@@ -3751,14 +3921,16 @@
 
   function initGridContexts(packs, workUnits, spec, params, volConfig, signalPacks, options) {
     const gridPrepBase = buildGridSimulationPrep(spec, params, volConfig, null, options);
+    const stopPacks = options?.stopPacks;
     const ctxs = [];
     for (const wu of workUnits || []) {
       const candles = packs[wu.pi];
       if (!candles?.length) continue;
       const sec = wu.sec || candles[0]?.sec || "?";
       const signalCandles = signalPacks?.[wu.pi] || candles;
+      const stopCandles = stopPacks?.[wu.pi] || candles;
       const market = candles[0]?.market;
-      const instOpts = { ...options, market, signalCandles, sec };
+      const instOpts = { ...options, market, signalCandles, stopCandles, sec };
       const indicatorCache = new IndicatorCache(signalCandles);
       const gridPrep = buildGridSimulationPrep(spec, params, volConfig, indicatorCache, instOpts);
       let preparedStack = gridPrep.preparedStack || null;
@@ -3769,11 +3941,16 @@
           atrByLen: new Map([...atrLenSet].map((len) => [len, indicatorCache.atr(len)]))
         };
       }
+      const positionStopHelper = stopCandles !== candles
+        ? createPositionStopHelper(candles, stopCandles, { stopIndicatorCache: new IndicatorCache(stopCandles) })
+        : null;
       ctxs.push({
         pi: wu.pi,
         sec,
         candles,
         signalCandles,
+        stopCandles,
+        positionStopHelper,
         indicatorCache,
         range: wu.range,
         rows: [],
@@ -3910,6 +4087,7 @@
           sec: ctx.sec,
           portfolioCap,
           signalCandles: ctx.signalCandles,
+          ...(ctx.stopCandles !== ctx.candles ? { stopCandles: ctx.stopCandles, positionStopHelper: ctx.positionStopHelper } : {}),
           preparedRun: ctx.preparedRun,
           ...(ctx.preparedStack ? { preparedStack: ctx.preparedStack } : {}),
           ...(ctx.indicatorCache ? { indicatorCache: ctx.indicatorCache } : {}),
@@ -3986,6 +4164,7 @@
           sec: ctx.sec,
           portfolioCap,
           signalCandles: ctx.signalCandles,
+          ...(ctx.stopCandles !== ctx.candles ? { stopCandles: ctx.stopCandles, positionStopHelper: ctx.positionStopHelper } : {}),
           preparedRun: ctx.preparedRun,
           ...(ctx.preparedStack ? { preparedStack: ctx.preparedStack } : {}),
           ...(ctx.indicatorCache ? { indicatorCache: ctx.indicatorCache } : {}),
@@ -4118,9 +4297,10 @@
     }
   }
 
-  function stopperResimRunOptions(perSecItem, signalPack) {
+  function stopperResimRunOptions(perSecItem, signalPack, stopPack) {
     return {
       ...(signalPack ? { signalCandles: signalPack } : {}),
+      ...(stopPack ? { stopCandles: stopPack } : {}),
       ...(perSecItem?.indicatorCache ? { indicatorCache: perSecItem.indicatorCache } : {}),
       ...(perSecItem?.preparedRun ? { preparedRun: perSecItem.preparedRun } : {}),
       ...(perSecItem?.preparedStack ? { preparedStack: perSecItem.preparedStack } : {})
@@ -4128,7 +4308,7 @@
   }
 
   /** @returns {number[]} индексы инструментов, у которых пересчитан хвост */
-  function resimInstrumentsAtStopper(perSec, packs, spec, triggerTime, endTime, params, volConfig, signalPacks, progressOpts, stopperStep, stopperTotal) {
+  function resimInstrumentsAtStopper(perSec, packs, spec, triggerTime, endTime, params, volConfig, signalPacks, stopPacks, progressOpts, stopperStep, stopperTotal) {
     const onProgress = progressOpts?.onProgress;
     const affected = [];
     for (let s = 0; s < perSec.length; s++) {
@@ -4143,7 +4323,7 @@
           instTotal: perSec.length
         });
       }
-      const runOptions = stopperResimRunOptions(perSec[s], signalPacks?.[s]);
+      const runOptions = stopperResimRunOptions(perSec[s], signalPacks?.[s], stopPacks?.[s]);
       if (flattenAndResimTail(perSec[s], packs[s], spec, triggerTime, endTime, params, volConfig, runOptions)) {
         affected.push(s);
       }
@@ -4884,7 +5064,7 @@
   }
 
   /** Портфельный stop-loss/take-profit по equity и ATR. */
-  function applyPortfolioStopper(perSec, packs, spec, times, endTime, params, volConfig, cfg, signalPacks, progressOpts) {
+  function applyPortfolioStopper(perSec, packs, spec, times, endTime, params, volConfig, cfg, signalPacks, stopPacks, progressOpts) {
     const stopper = { ...DEFAULT_STOPPER, ...cfg };
     const events = [];
     const onProgress = progressOpts?.onProgress;
@@ -4936,7 +5116,7 @@
 
         const refAtTrigger = referenceEquity;
         const affected = resimInstrumentsAtStopper(
-          perSec, packs, spec, time, endTime, params, volConfig, signalPacks,
+          perSec, packs, spec, time, endTime, params, volConfig, signalPacks, stopPacks,
           progressOpts, stopperStep, stopperTotal
         );
         events.push({
@@ -4960,7 +5140,7 @@
   }
 
   /** Асинхронный портфельный Stopper (yield между шагами — для основного потока). */
-  async function applyPortfolioStopperAsync(perSec, packs, spec, times, endTime, params, volConfig, cfg, signalPacks, progressOpts) {
+  async function applyPortfolioStopperAsync(perSec, packs, spec, times, endTime, params, volConfig, cfg, signalPacks, stopPacks, progressOpts) {
     const opts = progressOpts || {};
     const onProgress = opts.onProgress;
     const yieldUi = !!opts.yieldUi;
@@ -5026,7 +5206,7 @@
 
         const refAtTrigger = referenceEquity;
         const affected = resimInstrumentsAtStopper(
-          perSec, packs, spec, time, endTime, params, volConfig, signalPacks,
+          perSec, packs, spec, time, endTime, params, volConfig, signalPacks, stopPacks,
           progressOpts, stopperStep, stopperTotal
         );
         if (yieldUi) await tick();
@@ -6060,6 +6240,7 @@
   function runMulti(packs, spec, startIdx, endIdx, params, volConfig, stopperConfig, options) {
     const opts = options || {};
     const signalPacks = opts.signalPacks;
+    const stopPacks = opts.stopPacks;
     const plan = runMultiPlan(packs, startIdx, endIdx);
     if (plan.empty) {
       return {
@@ -6080,6 +6261,7 @@
     const perSec = [];
     const activePacks = [];
     const activeSignalPacks = [];
+    const activeStopPacks = [];
     const skipped = [];
 
     emitFinrespPhaseProgress(opts, 0, totalBars, "Расчёт FINRESP: старт", finrespEnd, "", null);
@@ -6089,6 +6271,7 @@
     if (workUnits.length > 1) {
       const synced = runPacksOnTimeGrid(packs, workUnits, times, spec, params, volConfig, {
         signalPacks,
+        stopPacks,
         ctgSpotPacks: opts.ctgSpotPacks,
         buildIndicatorCache: !!cfg,
         shouldCancel: opts.shouldCancel,
@@ -6122,6 +6305,7 @@
         if (pi >= 0) {
           activePacks.push(packs[pi]);
           if (signalPacks) activeSignalPacks.push(signalPacks[pi] || packs[pi]);
+          if (stopPacks) activeStopPacks.push(stopPacks[pi] || packs[pi]);
         }
       }
       doneBars = syncTotalSteps;
@@ -6138,11 +6322,13 @@
         }
         const unit = workUnits.find((w) => w.pi === pi);
         const signalCandles = signalPacks?.[pi] || candles;
+        const stopCandles = stopPacks?.[pi] || candles;
         const indicatorCache = cfg ? new IndicatorCache(signalCandles) : null;
         const instPrepOpts = {
           ...opts,
           market: candles[0]?.market,
           signalCandles,
+          stopCandles,
           sec
         };
         const preparedRun = cfg ? buildGridSimulationPrep(spec, params, vol, indicatorCache, instPrepOpts) : null;
@@ -6152,6 +6338,7 @@
           portfolioCap,
           ctgSpotPacks: opts.ctgSpotPacks,
           ...(signalPacks ? { signalCandles } : {}),
+          ...(stopCandles !== candles ? { stopCandles } : {}),
           ...(indicatorCache ? { indicatorCache } : {}),
           ...(preparedRun ? { preparedRun } : {}),
           ...(preparedRun?.preparedStack ? { preparedStack: preparedRun.preparedStack } : {}),
@@ -6197,6 +6384,7 @@
         });
         activePacks.push(candles);
         if (signalPacks) activeSignalPacks.push(signalCandles);
+        if (stopPacks) activeStopPacks.push(stopCandles);
       }
     }
 
@@ -6220,6 +6408,7 @@
         volConfig,
         cfg,
         signalPacks ? activeSignalPacks : null,
+        stopPacks ? activeStopPacks : null,
         {
           shouldCancel: opts.shouldCancel,
           onProgress: (doneInStopper, stopperTotal, candleTime, extra) => {
@@ -6269,6 +6458,7 @@
     const opts = { ...(options || {}), yieldUi: true };
     const deferStopper = !!opts.deferPortfolioStopper;
     const signalPacks = opts.signalPacks;
+    const stopPacks = opts.stopPacks;
     const plan = runMultiPlan(packs, startIdx, endIdx);
     if (plan.empty) {
       return {
@@ -6289,6 +6479,7 @@
     const perSec = [];
     const activePacks = [];
     const activeSignalPacks = [];
+    const activeStopPacks = [];
     const skipped = [];
 
     await emitRunProgressAsync(opts, CALC_PROGRESS.FINRESP_START, "Расчёт FINRESP: старт", { phase: "finresp", done: 0, total: totalBars });
@@ -6298,6 +6489,7 @@
     if (workUnits.length > 1) {
       const synced = await runPacksOnTimeGridAsync(packs, workUnits, times, spec, params, volConfig, {
         signalPacks,
+        stopPacks,
         ctgSpotPacks: opts.ctgSpotPacks,
         buildIndicatorCache: !!cfg,
         shouldCancel: opts.shouldCancel,
@@ -6331,6 +6523,7 @@
         if (pi >= 0) {
           activePacks.push(packs[pi]);
           if (signalPacks) activeSignalPacks.push(signalPacks[pi] || packs[pi]);
+          if (stopPacks) activeStopPacks.push(stopPacks[pi] || packs[pi]);
         }
       }
       doneBars = syncTotalSteps;
@@ -6347,11 +6540,13 @@
         }
         const unit = workUnits.find((w) => w.pi === pi);
         const signalCandles = signalPacks?.[pi] || candles;
+        const stopCandles = stopPacks?.[pi] || candles;
         const indicatorCache = cfg ? createIndicatorCache(signalCandles) : null;
         const instPrepOpts = {
           ...opts,
           market: candles[0]?.market,
           signalCandles,
+          stopCandles,
           sec
         };
         const preparedRun = cfg ? buildGridSimulationPrep(spec, params, vol, indicatorCache, instPrepOpts) : null;
@@ -6361,6 +6556,7 @@
           portfolioCap,
           ctgSpotPacks: opts.ctgSpotPacks,
           ...(signalPacks ? { signalCandles } : {}),
+          ...(stopCandles !== candles ? { stopCandles } : {}),
           ...(indicatorCache ? { indicatorCache } : {}),
           ...(preparedRun ? { preparedRun } : {}),
           ...(preparedRun?.preparedStack ? { preparedStack: preparedRun.preparedStack } : {}),
@@ -6404,6 +6600,7 @@
         });
         activePacks.push(candles);
         if (signalPacks) activeSignalPacks.push(signalCandles);
+        if (stopPacks) activeStopPacks.push(stopCandles);
       }
     }
 
@@ -6452,6 +6649,7 @@
         volConfig,
         cfg,
         signalPacks ? activeSignalPacks : null,
+        stopPacks ? activeStopPacks : null,
         {
           yieldUi: true,
           shouldCancel: opts.shouldCancel,
@@ -6531,6 +6729,7 @@
     evaluateOrderBookTrend,
     substituteParams,
     parseLogicLine,
+    ensureAdxInLogicLineString,
     normalizeIndicatorSelection,
     resolveLogicSpec,
     resolveLogicSpecStack,

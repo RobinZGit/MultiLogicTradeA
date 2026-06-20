@@ -30,7 +30,7 @@
       "Universal Trend — тренд по LinReg-каналу ±K×ATR с RegDrift на выходе.",
       "",
       "Regime (UCT_REGIME) — правила на разворотах; OnFlip(Close) закрывает позицию при смене режима.",
-      "Long вход: SMA(100)(Ab) — цена выше SMA; LinReg(@LR;K=@K)(AbLinK) — выше верхней границы канала.",
+      "Long вход: SMA(100)(Ab); LinReg(@LR;K=@K)(AbLinK); ADX(14;Min=25)(TrOk) — сила тренда.",
       "Long выход: SMA(100)(Bl); LinReg(...;Drift=RegDrift)(BlRegK) — ниже дрейфующей нижней границы; OnFlip(Close).",
       "Short — зеркально (Bl/Ab меняются местами).",
       "SL[@SL] TP[@TP] — из параметров, если в строке не задан %."
@@ -39,17 +39,17 @@
     UCT: [
       "Universal Counter Trend — контртренд на том же LinReg-канале ±K×ATR.",
       "",
-      "Long вход: SMA(100)(Bl) — ниже SMA; LinReg(...)(BlLinK) — ниже нижней границы канала (перепроданность).",
+      "Long вход: SMA(100)(Bl); LinReg(...)(BlLinK); ADX(14;Max=25)(WkOk) — слабый тренд / флэт.",
       "Long выход: SMA(100)(Ab); LinReg(...;Drift=RegDrift)(AbRegK); OnFlip(Close).",
       "Short — зеркально: вход на силе, выход на слабости.",
       "SL[@SL] TP[@TP] — из параметров формы."
     ].join("\n"),
 
     L1: [
-      "L1 — лонг, сильный бычий тренд (SMA + LinReg + ATR + CCI + MACD).",
+      "L1 — лонг, сильный бычий тренд (SMA + LinReg + ATR + ADX + CCI + MACD).",
       "",
       "Regime (TREND_REGIME) — трендовый режим, Entry=MatchSide, OnFlip=Close.",
-      "Op(Long(...)) — одновременно: SMA(100)(Ab); LinReg(AbUp); ATR(GrOk) — растущая волатильность;",
+      "Op(Long(...)) — одновременно: SMA(100)(Ab); LinReg(AbUp); ATR(GrOk); ADX(TrOk, Min=25);",
       "  CCI(>=100); MACD(Macd>Sig).",
       "Cl(Long(...)) — SMA(Bl); LinReg(BlLo); CCI(<=-100); MACD(Macd<Sig); OnFlip(Close).",
       "SL[@SL] TP[@TP] — из параметров."
@@ -59,7 +59,7 @@
       "L2 — лонг, боковик (отскоки от Stoch внутри диапазона).",
       "",
       "Regime (BOKOVIK_REGIME) — режим боковика.",
-      "Op(Long(...)) — SMA(100)(Ab); Stoch(K<=10) перепроданность; ATR(GrOk); MACD(Macd>Sig).",
+      "Op(Long(...)) — SMA(100)(Ab); Stoch(K<=10) перепроданность; ATR(GrOk); ADX(WkOk, Max=25) — флэт; MACD(Macd>Sig).",
       "Cl(Long(...)) — SMA(Bl); Stoch(K>=90); MACD(Macd<Sig); OnFlip(Close).",
       "SL[@SL] TP[@TP] — из параметров."
     ].join("\n"),
@@ -68,7 +68,7 @@
       "L3 — шорт, сильный медвежий тренд (зеркало L1).",
       "",
       "Regime (TREND_REGIME).",
-      "Op(Short(...)) — SMA(Bl); LinReg(BlLo); ATR(GrOk); CCI(<=-100); MACD(Macd<Sig).",
+      "Op(Short(...)) — SMA(Bl); LinReg(BlLo); ATR(GrOk); ADX(TrOk); CCI(<=-100); MACD(Macd<Sig).",
       "Cl(Short(...)) — SMA(Ab); LinReg(AbUp); CCI(>=100); MACD(Macd>Sig); OnFlip(Close).",
       "SL[@SL] TP[@TP] — из параметров."
     ].join("\n"),
@@ -77,7 +77,7 @@
       "L4 — шорт, боковик (зеркало L2).",
       "",
       "Regime (BOKOVIK_REGIME).",
-      "Op(Short(...)) — SMA(Bl); Stoch(K>=90) перекупленность; ATR(GrOk); MACD(Macd<Sig).",
+      "Op(Short(...)) — SMA(Bl); Stoch(K>=90) перекупленность; ATR(GrOk); ADX(WkOk, Max=25) — флэт; MACD(Macd<Sig).",
       "Cl(Short(...)) — SMA(Ab); Stoch(K<=10); MACD(Macd>Sig); OnFlip(Close).",
       "SL[@SL] TP[@TP] — из параметров."
     ].join("\n"),
@@ -86,7 +86,7 @@
       "L5 — LmaxTrend: максимально строгий тренд, лонг и шорт, много фильтров.",
       "",
       "Regime (TREND_REGIME).",
-      "Long вход: SMA(Ab) + LinReg(AbUp) + Bollinger(AbUp) + VWAP(Ab) + ATR(GrOk) +",
+      "Long вход: SMA(Ab) + LinReg(AbUp) + Bollinger(AbUp) + VWAP(Ab) + ATR(GrOk) + ADX(TrOk) +",
       "  Stoch(K>=80) + CCI(>=100) + Momentum(>0) + MACD(Macd>Sig).",
       "Long выход — зеркальный набор вниз + OnFlip(Close). Short — симметрично.",
       "SL[@SL] TP[@TP] — из параметров."
@@ -109,7 +109,7 @@
     sma_corridor_trend: [
       "SMA-коридор, режим Trend (пробой в сторону движения).",
       "",
-      "SMA(100;Spread=@SmaCorridor)(Trend) — коридор ± Spread×ATR вокруг SMA(100).",
+      "SMA(100;Spread=@SmaCorridor)(Trend) ADX(14;Min=25)(TrOk) — коридор ± Spread×ATR; вход по пробою при сильном тренде.",
       "Trend — торговать по пробою коридора (логика внутри движка sma_corridor).",
       "SL[@SL] TP[@TP] — из параметров."
     ].join("\n"),
@@ -117,7 +117,7 @@
     sma_corridor_anti: [
       "SMA-коридор, режим Anti (контртренд / отбой).",
       "",
-      "SMA(100;Spread=@SmaCorridor)(Anti) — тот же ATR-коридор, но входы против пробоя.",
+      "SMA(100;Spread=@SmaCorridor)(Anti) ADX(14;Max=25)(WkOk) — тот же ATR-коридор; входы против пробоя при слабом ADX.",
       "SL[@SL] TP[@TP] — из параметров."
     ].join("\n"),
 

@@ -25,9 +25,9 @@
     name: "Universal Trend — LinReg K×ATR + RegDrift",
     defaultLine:
       F("UCT_REGIME")
-      + "Op(Long(SMA(100)(Ab) AND LinReg(@LR;K=@K)(AbLinK))) "
+      + "Op(Long(SMA(100)(Ab) AND LinReg(@LR;K=@K)(AbLinK) AND ATR(14;Gr=3%;Lb=5)(GrOk) AND ADX(14;Min=25)(TrOk))) "
       + "Cl(Long(SMA(100)(Bl) AND LinReg(@LR;K=@K;Anchor=Open;Drift=RegDrift)(BlRegK) OnFlip(Close))) "
-      + "Op(Short(SMA(100)(Bl) AND LinReg(@LR;K=@K)(BlLinK))) "
+      + "Op(Short(SMA(100)(Bl) AND LinReg(@LR;K=@K)(BlLinK) AND ATR(14;Gr=3%;Lb=5)(GrOk) AND ADX(14;Min=25)(TrOk))) "
       + "Cl(Short(SMA(100)(Ab) AND LinReg(@LR;K=@K;Anchor=Open;Drift=RegDrift)(AbRegK) OnFlip(Close))) "
       + F("SLTP") + "Note(universal-trend)"
   });

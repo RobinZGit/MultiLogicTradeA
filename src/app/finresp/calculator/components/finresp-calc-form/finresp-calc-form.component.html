@@ -111,6 +111,15 @@
 <input id="param-atr-sl" type="number" value="14" min="2" max="200" step="1" title="Период ATR в свечах: для @SL/@TP, @SmaCorridor и @K">
 <button class="calc-btn calc-btn-secondary calc-opt-btn" type="button" id="opt-atr-sl">⚡</button>
 </div></div>
+<div class="calc-field calc-field--stop-tf" id="calc-stop-tf-field"><label for="calc-stop-tf">ТФ стопов @SL/@TP</label>
+<select id="calc-stop-tf" title="Таймфрейм для позиционных стопов в расчёте «Рассчитать». Live-торговля не затрагивается.">
+<option value="1">1 мин</option>
+<option value="5">5 мин</option>
+<option value="10">10 мин</option>
+<option value="15">15 мин</option>
+<option value="60" selected>1 час</option>
+<option value="24">1 день</option>
+</select></div>
 <div class="calc-field"><label for="param-sma-corridor"><span class="at-token">@SmaCorridor</span> — SMA, ×ATR</label>
 <input id="param-sma-corridor" type="number" value="1" min="0" max="50" step="any" title="Ширина коридора в ATR вокруг SMA, не в свечах">
 </div>

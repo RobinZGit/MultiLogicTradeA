@@ -11,6 +11,6 @@
   root.MultiLogicFinrespLogics.register({
     id: "sma_corridor_trend",
     name: "SMA-эталон, тренд — коридор ATR",
-    defaultLine: "SMA(100;Spread=@SmaCorridor)(Trend) SL[@SL] TP[@TP] Note(SMA-Spread-trend)"
+    defaultLine: "SMA(100;Spread=@SmaCorridor)(Trend) ADX(14;Min=25)(TrOk) SL[@SL] TP[@TP] Note(SMA-Spread-trend)"
   });
 })(typeof window !== "undefined" ? window : globalThis);

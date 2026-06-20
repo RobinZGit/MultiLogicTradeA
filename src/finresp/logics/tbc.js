@@ -24,7 +24,7 @@
     name: "TBC — test counter-bokovik (лонг)",
     defaultLine:
       F("TBC_REGIME")
-      + "Op(Long(SMA(100)(Bl) AND Stoch(14-3-3;Lmin=90;Smax=10)(K<=10) AND MACD(12,26,9)(Macd<Sig))) "
+      + "Op(Long(SMA(100)(Bl) AND Stoch(14-3-3;Lmin=90;Smax=10)(K<=10) AND ATR(14;Gr=3%;Lb=5)(GrOk) AND ADX(14;Max=25)(WkOk) AND MACD(12,26,9)(Macd<Sig))) "
       + "Cl(Long(SMA(100)(Ab) AND Stoch(14-3-3;Lmin=90;Smax=10)(K>=90) AND MACD(12,26,9)(Macd>Sig))) "
       + F("SLTP") + "Note(test-counter-bokovik)"
   });

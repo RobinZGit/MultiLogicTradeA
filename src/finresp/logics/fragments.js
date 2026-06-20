@@ -13,6 +13,9 @@
       "Strict(@Strict) Regime(LinReg;L=@LR;Dev=2;SlopeLb=3;SlopeDead=0.05%;OnFlip=Close) ",
     UCT_REGIME:
       "Strict(@Strict) Regime(LinReg;L=@LR;SlopeLb=3;OnFlip=Close) ",
+    ATR_GROK: "ATR(14;Gr=3%;Lb=5)(GrOk)",
+    ADX_TREND: "ADX(14;Min=25)(TrOk)",
+    ADX_FLAT: "ADX(14;Max=25)(WkOk)",
     SLTP: " SL[@SL] TP[@TP] "
   };
   R.fragment = (key) => R._fragments[key] || "";

@@ -235,7 +235,7 @@ export class FinrespFormService implements OnDestroy {
     if (this.logicSelectionCleared) {
       return [];
     }
-    return ['RND'];
+    return ['UT'];
   }
 
   private syncWindowFromBridge(view: FinrespWindowViewModel): void {
@@ -355,6 +355,10 @@ export class FinrespFormService implements OnDestroy {
     const el = document.getElementById('calc-tf') as HTMLSelectElement | null;
     if (el && el.value !== tf) {
       el.value = tf;
+    }
+    const stopEl = document.getElementById('calc-stop-tf') as HTMLSelectElement | null;
+    if (stopEl) {
+      stopEl.value = tf;
     }
     el?.dispatchEvent(new Event('change', { bubbles: true }));
   }
