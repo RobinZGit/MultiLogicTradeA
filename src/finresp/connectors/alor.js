@@ -215,7 +215,7 @@
       const secU = String(sec || "").trim().toUpperCase();
       const wantGroup = instrumentGroupForMarket(market);
       let pool = list.filter((i) => String(i.symbol || i.ticker || "").toUpperCase() === secU);
-      if (!pool.length) pool = list;
+      if (!pool.length) return null;
       pool = pool.filter((i) => !i.board || i.board === wantGroup || market === "futures");
       const pick = pool[0] || list[0];
       const inst = normalizeSecurity(pick, market);

@@ -255,7 +255,10 @@
       ledger: [],
       nextFillId: 0,
       closed: [],
-      orders: []
+      orders: [],
+      instrumentCache: new Map(),
+      tradingStatusCache: new Map(),
+      obTrendCache: new Map()
     };
   }
 
@@ -288,7 +291,66 @@
     if (!Number.isFinite(sb.nextFillId)) sb.nextFillId = 0;
     if (!Array.isArray(sb.closed)) sb.closed = [];
     if (!Array.isArray(sb.orders)) sb.orders = [];
+    if (!(sb.instrumentCache instanceof Map)) sb.instrumentCache = new Map();
+    if (!(sb.tradingStatusCache instanceof Map)) sb.tradingStatusCache = new Map();
+    if (!(sb.obTrendCache instanceof Map)) sb.obTrendCache = new Map();
     return sb;
+  }
+
+  /** Сохранить API-кэши (instrument/status/orderbook) в слот активного режима брокера. */
+  function persistLiveApiCachesToRuntime(brokerId) {
+    const id = brokerId || readBrokerIdFromUi();
+    if (isLiveSandbox()) {
+      const sb = normalizeSandboxShape(brokerSandboxState(id));
+      sb.instrumentCache = state.live.instrumentCache instanceof Map
+        ? state.live.instrumentCache
+        : sb.instrumentCache;
+      sb.tradingStatusCache = state.live.tradingStatusCache instanceof Map
+        ? state.live.tradingStatusCache
+        : sb.tradingStatusCache;
+      sb.obTrendCache = state.live.obTrendCache instanceof Map
+        ? state.live.obTrendCache
+        : sb.obTrendCache;
+      return;
+    }
+    const r = ensureLiveRuntime(id).real;
+    r.instrumentCache = state.live.instrumentCache instanceof Map
+      ? state.live.instrumentCache
+      : (r.instrumentCache || new Map());
+    r.tradingStatusCache = state.live.tradingStatusCache instanceof Map
+      ? state.live.tradingStatusCache
+      : (r.tradingStatusCache || new Map());
+    r.obTrendCache = state.live.obTrendCache instanceof Map
+      ? state.live.obTrendCache
+      : (r.obTrendCache || new Map());
+  }
+
+  /** Подключить API-кэши слота фейк/реал к state.live (коннектор T-Bank читает state.live.*). */
+  function activateLiveApiCachesForMode(brokerId) {
+    const id = brokerId || readBrokerIdFromUi();
+    if (isLiveSandbox()) {
+      const sb = normalizeSandboxShape(brokerSandboxState(id));
+      state.live.instrumentCache = sb.instrumentCache;
+      state.live.tradingStatusCache = sb.tradingStatusCache;
+      state.live.obTrendCache = sb.obTrendCache;
+      return;
+    }
+    const r = ensureLiveRuntime(id).real;
+    if (!(r.instrumentCache instanceof Map)) r.instrumentCache = new Map();
+    if (!(r.tradingStatusCache instanceof Map)) r.tradingStatusCache = new Map();
+    if (!(r.obTrendCache instanceof Map)) r.obTrendCache = new Map();
+    state.live.instrumentCache = r.instrumentCache;
+    state.live.tradingStatusCache = r.tradingStatusCache;
+    state.live.obTrendCache = r.obTrendCache;
+  }
+
+  /** Сброс кэшей инструментов песочницы (после долгой паузы / возобновления торговли). */
+  function resetSandboxApiCaches(brokerId) {
+    const sb = normalizeSandboxShape(brokerSandboxState(brokerId));
+    sb.instrumentCache = new Map();
+    sb.tradingStatusCache = new Map();
+    sb.obTrendCache = new Map();
+    if (isLiveSandbox()) activateLiveApiCachesForMode(brokerId);
   }
 
   function migrateLegacyRuntimeOnce() {
@@ -382,14 +444,13 @@
     r.apiForbiddenInstruments = (state.live.apiForbiddenInstruments || []).slice();
     r.brokerOperations = (state.live.brokerOperations || []).slice();
     r.brokerOperationsRaw = state.live.brokerOperationsRaw;
-    r.instrumentCache = state.live.instrumentCache || r.instrumentCache;
-    r.tradingStatusCache = state.live.tradingStatusCache || r.tradingStatusCache;
-    r.obTrendCache = state.live.obTrendCache || r.obTrendCache;
+    persistLiveApiCachesToRuntime(id);
   }
 
   function hydrateLiveUiFromRuntime(brokerId) {
     const id = brokerId || readBrokerIdFromUi();
     if (isLiveSandbox()) {
+      activateLiveApiCachesForMode(id);
       void updateSandboxPortfolioDisplay();
       return;
     }
@@ -407,9 +468,7 @@
     state.live.apiForbiddenInstruments = r.apiForbiddenInstruments || [];
     state.live.brokerOperations = r.brokerOperations || [];
     state.live.brokerOperationsRaw = r.brokerOperationsRaw;
-    state.live.instrumentCache = r.instrumentCache || new Map();
-    state.live.tradingStatusCache = r.tradingStatusCache || new Map();
-    state.live.obTrendCache = r.obTrendCache || new Map();
+    activateLiveApiCachesForMode(id);
   }
 
   function clearLiveRuntimeBroker(brokerId) {
@@ -2624,6 +2683,15 @@
     state.live.tradeHistory = hist.filter((h) => !h.fake && h.mode !== "sandbox");
   }
 
+  /** Журнал/протокол: только сделки активного режима (фейк и реал не смешиваются в UI). */
+  function tradeHistoryForActiveMode(hist) {
+    const rows = hist || ensureLiveTradeHistory();
+    if (isLiveSandbox()) {
+      return rows.filter((h) => h.fake || h.mode === "sandbox");
+    }
+    return rows.filter((h) => !h.fake && h.mode !== "sandbox");
+  }
+
   let journalRenderScheduled = false;
   let positionsRenderScheduled = false;
   let orderBookRefreshScheduled = false;
@@ -3111,7 +3179,7 @@
     const el = $("live-trading-orders");
     const metaEl = $("live-trade-history-meta");
     lastJournalDomRenderAt = Date.now();
-    const memHist = ensureLiveTradeHistory();
+    const memHist = tradeHistoryForActiveMode(ensureLiveTradeHistory());
     const archivedRows = await ensureArchivedTradesLoaded();
     const memIds = new Set(memHist.map((h) => String(h.id || "")));
     const archivedEntries = archivedRows
@@ -3129,13 +3197,11 @@
     let metaText = defaultMeta;
     if (isLiveMode()) {
       const nAct = hist.filter((h) => h.active).length;
-      const nFake = hist.filter((h) => h.fake).length;
-      const nReal = hist.filter((h) => !h.fake).length;
       const nArch = hist.filter((h) => h.archivedChunk).length;
       const archSum = await summarizeArchivedSession();
       metaText = isLiveSandbox()
-        ? `Сделок в журнале: ${hist.length} (фейк ${nFake}, реал ${nReal}${nAct ? `, активных заявок ${nAct}` : ""}${nArch ? `, из архива ${nArch}` : ""}). ★ покупка · ☆ продажа · FINRESPΔ = продажи − покупки (FIFO) − комиссии · Источник — робот / ручная / закрытие.`
-        : `Сделок в журнале: ${hist.length} (фейк ${nFake}, реал ${nReal}${nAct ? `, активных заявок ${nAct}` : ""}${nArch ? `, из архива ${nArch}` : ""}). ★/☆ · FINRESPΔ = продажи − покупки (FIFO) − комиссии (брокер) · позиции до старта сессии — без комиссии покупки в журнале.`;
+        ? `Сделок в журнале (фейк): ${hist.length}${nAct ? `, активных заявок ${nAct}` : ""}${nArch ? `, из архива ${nArch}` : ""}. ★ покупка · ☆ продажа · FINRESPΔ = продажи − покупки (FIFO) − комиссии · Источник — робот / ручная / закрытие.`
+        : `Сделок в журнале (реал): ${hist.length}${nAct ? `, активных заявок ${nAct}` : ""}${nArch ? `, из архива ${nArch}` : ""}. ★/☆ · FINRESPΔ = продажи − покупки (FIFO) − комиссии (брокер) · позиции до старта сессии — без комиссии покупки в журнале.`;
       if (state.live.sessionId) {
         metaText += ` Сессия: ${state.live.sessionId}`;
       }
@@ -3406,7 +3472,7 @@
   /** Собрать полный JSON-протокол истории сделок (только RAM, без API брокера). */
   function buildTradeHistoryProtocol() {
     syncTradeHistoryFromSources({ force: true });
-    const hist = ensureLiveTradeHistory().slice().sort(
+    const hist = tradeHistoryForActiveMode(ensureLiveTradeHistory()).slice().sort(
       (a, b) => (Date.parse(a.when || 0) || 0) - (Date.parse(b.when || 0) || 0)
     );
     const done = hist.filter((h) => !h.active);
@@ -6242,6 +6308,22 @@ ${payload.issues?.lastError ? `<p><strong>Замечание:</strong> ${esc(pay
     return { byKey, failures };
   }
 
+  /** Отсечь явно чужую цену (другой инструмент / единица измерения). */
+  function sandboxClampOrderPrice(price, reference, label) {
+    const px = +price;
+    if (!Number.isFinite(px) || px <= 0) return null;
+    const ref = +reference;
+    if (!Number.isFinite(ref) || ref <= 0) return px;
+    const ratio = px / ref;
+    const maxRatio = 20;
+    if (ratio > maxRatio || ratio < 1 / maxRatio) {
+      const tag = String(label || "?");
+      noteLiveTech("live-sandbox-price-clamp", `${tag}: ${fmt(px, 4)} → ${fmt(ref, 4)}`, `ratio=${ratio.toExponential(2)}`);
+      return ref;
+    }
+    return px;
+  }
+
   /** Подпрограмма `packLastClose`. */
   function packLastClose(sec, market) {
     const secU = String(sec || "").trim().toUpperCase();
@@ -6254,7 +6336,14 @@ ${payload.issues?.lastError ? `<p><strong>Замечание:</strong> ${esc(pay
     const mkt = market === "futures" ? "futures" : (market === "bonds" ? "bonds" : "shares");
     const key = `${mkt}:${secU}`;
     let pack = state.packs.find((p) => instrumentKey(p[0]) === key);
-    if (!pack) pack = state.packs.find((p) => String(p[0]?.sec || "").toUpperCase() === secU);
+    if (!pack && mkt === "futures" && secU.length >= 2) {
+      pack = state.packs.find((p) => {
+        const inst = p[0];
+        if (!inst || instrumentKey(inst).split(":")[0] !== mkt) return false;
+        const ps = String(inst.sec || "").toUpperCase();
+        return ps === secU || ps.startsWith(secU);
+      });
+    }
     const close = pack?.at(-1)?.close;
     return Number.isFinite(close) && close > 0 ? close : null;
   }
@@ -6262,8 +6351,14 @@ ${payload.issues?.lastError ? `<p><strong>Замечание:</strong> ${esc(pay
   /** Песочница (фейк-брокер): `sandboxLocalPrice`. */
   function sandboxLocalPrice(pos) {
     if (!pos) return NaN;
+    const ref = pos.avgPrice ?? pos.curPrice;
     const fromPack = packLastClose(pos.sec, pos.market);
-    if (Number.isFinite(fromPack) && fromPack > 0) return fromPack;
+    if (Number.isFinite(fromPack) && fromPack > 0) {
+      const clamped = Number.isFinite(ref) && ref > 0
+        ? sandboxClampOrderPrice(fromPack, ref, pos.sec || pos.ticker)
+        : fromPack;
+      if (Number.isFinite(clamped) && clamped > 0) return clamped;
+    }
     const cur = pos.curPrice ?? pos.avgPrice;
     return Number.isFinite(cur) && cur > 0 ? cur : NaN;
   }
@@ -6379,15 +6474,31 @@ ${payload.issues?.lastError ? `<p><strong>Замечание:</strong> ${esc(pay
   }
 
   /** Разрешение id/метаданных: `resolveOrderPrice`. */
-  async function resolveOrderPrice(instrumentId, sec, market) {
+  async function resolveOrderPrice(instrumentId, sec, market, opts) {
+    const o = opts && typeof opts === "object" ? opts : {};
     if (market === "bonds" && bondTbruActive()) {
       const h = bondTbruData()?.holdingBySec(sec);
       if (h) return bondSandboxUnitPrice(h);
     }
     const fromPack = packLastClose(sec, market);
-    if (Number.isFinite(fromPack) && fromPack > 0) return fromPack;
-    if (instrumentId && String(instrumentId).startsWith("sandbox:")) return null;
-    return await tbankGetLastPrice(instrumentId);
+    let fromBroker = null;
+    if (instrumentId && !String(instrumentId).startsWith("sandbox:")) {
+      try { fromBroker = await tbankGetLastPrice(instrumentId); } catch (_) { /* optional */ }
+    }
+    let price = null;
+    if (Number.isFinite(fromPack) && fromPack > 0 && Number.isFinite(fromBroker) && fromBroker > 0) {
+      const brokerClamped = sandboxClampOrderPrice(fromBroker, fromPack, sec);
+      price = brokerClamped === fromPack ? fromPack : sandboxClampOrderPrice(fromPack, fromBroker, sec);
+    } else if (Number.isFinite(fromPack) && fromPack > 0) {
+      price = fromPack;
+    } else if (Number.isFinite(fromBroker) && fromBroker > 0) {
+      price = fromBroker;
+    }
+    const ref = o.referencePrice;
+    if (Number.isFinite(price) && price > 0 && Number.isFinite(ref) && ref > 0) {
+      price = sandboxClampOrderPrice(price, ref, sec);
+    }
+    return Number.isFinite(price) && price > 0 ? price : null;
   }
 
   /** Обновление данных с источника: `refreshLiveManualLimitPrice`. */
@@ -7316,6 +7427,10 @@ ${payload.issues?.lastError ? `<p><strong>Замечание:</strong> ${esc(pay
         for (const fill of sb.ledger) upsertTradeHistoryFromSandboxFill(fill);
       }
       state.live.commissionPaid = sb.commissionTotal || 0;
+      state.live.portfolioPositions = [];
+      state.live.realLegSeed = null;
+      activateLiveApiCachesForMode(brokerId);
+      syncSandboxPositionsTable();
     } else {
       const realHist = (payload.tradeHistory || []).filter((h) => !h.fake && h.mode !== "sandbox");
       const fakeHist = ensureLiveTradeHistory().filter((h) => h.fake || h.mode === "sandbox");
@@ -7461,7 +7576,9 @@ ${payload.issues?.lastError ? `<p><strong>Замечание:</strong> ${esc(pay
 
     let price = sandboxLocalPrice(openPos);
     if (!Number.isFinite(price) || price <= 0) {
-      price = await resolveOrderPrice(openPos.instrumentId, openPos.sec || ticker, market);
+      price = await resolveOrderPrice(openPos.instrumentId, openPos.sec || ticker, market, {
+        referencePrice: openPos.avgPrice ?? openPos.curPrice
+      });
     }
     if (!Number.isFinite(price) || price <= 0) price = openPos.curPrice ?? openPos.avgPrice;
     if (!Number.isFinite(price) || price <= 0) {
@@ -7844,7 +7961,10 @@ ${payload.issues?.lastError ? `<p><strong>Замечание:</strong> ${esc(pay
       : liveOrderTypeUi();
     let price = opts.limitPrice != null && opts.limitPrice !== "" ? +opts.limitPrice : NaN;
     if (!Number.isFinite(price) || price <= 0) {
-      price = await resolveOrderPrice(instrumentId, secForPrice, market);
+      const posKey = sandboxPosKey(market, ticker);
+      const openPos = sb.open.get(posKey);
+      const refPx = openPos?.avgPrice ?? openPos?.curPrice ?? null;
+      price = await resolveOrderPrice(instrumentId, secForPrice, market, { referencePrice: refPx });
     }
     if (!Number.isFinite(price) || price <= 0) {
       throw new Error(`Нет цены для фейк-заявки (${ticker || secForPrice}).`);
@@ -8015,6 +8135,7 @@ ${payload.issues?.lastError ? `<p><strong>Замечание:</strong> ${esc(pay
 
   /** Процедура (async): включить песочницу — зафиксировать startPortfolio, очистить фейк-состояние. */
   async function enableLiveSandbox() {
+    activateLiveApiCachesForMode();
     const sb = ensureSandboxState();
     const depEl = $("vol-deposit");
     const depositFallback = +(depEl?.value || 0);
@@ -8090,8 +8211,10 @@ ${payload.issues?.lastError ? `<p><strong>Замечание:</strong> ${esc(pay
     }
   }
 
-  /** Процедура (async): выключить песочницу — очистить фейк, вернуть реальный портфель T-Bank. */
+  /** Процедура (async): выключить песочницу — сохранить фейк-сессию, очистить RAM, вернуть реал. */
   async function disableLiveSandbox() {
+    persistLiveApiCachesToRuntime();
+    persistLiveSessionToStorage({ sandbox: true });
     purgeSandboxTradeHistory();
     const sb = ensureSandboxState();
     sb.startPortfolio = null;
@@ -8156,6 +8279,7 @@ ${payload.issues?.lastError ? `<p><strong>Замечание:</strong> ${esc(pay
     try {
       await yieldToUi();
       if (state.live.active) recordLiveModeRegionSwitch();
+      persistLiveApiCachesToRuntime();
       if (on) {
         persistLiveUiToRuntime(readBrokerIdFromUi(), { forceReal: true });
         await enableLiveSandbox();
@@ -10440,6 +10564,9 @@ ${referenceBlock}
         syncLiveTradingUi();
         return;
       }
+      resetSandboxApiCaches(readBrokerIdFromUi());
+      state.live.portfolioPositions = [];
+      state.live.realLegSeed = null;
       state.live.sessionPositionBaseline = sandboxPositionsByTicker();
       state.live.tradingRunId = newTradingRunId();
       state.live.active = true;

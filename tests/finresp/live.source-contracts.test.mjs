@@ -466,3 +466,36 @@ test('logic stack persisted with selectionCleared and drawdown slice', () => {
     /syncFromDom/,
   );
 });
+
+test('sandbox order price: clamp cross-instrument bleed and no loose packLastClose fallback', () => {
+  const liveSrc = fs.readFileSync(livePath, 'utf8');
+  assert.match(liveSrc, /function sandboxClampOrderPrice/);
+  assert.match(liveSrc, /live-sandbox-price-clamp/);
+  assert.doesNotMatch(liveSrc, /if \(!pack\) pack = state\.packs\.find\(\(p\) => String\(p\[0\]\?\.sec/);
+  const packBlock = liveSrc.match(/function packLastClose\([\s\S]*?^  \}/m);
+  assert.ok(packBlock, 'packLastClose');
+  assert.match(packBlock[0], /instrumentKey\(p\[0\]\) === key/);
+  const tbankSrc = fs.readFileSync(path.join(root, 'src', 'finresp', 'connectors', 'tbank.js'), 'utf8');
+  assert.doesNotMatch(tbankSrc, /if \(!pool\.length\) pool = list/);
+});
+
+test('fake vs real: separate API caches, journal filter, persist sandbox before disable', () => {
+  const liveSrc = fs.readFileSync(livePath, 'utf8');
+  assert.match(liveSrc, /function tradeHistoryForActiveMode/);
+  assert.match(liveSrc, /function activateLiveApiCachesForMode/);
+  assert.match(liveSrc, /function resetSandboxApiCaches/);
+  assert.match(liveSrc, /sb\.instrumentCache/);
+  const disableBlock = liveSrc.match(/async function disableLiveSandbox\(\)[\s\S]*?^  \}/m);
+  assert.ok(disableBlock, 'disableLiveSandbox');
+  assert.match(disableBlock[0], /persistLiveSessionToStorage\(\{ sandbox: true \}\)/);
+  const toggleBlock = liveSrc.match(/async function toggleLiveTrading\(\)[\s\S]*?^  \}/m);
+  assert.ok(toggleBlock, 'toggleLiveTrading');
+  assert.match(toggleBlock[0], /resetSandboxApiCaches/);
+  const journalBlock = liveSrc.match(/async function paintTradeHistoryPanelDom\(\)[\s\S]*?^  \}/m);
+  assert.ok(journalBlock, 'paintTradeHistoryPanelDom');
+  assert.match(journalBlock[0], /tradeHistoryForActiveMode/);
+  const protocolBlock = liveSrc.match(/function buildTradeHistoryProtocol\(\)[\s\S]*?^  \}/m);
+  assert.ok(protocolBlock, 'buildTradeHistoryProtocol');
+  assert.match(protocolBlock[0], /tradeHistoryForActiveMode/);
+  assert.match(liveSrc, /liveSessionSlot\(brokerId, sandbox\)/);
+});

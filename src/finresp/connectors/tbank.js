@@ -191,7 +191,6 @@
       if (!pool.length && market === "futures") {
         pool = (list || []).filter((i) => String(i.ticker || "").toUpperCase().startsWith(secU));
       }
-      if (!pool.length) pool = list || [];
       if (!pool.length) return null;
       return pool.slice().sort((a, b) => scoreInstrument(b, market) - scoreInstrument(a, market))[0];
     }
