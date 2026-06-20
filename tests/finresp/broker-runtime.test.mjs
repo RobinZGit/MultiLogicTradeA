@@ -153,12 +153,16 @@ test('source contracts: page init bootstrap broker connect + deposit', () => {
   const boot = fs.readFileSync(bootPath, 'utf8');
 
   assert.match(live, /function bootstrapBrokerOnPageInit\(\)/);
-  assert.match(boot, /await bootstrapBrokerOnPageInit\(\)/);
+  assert.match(boot, /bootstrapBrokerOnPageInit\(\)/);
+  assert.match(boot, /trackBootBackground/);
+  assert.match(boot, /setBootStatus/);
   assert.match(boot, /if \(!state\.tbank\.token\) state\.tbank\.depositLoaded = false/);
 
   const connectBlock = live.match(/function scheduleBrokerConnectIfReady\(source\)[\s\S]*?^  \}/m);
   assert.ok(connectBlock);
+  assert.match(connectBlock[0], /isPageInit/);
   assert.match(connectBlock[0], /return scheduleBrokerUnlockPrompt/);
+  assert.match(connectBlock[0], /interactive:\s*false/);
 
   const unlockBlock = live.match(/function scheduleBrokerUnlockPrompt\(source, opsGen\)[\s\S]*?^  \}/m);
   assert.ok(unlockBlock);
