@@ -44,9 +44,34 @@ a{color:var(--accent);}
 <p>Индикатор — <strong>ряд чисел</strong> (по одному значению на бар), как многочлен: коэффициенты задают вклад на каждой позиции. Составной индикатор собирается из встроенных рядов (<code>SMA(20)</code>, <code>CMA(100;P=2)</code>, <code>pp</code> …) операциями ниже. Он сохраняется в конфиге, подсвечивается фиолетовым в списке и доступен на графике как <code>Имя()</code>.</p>
 <p class="note">Математика свёртки и покомпонентного умножения — в <a href="../MultiLogic_PolynomialIndicators.html">базе знаний по многочленам</a>; здесь — синтаксис конструктора.</p>
 
+<h3 id="indexing">1.1. Индексы ряда: младший и старший</h3>
+<p>Ряд цен <code>pp</code> — это многочлен по барам:</p>
+<pre class="formula">pp = (p₀; p₁; p₂; …; p_T)</pre>
+<ul>
+<li><strong>Индекс 0</strong> — <strong>младший</strong>: самый <strong>старый</strong> бар в истории.</li>
+<li><strong>Индекс T</strong> — <strong>старший</strong>: самая <strong>последняя</strong> цена (close текущего конца ряда); за ней в <code>pp</code> уже ничего нет.</li>
+<li>Запись <code>pp[k]</code> в конструкторе — <strong>k-я цена от конца</strong> на баре <code>t</code> (<code>pp[1]</code> = close бара <code>t</code>, <code>pp[5]</code> = close бара <code>t−4</code>).</li>
+</ul>
+<div class="warn"><strong>Свёртка <code>pp * ww</code>.</strong> На баре <code>t</code>: <code>s_t = w₀·p_t + w₁·p_{t−1} + … + w_{N−1}·p_{t−N+1}</code>. Последняя цена <code>p_t</code> (старший индекс в ряду) умножается на <strong>первый</strong> вес <code>w₀</code> в окне; самая старая в окне — на <strong>последний</strong> вес <code>w_{N−1}</code>. Поэтому <code>{1/20; n=1..20}</code> даёт MA(20): первый <code>1/20</code> — вес текущего close, последний — вес 20 баров назад.</div>
+
+<h2 id="multiline">2.1. Несколько строк, переменные, комментарии</h2>
+<p>Формула может занимать <strong>несколько строк</strong>. Разделитель — перевод строки. Строки <code>Имя = выражение</code> задают переменные. Итоговая строка — <code>RETURN выражение</code> (рекомендуется) или выражение / <code>имя = …</code>.</p>
+<p>Комментарии — <code>//</code> до конца строки (символ <code>#</code> занят покомпонентным умножением).</p>
+<pre class="formula">harm = {1/n; n=1..10}
+// sma20: свёртка close с окном 20×(1/20) — эквивалент SMA(20)
+win20 = {1/20; n=1..20}
+sma20 = pp * win20
+// sma50 — встроенный SMA(50)
+sma50 = SMA(50)
+smaLag = sma20.shift(5)
+mix = sma20 # harm
+RETURN mix - smaLag - sma50</pre>
+<p><code>{1/n; n=1..10}</code> — сумма <code>1/1+…+1/10</code>. <code>{1/20; n=1..20}</code> — многочлен из 20 весов <code>1/20</code> (без перечисления). <code>.shift(5)</code> — сдвиг ряда назад на 5 баров. <code>pp[5]</code> — на баре <code>t</code> взять цену <code>t−4</code> (5-я от конца).</p>
+<p>В переменную можно положить индикатор, цену (<code>c-close</code>, <code>pp_open</code>), число, многочлен <code>{1;0;0;0}</code> или выражение с операциями. Последняя строка может быть и присваиванием (<code>gamma = alpha * beta</code>) — тогда результатом будет правая часть.</p>
+
 <h2 id="atoms">2. Атомы (что можно писать)</h2>
 <table>
-<tr><th>Рынок</th><td><code>pp</code> close, <code>oo</code> open, <code>hh</code> high, <code>ll</code> low, <code>vv</code> volume</td></tr>
+<tr><th>Рынок</th><td>Коротко: <code>pp</code> <code>oo</code> <code>hh</code> <code>ll</code> <code>vv</code>. С дублированной первой буквой: <code>c-close</code> / <code>cclose</code>, <code>o-open</code>, <code>h-high</code>, <code>l-low</code>, <code>v-volume</code>. С префиксом <code>pp_</code>: <code>pp_close</code>, <code>pp_open</code>, <code>pp_high</code>, <code>pp_low</code>, <code>pp_volume</code></td></tr>
 <tr><th>Встроенные</th><td>Те же формы, что в чекбоксах: <code>SMA(100)</code>, <code>CMA(100;P=1)</code>, <code>LinReg(20;Dev=2)</code>, <code>Bollinger(20;Dev=2)</code>, <code>ATR(14)</code>, <code>Stoch(14-3-3)</code>, <code>MACD(12,26,9)</code>, <code>CCI(20)</code>, <code>Momentum(10)</code>, <code>VWAP()</code> и др.</td></tr>
 <tr><th>Другие составные</th><td>Имя без скобок, если индикатор уже создан: <code>Spread20_50</code></td></tr>
 <tr><th>Число</th><td>Литерал: <code>2</code>, <code>0.05</code>, <code>1,5</code> (запятая как десятичный разделитель)</td></tr>
@@ -57,9 +82,10 @@ a{color:var(--accent);}
 <tr><th><code>+</code> <code>−</code></th><td>Сложение и вычитание рядов по барам</td></tr>
 <tr><th><code>#</code></th><td><strong>Покомпонентное</strong> умножение: на каждом баре <code>a[k] × b[k]</code></td></tr>
 <tr><th><code>/#</code></th><td>Покомпонентное деление (деление на 0 → пусто)</td></tr>
-<tr><th><code>*</code></th><td><strong>Свёртка</strong> многочленов: <code>(a*b)[k] = Σ a[i]·b[j]</code> при <code>i+j=k</code>. Имитация «фильтра» / скользящего окна</td></tr>
+<tr><th><code>*</code></th><td><strong>Свёртка</strong> многочленов: <code>(a*b)[k] = Σ a[i]·b[j]</code> при <code>i+j=k</code>. Индекс в <code>pp</code> растёт со временем (старший = последний бар); в окне весов <code>w₀</code> — на текущую цену, см. <a href="#indexing">§1.1</a></td></tr>
 <tr><th><code>( )</code></th><td>Группировка</td></tr>
-<tr><th><code>[n]</code></th><td><strong>Сдвиг:</strong> как фактор <code>[5]</code> — дельта на позиции 5; свёртка <code>[5] * pp</code> сдвигает цену на 5 баров. Постфикс <code>pp[5]</code> или <code>SMA(20)[5]</code> — сдвиг уже собранного ряда</td></tr>
+<tr><th><code>[k]</code></th><td>Постфикс: <strong>k-я цена от конца</strong> на текущем баре. <code>pp[1]</code> — close этого бара; <code>pp[5]</code> — четыре бара назад</td></tr>
+<tr><th><code>.shift(n)</code></th><td>Сдвиг всего ряда <strong>назад</strong> на <code>n</code> баров: <code>SMA(20).shift(5)</code>, <code>sma20.shift(3)</code></td></tr>
 </table>
 
 <h2 id="braces">4. Фигурные скобки <code>{ … }</code></h2>
@@ -72,14 +98,18 @@ a{color:var(--accent);}
 <pre class="formula">{1;0;0;0}</pre>
 <p>Многочлен с коэффициентами <code>1, 0, 0, 0</code> (единица на позиции 0). Эквивалент сдвига «умножить на <code>x³</code>» в дискретной модели. Дроби через слэш:</p>
 <pre class="formula">{1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20}</pre>
-<p>Нормированное окно из 20 равных весов (свёртка с <code>pp</code> даёт простое MA(20)):</p>
-<pre class="formula">pp * {1/20;1/20;…;1/20}</pre>
+<p>То же окно короче через диапазон (20 равных весов <code>1/20</code>):</p>
+<pre class="formula">{1/20; n=1..20}</pre>
+<p>Свёртка с <code>pp</code> даёт простое MA(20):</p>
+<pre class="formula">pp * {1/20; n=1..20}</pre>
 
 <div class="warn"><strong>Важно:</strong> <code>{1000}</code> — одно число; <code>{1;0;0;0}</code> — четыре коэффициента (многочлен). Не путать с записью «один и нули» через точку с запятой.</div>
 
 <h3>4.3. Сумма по индексу</h3>
 <pre class="formula">{ SMA(n); n=5..30 }</pre>
 <p>Сумма <code>SMA(5)+SMA(6)+…+SMA(30)</code>. Альтернатива границ: <code>n0=5; n1=30</code>. Переменная в формуле члена должна совпадать с именем в <code>n=…</code>.</p>
+<pre class="formula">{1/n; n=1..10}</pre>
+<p>Гармоническая сумма <code>1/1+1/2+…+1/10</code> — скаляр на каждом баре; удобно масштабировать ряд через <code>#</code> (см. пример в §2.1).</p>
 <pre class="formula">{1; n=1..100}</pre>
 <p>Сумма ста единиц — константа 100 на каждом баре (после свёртки/сложения с рядом даёт масштабирование).</p>
 
@@ -93,23 +123,29 @@ a{color:var(--accent);}
 <pre class="formula">(pp - SMA(20)) # 2</pre>
 <p>Удвоенное расстояние цены от SMA(20) на каждом баре.</p>
 
-<h3>Цена со сдвигом</h3>
-<pre class="formula">[5] * pp</pre>
-<p>Close пять баров назад, выровненный по текущей шкале времени.</p>
+<h3>Цена: индекс от конца и сдвиг ряда</h3>
+<pre class="formula">pp[5]</pre>
+<p>На баре <code>t</code> — close бара <code>t−4</code> (5-я цена от конца, считая текущий бар как 1-ю).</p>
+<pre class="formula">pp.shift(5)</pre>
+<p>Весь ряд close сдвинут назад на 5 баров: на баре <code>t</code> значение с бара <code>t−5</code>.</p>
 
 <h3>Свёртка цены с окном</h3>
-<pre class="formula">pp * {1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20}</pre>
+<pre class="formula">pp * {1/20; n=1..20}</pre>
 
 <h3>Сумма SMA по диапазону</h3>
 <pre class="formula">{ SMA(n); n=5..30 }</pre>
 
-<h3>Комбинированный пример (как в placeholder формы)</h3>
-<pre class="formula">SMA(20) - SMA(50)
-pp * {1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20}
-(pp - SMA(20)) # 2
-[5] * pp
-{ SMA(n); n=5..30 }
-{1; n=1..100} * {1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20}</pre>
+<h3>Комбинированный пример (многострочный)</h3>
+<pre class="formula">// MA(20) через свёртку
+win20 = {1/20; n=1..20}
+pp * win20
+
+fast = SMA(20)
+slow = SMA(50)
+spread = fast - slow
+spread
+
+// или: close # (close - SMA(20))  — отклонение от SMA</pre>
 
 <h2 id="ui">6. Интерфейс</h2>
 <ul>
@@ -124,10 +160,10 @@ pp * {1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20
 <li>Имя должно быть уникальным среди составных индикаторов.</li>
 <li>В формуле доступны только индикаторы из списка чекбоксов (встроенные формы с параметрами).</li>
 <li>Циклические ссылки между составными индикаторами не допускаются.</li>
-<li>Строки, начинающиеся с <code>#</code> в поле формулы, при проверке считаются комментариями (в placeholder).</li>
+<li>Строки, начинающиеся с <code>//</code>, — комментарии; пустые строки игнорируются.</li>
 </ul>
 
-<p class="note">Версия справки: 2026-06-20 · модуль <code>poly/poly-indicator.js</code> · boot <code>indicator-constructor-v50</code></p>
+<p class="note">Версия справки: 2026-06-20 · §1.1 старший индекс · <code>.shift(n)</code>, <code>[k]</code> · boot <code>indicator-constructor-v58</code></p>
 
 </main>
 </div>

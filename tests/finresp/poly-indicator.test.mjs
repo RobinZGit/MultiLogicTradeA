@@ -76,13 +76,34 @@ test("evalPolyIndicatorSeries: SMA spread matches component subtract", () => {
   assert.ok(matched > 10);
 });
 
-test("evalPolyIndicatorSeries: shift prefix", () => {
+test("evalPolyIndicatorSeries: .shift(n) and [k] end index", () => {
   const candles = makeCandles("TEST", 30);
   const cache = E.createIndicatorCache(candles);
-  const ast = P.parsePolyIndicatorFormula("[3] * pp", { resolveKind }).ast;
+  const ast = P.parsePolyIndicatorFormula("pp.shift(3)", { resolveKind }).ast;
   const series = P.evalPolyIndicatorSeries(ast, cache, { parseParamsMap: E.parseParamsMap, resolveKind });
   assert.equal(series[3], candles[0].close);
-  assert.equal(series[10], candles[7].close);
+  const ast2 = P.parsePolyIndicatorFormula("SMA(20).shift(5)", { resolveKind }).ast;
+  const s2 = P.evalPolyIndicatorSeries(ast2, cache, { parseParamsMap: E.parseParamsMap, resolveKind });
+  const sma20 = cache.sma(20);
+  assert.equal(s2[25], sma20[20]);
+  const ast3 = P.parsePolyIndicatorFormula("pp[5]", { resolveKind }).ast;
+  assert.equal(ast3.type, "endIndex");
+  const s3 = P.evalPolyIndicatorSeries(ast3, cache, { parseParamsMap: E.parseParamsMap, resolveKind });
+  assert.equal(s3[29], candles[25].close);
+});
+
+test("parsePolyIndicatorFormula: win20 poly range {1/20; n=1..20}", () => {
+  const r = P.parsePolyIndicatorFormula("{1/20; n=1..20}", { resolveKind });
+  assert.equal(r.ok, true);
+  assert.equal(r.ast.type, "polyRange");
+  assert.equal(r.ast.nTo, 20);
+  assert.ok(Math.abs(r.ast.value - 0.05) < 1e-9);
+});
+
+test("parsePolyIndicatorFormula: harmonic sum {1/n; n=1..10}", () => {
+  const r = P.parsePolyIndicatorFormula("{1/n; n=1..10}", { resolveKind });
+  assert.equal(r.ok, true);
+  assert.equal(r.ast.type, "sum");
 });
 
 test("buildCustomChartIndicatorOverlay: composite single-pass", () => {
@@ -109,4 +130,93 @@ test("chartIndicatorEditorCatalogLines includes composite names", () => {
   const parsed = E.parseChartIndicatorEditorLine("MySpread()");
   assert.equal(parsed.ok, true);
   assert.equal(parsed.atom.kind, "composite");
+});
+
+test("parsePolyIndicatorFormula: multiline variables and // comments", () => {
+  const text = [
+    "// заголовок",
+    "fast = SMA(20)",
+    "slow = SMA(50)",
+    "fast - slow"
+  ].join("\n");
+  const r = P.parsePolyIndicatorFormula(text, { resolveKind });
+  assert.equal(r.ok, true);
+  assert.equal(r.ast.type, "program");
+  assert.equal(r.ast.bindings.length, 2);
+});
+
+test("evalPolyIndicatorSeries: multiline vars match spread", () => {
+  const candles = makeCandles("TEST", 60);
+  const cache = E.createIndicatorCache(candles);
+  const formula = "fast = SMA(20)\nslow = SMA(50)\nfast - slow";
+  const ast = P.parsePolyIndicatorFormula(formula, { resolveKind }).ast;
+  const series = P.evalPolyIndicatorSeries(ast, cache, { parseParamsMap: E.parseParamsMap, resolveKind });
+  const direct = P.evalPolyIndicatorSeries(
+    P.parsePolyIndicatorFormula("SMA(20) - SMA(50)", { resolveKind }).ast,
+    cache,
+    { parseParamsMap: E.parseParamsMap, resolveKind }
+  );
+  for (let i = 0; i < candles.length; i++) {
+    if (series[i] == null && direct[i] == null) continue;
+    assert.ok(Math.abs((series[i] || 0) - (direct[i] || 0)) < 1e-6);
+  }
+});
+
+test("parsePolyIndicatorFormula: price aliases c-close and pp_close", () => {
+  const r1 = P.parsePolyIndicatorFormula("c-close - o-open", { resolveKind });
+  assert.equal(r1.ok, true);
+  assert.equal(r1.ast.left.key, "pp");
+  assert.equal(r1.ast.right.key, "oo");
+  const r2 = P.parsePolyIndicatorFormula("pp_close - pp_open", { resolveKind });
+  assert.equal(r2.ok, true);
+  assert.equal(r2.ast.left.key, "pp");
+  assert.equal(r2.ast.right.key, "oo");
+});
+
+test("parsePolyIndicatorFormula: RETURN prefix on last line", () => {
+  const text = "fast = SMA(20)\nslow = SMA(50)\nRETURN fast - slow";
+  const r = P.parsePolyIndicatorFormula(text, { resolveKind });
+  assert.equal(r.ok, true);
+  assert.equal(r.ast.result.type, "binop");
+});
+
+test("parsePolyIndicatorFormula: full example placeholder", () => {
+  const r = P.parsePolyIndicatorFormula(P.EXAMPLE_PLACEHOLDER, { resolveKind });
+  assert.equal(r.ok, true, (r.errors || []).join("; "));
+  assert.equal(r.ast.type, "program");
+  assert.equal(r.ast.bindings.length, 6);
+});
+
+test("evalPolyIndicatorSeries: example with hash and shift", () => {
+  const candles = makeCandles("TEST", 60);
+  const cache = E.createIndicatorCache(candles);
+  const ast = P.parsePolyIndicatorFormula(P.EXAMPLE_PLACEHOLDER, { resolveKind }).ast;
+  const series = P.evalPolyIndicatorSeries(ast, cache, { parseParamsMap: E.parseParamsMap, resolveKind });
+  assert.ok(series.length >= candles.length);
+  assert.ok(series.some((v) => v != null && Number.isFinite(v)));
+});
+
+test("parsePolyIndicatorFormula: convolution chain alpha beta gamma", () => {
+  const text = "alpha = pp\nbeta = pp * pp\ngamma = alpha * beta";
+  const r = P.parsePolyIndicatorFormula(text, { resolveKind });
+  assert.equal(r.ok, true);
+  assert.equal(r.ast.type, "program");
+  assert.equal(r.ast.bindings.length, 3);
+  assert.equal(r.ast.result.type, "binop");
+  assert.equal(r.ast.result.op, "*");
+});
+
+test("evalPolyIndicatorSeries: convolution chain runs", () => {
+  const candles = makeCandles("TEST", 40);
+  const cache = E.createIndicatorCache(candles);
+  const formula = "alpha = pp\nbeta = pp * pp\ngamma = alpha * beta";
+  const ast = P.parsePolyIndicatorFormula(formula, { resolveKind }).ast;
+  const series = P.evalPolyIndicatorSeries(ast, cache, { parseParamsMap: E.parseParamsMap, resolveKind });
+  assert.ok(series.length >= candles.length);
+  assert.ok(series.some((v) => v != null && Number.isFinite(v)));
+});
+
+test("parsePolyIndicatorFormula: rejects # comment line", () => {
+  const r = P.parsePolyIndicatorFormula("# not a comment\nSMA(20)", { resolveKind });
+  assert.equal(r.ok, false);
 });

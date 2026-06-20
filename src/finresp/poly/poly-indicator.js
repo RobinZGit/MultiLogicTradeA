@@ -1,11 +1,44 @@
 /*
  * Конструктор составных индикаторов (многочлены над рядами SMA/CMA/… и pp).
- * Операции: + −  * (свёртка)  # (покомпонентно)  /#  [n] (сдвиг)  {…; n=a..b} (сумма).
+ * Операции: + −  * (свёртка)  # (покомпонентно)  /#  .shift(n)  [k] (k-я от конца)  {…; n=a..b}.
  */
 (function (root) {
   "use strict";
 
   const MARKET_KEYS = new Set(["pp", "oo", "hh", "ll", "vv"]);
+
+  /** Имена OHLCV-рядов (многочлены): короткие pp/oo/…, c-close / cclose, pp_close. */
+  const MARKET_ALIASES = {
+    pp: "pp", oo: "oo", hh: "hh", ll: "ll", vv: "vv",
+    cclose: "pp", "c-close": "pp", pp_close: "pp",
+    oopen: "oo", "o-open": "oo", pp_open: "oo",
+    hhigh: "hh", "h-high": "hh", pp_high: "hh",
+    llow: "ll", "l-low": "ll", pp_low: "ll",
+    vvolume: "vv", "v-volume": "vv", pp_volume: "vv"
+  };
+
+  function resolveMarketKey(name) {
+    const k = String(name || "").toLowerCase();
+    return MARKET_ALIASES[k] || (MARKET_KEYS.has(k) ? k : null);
+  }
+
+  function stripLineComment(line) {
+    let inStr = false;
+    const s = String(line || "");
+    for (let i = 0; i < s.length - 1; i++) {
+      const ch = s[i];
+      if (ch === '"' || ch === "'") inStr = !inStr;
+      if (!inStr && s[i] === "/" && s[i + 1] === "/") return s.slice(0, i).trim();
+    }
+    return s.trim();
+  }
+
+  function splitFormulaLines(text) {
+    return String(text || "")
+      .split(/\r?\n/)
+      .map(stripLineComment)
+      .filter(Boolean);
+  }
 
   function isFiniteNum(v) {
     return typeof v === "number" && Number.isFinite(v);
@@ -114,7 +147,7 @@
     return out;
   }
 
-  /** Сдвиг вправо на n баров: out[t] = in[t-n] */
+  /** Сдвиг ряда назад на n баров: out[t] = in[t-n] */
   function shiftRight(a, n) {
     const shift = Math.max(0, Math.trunc(n));
     const len = seriesLen(a);
@@ -125,6 +158,44 @@
       out[t] = src >= 0 ? a[src] : null;
     }
     return out;
+  }
+
+  /** На баре t: k-я цена от конца (1 = текущий бар, 5 = t−4). */
+  function endIndexSeries(a, k) {
+    const idx = Math.max(1, Math.trunc(k));
+    const len = seriesLen(a);
+    if (!len) return [];
+    const out = new Array(len);
+    for (let t = 0; t < len; t++) {
+      const src = t - idx + 1;
+      out[t] = src >= 0 && src < len ? a[src] : null;
+    }
+    return out;
+  }
+
+  function nodeUsesSumIndex(node, varName) {
+    if (!node) return false;
+    if (node.type === "sumIndex" && (!varName || node.var === varName)) return true;
+    if (node.type === "unary") return nodeUsesSumIndex(node.arg, varName);
+    if (node.type === "binop") {
+      return nodeUsesSumIndex(node.left, varName) || nodeUsesSumIndex(node.right, varName);
+    }
+    return false;
+  }
+
+  function extractConstValue(node) {
+    if (!node) return null;
+    if (node.type === "scalar" && isFiniteNum(node.value)) return node.value;
+    if (node.type === "binop" && node.op === "/#") {
+      const l = extractConstValue(node.left);
+      const r = extractConstValue(node.right);
+      if (isFiniteNum(l) && isFiniteNum(r) && r !== 0) return l / r;
+    }
+    return null;
+  }
+
+  function bodyReferencesVar(bodyText, varName) {
+    return new RegExp(`\\b${varName}\\b`).test(String(bodyText || ""));
   }
 
   function polyFromCoeffs(coeffs, n) {
@@ -159,7 +230,7 @@
         i += 2;
         continue;
       }
-      if ("+-*#/,;[](){}=".includes(ch)) {
+      if ("+-*#^/,;[](){}=".includes(ch)) {
         push(ch === "(" ? "lp" : ch === ")" ? "rp" : ch === "{" ? "lbrace" : ch === "}" ? "rbrace"
           : ch === "[" ? "lbrack" : ch === "]" ? "rbrack" : "op", ch);
         i += 1;
@@ -182,6 +253,16 @@
       if (/[A-Za-z_]/.test(ch)) {
         let j = i;
         while (j < s.length && /[A-Za-z0-9_]/.test(s[j])) j += 1;
+        if (s[j] === "-") {
+          let m = j + 1;
+          while (m < s.length && /[A-Za-z]/.test(s[m])) m += 1;
+          const hyph = s.slice(i, m);
+          if (m > j + 1 && resolveMarketKey(hyph)) {
+            push("ident", hyph);
+            i = m;
+            continue;
+          }
+        }
         push("ident", s.slice(i, j));
         i = j;
         continue;
@@ -192,6 +273,11 @@
         const num = parseFloat(s.slice(i, j).replace(",", "."));
         push("num", num);
         i = j;
+        continue;
+      }
+      if (ch === ".") {
+        push("op", ".");
+        i += 1;
         continue;
       }
       return { ok: false, error: `Символ «${ch}» не ожидается (поз. ${i + 1})`, tokens: [] };
@@ -209,16 +295,22 @@
 
     if (t.type === "ident") {
       const name = t.value;
-      const lower = name.toLowerCase();
-      if (MARKET_KEYS.has(lower)) {
-        return { ok: true, node: { type: "market", key: lower }, pos: pos + 1 };
+      if (ctx.knownVars?.has(name)) {
+        return { ok: true, node: { type: "varref", name }, pos: pos + 1 };
+      }
+      if (ctx.sumVar && name === ctx.sumVar) {
+        return { ok: true, node: { type: "sumIndex", var: name }, pos: pos + 1 };
+      }
+      const marketKey = resolveMarketKey(name);
+      if (marketKey) {
+        return { ok: true, node: { type: "market", key: marketKey }, pos: pos + 1 };
       }
       const next = tokens[pos + 1];
       if (next?.type === "lp") {
         const closeIdx = findMatchingParen(tokens, pos + 1);
         if (closeIdx < 0) return { ok: false, error: `Нет «)» после ${name}(`, pos };
         const inner = tokens.slice(pos + 2, closeIdx).map((x) => x.value).join("");
-        const kind = ctx.resolveKind ? ctx.resolveKind(name) : lower;
+        const kind = ctx.resolveKind ? ctx.resolveKind(name) : String(name).toLowerCase();
         if (!kind) return { ok: false, error: `Неизвестный индикатор «${name}»`, pos };
         return {
           ok: true,
@@ -230,7 +322,7 @@
         const ci = ctx.resolveCustom(name);
         return { ok: true, node: { type: "custom", id: ci.id, name: ci.name, formula: ci.formula }, pos: pos + 1 };
       }
-      return { ok: false, error: `«${name}» — ожидается Индикатор(параметры) или pp/oo/hh/ll/vv`, pos };
+      return { ok: false, error: `«${name}» — неизвестное имя (переменная, pp/close, Индикатор(…) или составной)`, pos };
     }
 
     if (t.type === "lp") {
@@ -242,13 +334,6 @@
 
     if (t.type === "lbrace") {
       return parseBrace(tokens, pos, ctx);
-    }
-
-    if (t.type === "lbrack") {
-      const numTok = tokens[pos + 1];
-      if (numTok?.type !== "num") return { ok: false, error: "В [ ] ожидается число сдвига", pos: pos + 1 };
-      if (tokens[pos + 2]?.type !== "rbrack") return { ok: false, error: "Ожидается «]»", pos: pos + 2 };
-      return { ok: true, node: { type: "shiftKernel", shift: numTok.value }, pos: pos + 3 };
     }
 
     return { ok: false, error: "Ожидается число, индикатор или «(»", pos };
@@ -357,6 +442,24 @@
     const subCtx = { ...ctx, sumVar: nVar };
     const subAst = parseExpr(subTok.tokens, 0, subCtx);
     if (!subAst.ok) return subAst;
+
+    const count = Math.abs(nTo - nFrom) + 1;
+    const usesIndex = nodeUsesSumIndex(subAst.node, nVar) || bodyReferencesVar(bodyText, nVar);
+    const constVal = extractConstValue(subAst.node);
+    if (!usesIndex && constVal != null && Math.abs(constVal * count - 1) < 1e-9) {
+      return {
+        ok: true,
+        node: { type: "polyRange", value: constVal, nFrom, nTo },
+        pos: i
+      };
+    }
+    if (!usesIndex && constVal != null) {
+      return {
+        ok: true,
+        node: { type: "sum", body: subAst.node, nVar, nFrom, nTo, constAccum: true },
+        pos: i
+      };
+    }
     return {
       ok: true,
       node: { type: "sum", body: subAst.node, nVar, nFrom, nTo },
@@ -372,15 +475,45 @@
     }
     let cur = parsePrimary(tokens, pos, ctx);
     if (!cur.ok) return cur;
-    while (tokens[cur.pos]?.type === "lbrack") {
-      const numTok = tokens[cur.pos + 1];
-      if (numTok?.type !== "num") return { ok: false, error: "В [ ] ожидается число", pos: cur.pos + 1 };
-      if (tokens[cur.pos + 2]?.type !== "rbrack") return { ok: false, error: "Ожидается «]»", pos: cur.pos + 2 };
-      cur = {
-        ok: true,
-        node: { type: "shift", shift: numTok.value, body: cur.node },
-        pos: cur.pos + 3
-      };
+    for (;;) {
+      if (tokens[cur.pos]?.type === "lbrack") {
+        const numTok = tokens[cur.pos + 1];
+        if (numTok?.type !== "num") {
+          return { ok: false, error: "В [k] ожидается индекс (число) от конца", pos: cur.pos + 1 };
+        }
+        if (tokens[cur.pos + 2]?.type !== "rbrack") {
+          return { ok: false, error: "Ожидается «]» после индекса", pos: cur.pos + 2 };
+        }
+        cur = {
+          ok: true,
+          node: { type: "endIndex", index: numTok.value, body: cur.node },
+          pos: cur.pos + 3
+        };
+        continue;
+      }
+      if (tokens[cur.pos]?.type === "op" && tokens[cur.pos].value === ".") {
+        const methodTok = tokens[cur.pos + 1];
+        if (methodTok?.type !== "ident" || String(methodTok.value).toLowerCase() !== "shift") {
+          return { ok: false, error: "После «.» ожидается shift(число)", pos: cur.pos + 1 };
+        }
+        if (tokens[cur.pos + 2]?.type !== "lp") {
+          return { ok: false, error: "Ожидается «.shift(…»", pos: cur.pos + 2 };
+        }
+        const numTok = tokens[cur.pos + 3];
+        if (numTok?.type !== "num") {
+          return { ok: false, error: "В .shift(n) ожидается число баров", pos: cur.pos + 3 };
+        }
+        if (tokens[cur.pos + 4]?.type !== "rp") {
+          return { ok: false, error: "Ожидается «)» после .shift(n)", pos: cur.pos + 4 };
+        }
+        cur = {
+          ok: true,
+          node: { type: "shift", shift: numTok.value, body: cur.node },
+          pos: cur.pos + 5
+        };
+        continue;
+      }
+      break;
     }
     return cur;
   }
@@ -388,8 +521,8 @@
   function parseMul(tokens, pos, ctx) {
     let cur = parseUnary(tokens, pos, ctx);
     if (!cur.ok) return cur;
-    while (tokens[cur.pos]?.type === "op" && ["*", "#", "/#"].includes(tokens[cur.pos].value)) {
-      const op = tokens[cur.pos].value;
+    while (tokens[cur.pos]?.type === "op" && ["*", "#", "/#", "/"].includes(tokens[cur.pos].value)) {
+      const op = tokens[cur.pos].value === "/" ? "/#" : tokens[cur.pos].value;
       const rhs = parseUnary(tokens, cur.pos + 1, ctx);
       if (!rhs.ok) return rhs;
       cur = { ok: true, node: { type: "binop", op, left: cur.node, right: rhs.node }, pos: rhs.pos };
@@ -412,17 +545,126 @@
     return cur;
   }
 
-  function parsePolyIndicatorFormula(text, ctx) {
+  function parseSingleExpr(text, ctx) {
     const tok = tokenizeFormula(text);
-    if (!tok.ok) return { ok: false, errors: [tok.error] };
-    if (!tok.tokens.length) return { ok: false, errors: ["Пустая формула"] };
+    if (!tok.ok) return { ok: false, error: tok.error };
+    if (!tok.tokens.length) return { ok: false, error: "Пустое выражение" };
     const ast = parseExpr(tok.tokens, 0, ctx || {});
-    if (!ast.ok) return { ok: false, errors: [ast.error] };
-    return { ok: true, ast: ast.node, errors: [] };
+    if (!ast.ok) return ast;
+    return { ok: true, ast: ast.node };
+  }
+
+  const RESERVED_NAMES = new Set(["RETURN"]);
+
+  function isReservedVar(name) {
+    return RESERVED_NAMES.has(String(name || "").toUpperCase());
+  }
+
+  function parseResultExpr(text, ctx) {
+    const raw = String(text || "").trim();
+    const retM = raw.match(/^RETURN\s+(.+)$/i);
+    const body = retM ? retM[1].trim() : raw;
+    if (!body) return { ok: false, error: "После RETURN ожидается выражение" };
+    const soloVar = body.match(/^([A-Za-z_]\w*)$/);
+    if (soloVar && ctx.knownVars?.has(soloVar[1])) {
+      return { ok: true, ast: { type: "varref", name: soloVar[1] } };
+    }
+    return parseSingleExpr(body, ctx);
+  }
+
+  function parsePolyIndicatorFormula(text, ctx) {
+    const lines = splitFormulaLines(text);
+    if (!lines.length) return { ok: false, errors: ["Пустая формула"] };
+
+    if (lines.length === 1) {
+      const one = parseResultExpr(lines[0], ctx || {});
+      if (!one.ok) return { ok: false, errors: [one.error] };
+      return { ok: true, ast: one.ast, errors: [] };
+    }
+
+    const bindings = [];
+    const knownVars = new Set();
+    const baseCtx = ctx || {};
+
+    for (let li = 0; li < lines.length - 1; li++) {
+      const line = lines[li];
+      const m = line.match(/^([A-Za-z_]\w*)\s*=\s*(.+)$/);
+      if (!m) {
+        return { ok: false, errors: [`Строка ${li + 1}: ожидается присваивание «Имя = выражение»`] };
+      }
+      const varName = m[1];
+      if (isReservedVar(varName)) {
+        return { ok: false, errors: [`Строка ${li + 1}: «${varName}» — зарезервированное слово`] };
+      }
+      if (resolveMarketKey(varName)) {
+        return { ok: false, errors: [`Строка ${li + 1}: «${varName}» зарезервировано для цены`] };
+      }
+      const subCtx = { ...baseCtx, knownVars };
+      const parsed = parseSingleExpr(m[2].trim(), subCtx);
+      if (!parsed.ok) return { ok: false, errors: [`Строка ${li + 1}: ${parsed.error}`] };
+      if (knownVars.has(varName)) {
+        return { ok: false, errors: [`Строка ${li + 1}: переменная «${varName}» уже задана`] };
+      }
+      bindings.push({ name: varName, node: parsed.ast });
+      knownVars.add(varName);
+    }
+
+    const lastLine = lines[lines.length - 1];
+    const lastM = lastLine.match(/^([A-Za-z_]\w*)\s*=\s*(.+)$/);
+    if (lastM && !/^RETURN\s+/i.test(lastLine)) {
+      const varName = lastM[1];
+      if (isReservedVar(varName)) {
+        return { ok: false, errors: [`Строка ${lines.length}: «${varName}» — зарезервированное слово`] };
+      }
+      if (resolveMarketKey(varName)) {
+        return { ok: false, errors: [`Строка ${lines.length}: «${varName}» зарезервировано для цены`] };
+      }
+      if (knownVars.has(varName)) {
+        return { ok: false, errors: [`Строка ${lines.length}: переменная «${varName}» уже задана`] };
+      }
+      const parsed = parseSingleExpr(lastM[2].trim(), { ...baseCtx, knownVars });
+      if (!parsed.ok) return { ok: false, errors: [`Строка ${lines.length}: ${parsed.error}`] };
+      bindings.push({ name: varName, node: parsed.ast });
+      return {
+        ok: true,
+        ast: { type: "program", bindings, result: parsed.ast },
+        errors: []
+      };
+    }
+    const resultParsed = parseResultExpr(lastLine, { ...baseCtx, knownVars });
+    if (!resultParsed.ok) return { ok: false, errors: [`Строка ${lines.length}: ${resultParsed.error}`] };
+
+    return {
+      ok: true,
+      ast: { type: "program", bindings, result: resultParsed.ast },
+      errors: []
+    };
   }
 
   function substParams(params, varName, value) {
     return String(params || "").replace(new RegExp(`\\b${varName}\\b`, "g"), String(value));
+  }
+
+  function makeEvalCtx(options) {
+    const opts = options || {};
+    const varNodes = { ...(opts.varNodes || {}) };
+    const ctx = {
+      parseParamsMap: opts.parseParamsMap,
+      varNodes,
+      indicatorSeries: (c, kind, params) => {
+        const sub = ctx.paramSubst ? ctx.paramSubst(params) : params;
+        if (opts.indicatorSeries) return opts.indicatorSeries(c, kind, sub, ctx);
+        return defaultIndicatorSeries(c, kind, sub, ctx);
+      },
+      evalCustomFormula: (c, formula) => {
+        if (opts.evalCustomFormula) return opts.evalCustomFormula(c, formula);
+        return zeroSeries(c?.candles?.length || 0);
+      },
+      resolveKind: opts.resolveKind,
+      resolveCustom: opts.resolveCustom,
+      paramSubst: (p) => p
+    };
+    return ctx;
   }
 
   function evalNode(node, cache, ctx) {
@@ -430,6 +672,20 @@
     if (!n) return [];
 
     switch (node.type) {
+      case "program": {
+        const subCtx = { ...ctx, varNodes: { ...(ctx.varNodes || {}) } };
+        for (const b of node.bindings || []) {
+          subCtx.varNodes[b.name] = b.node;
+        }
+        return evalNode(node.result, cache, subCtx);
+      }
+      case "varref": {
+        const bound = ctx.varNodes?.[node.name];
+        if (!bound) return zeroSeries(n);
+        return evalNode(bound, cache, ctx);
+      }
+      case "sumIndex":
+        return scalarSeries(n, ctx.sumVarValue ?? 0);
       case "scalar":
         return scalarSeries(n, node.value);
       case "poly":
@@ -469,15 +725,23 @@
         const body = evalNode(node.body, cache, ctx);
         return shiftRight(body, node.shift);
       }
-      case "shiftKernel": {
-        const out = zeroSeries(n);
-        const at = Math.trunc(node.shift);
-        if (at >= 0 && at < n) out[at] = 1;
-        return out;
+      case "endIndex": {
+        const body = evalNode(node.body, cache, ctx);
+        return endIndexSeries(body, node.index);
+      }
+      case "polyRange": {
+        const count = Math.abs(node.nTo - node.nFrom) + 1;
+        const coeffs = new Array(count).fill(node.value);
+        return polyFromCoeffs(coeffs, n);
       }
       case "sum": {
         let acc = zeroSeries(n);
         const step = node.nFrom <= node.nTo ? 1 : -1;
+        if (node.constAccum) {
+          const c = extractConstValue(node.body);
+          const total = (c ?? 0) * (Math.abs(node.nTo - node.nFrom) + 1);
+          return scalarSeries(n, total);
+        }
         for (let nv = node.nFrom; step > 0 ? nv <= node.nTo : nv >= node.nTo; nv += step) {
           const subCtx = {
             ...ctx,
@@ -554,22 +818,7 @@
   }
 
   function evalPolyIndicatorSeries(ast, cache, options) {
-    const opts = options || {};
-    const ctx = {
-      parseParamsMap: opts.parseParamsMap,
-      indicatorSeries: (c, kind, params) => {
-        const sub = ctx.paramSubst ? ctx.paramSubst(params) : params;
-        if (opts.indicatorSeries) return opts.indicatorSeries(c, kind, sub, ctx);
-        return defaultIndicatorSeries(c, kind, sub, ctx);
-      },
-      evalCustomFormula: (c, formula) => {
-        if (opts.evalCustomFormula) return opts.evalCustomFormula(c, formula);
-        return zeroSeries(c?.candles?.length || 0);
-      },
-      resolveKind: opts.resolveKind,
-      resolveCustom: opts.resolveCustom,
-      paramSubst: (p) => p
-    };
+    const ctx = makeEvalCtx(options || {});
     return evalNode(ast, cache, ctx);
   }
 
@@ -583,13 +832,16 @@
   }
 
   const EXAMPLE_PLACEHOLDER = [
-    "# Составной индикатор — пример (удалите лишнее, задайте имя выше)",
-    "SMA(20) - SMA(50)",
-    "pp * {1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20}",
-    "(pp - SMA(20)) # 2",
-    "[5] * pp",
-    "{ SMA(n); n=5..30 }",
-    "{1; n=1..100} * {1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20}"
+    "// Составной индикатор — пример (задайте имя выше)",
+    "harm = {1/n; n=1..10}",
+    "// sma20: свёртка close с окном 20×(1/20) — эквивалент SMA(20)",
+    "win20 = {1/20; n=1..20}",
+    "sma20 = pp * win20",
+    "// sma50 — встроенный SMA(50)",
+    "sma50 = SMA(50)",
+    "smaLag = sma20.shift(5)",
+    "mix = sma20 # harm",
+    "RETURN mix - smaLag - sma50"
   ].join("\n");
 
   root.MultiLogicFinrespPoly = {
@@ -597,6 +849,7 @@
     validatePolyIndicatorFormula,
     evalPolyIndicatorSeries,
     EXAMPLE_PLACEHOLDER,
-    MARKET_KEYS
+    MARKET_KEYS,
+    MARKET_ALIASES
   };
 })(typeof window !== "undefined" ? window : globalThis);

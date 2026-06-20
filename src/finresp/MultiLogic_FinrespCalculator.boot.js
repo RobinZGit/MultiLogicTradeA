@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-20-indicator-constructor-v51";
+  const CALC_PAGE_VERSION = "2026-06-20-indicator-constructor-v58";
   const BOOT_BACKGROUND_TIMEOUT_MS = 60000;
   const BOOT_BANNER_WATCHDOG_MS = 20000;
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
@@ -6194,7 +6194,7 @@
     dlg.className = "ml-ind-constructor-dialog";
     dlg.innerHTML = `<form method="dialog" class="ml-ind-constructor-form">
 <p class="ml-ind-constructor-title">Составной индикатор</p>
-<p class="ml-ind-constructor-hint">Формула из встроенных индикаторов (SMA, CMA, …), <code>pp</code> и операций <code>*</code> <code>#</code> <code>/#</code> <code>+</code> <code>−</code>, сдвига <code>[n]</code> и суммы <code>{…; n=a..b}</code>. Подробнее — кнопка <strong>i.</strong></p>
+<p class="ml-ind-constructor-hint">Несколько строк: <code>Имя = …</code>, итог — <code>RETURN …</code>. <code>#</code> — покомпонентно, <code>*</code> — свёртка. Цены: <code>pp</code>, <code>c-close</code>, <code>pp_close</code>. Подробнее — <strong>i.</strong></p>
 <label class="ml-ind-constructor-label">Имя (латиница/цифры, для списка и графика)
 <input type="text" class="ml-ind-constructor-name" maxlength="48" required placeholder="Spread20_50" spellcheck="false"></label>
 <label class="ml-ind-constructor-label">Формула
