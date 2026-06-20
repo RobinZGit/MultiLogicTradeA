@@ -32,7 +32,10 @@
 </div>
 <div class="live-trading-toolbar">
 <div class="live-trading-actions">
+<div class="live-trading-actions-primary">
 <button type="button" class="live-trading-btn live-trading-btn-start" id="live-trading-toggle" [class.live-trading-toggle--active]="live.toggleActive" [class.live-critical-control]="live.toggleActive" [disabled]="live.toggleDisabled">{{ live.toggleText }}</button>
+<button type="button" class="live-trading-btn live-trading-btn-single" id="live-trading-single-step" [class.live-trading-btn-single--busy]="live.singleStepBusy" [disabled]="live.singleStepDisabled" title="Однократный запуск торговли — одна итерация (свечи → FINRESP → reconcile) без непрерывного опроса" aria-label="Однократный запуск торговли"><span class="live-trading-btn-single-label">1▶</span></button>
+</div>
 <div class="live-trading-actions-secondary">
 <button type="button" class="live-trading-btn live-trading-btn-sell" id="live-trading-sell-all" title="Закрыть все открытые позиции по рынку (лонг — продажа, шорт — покупка)" [disabled]="live.sellAllDisabled">Закрыть все позиции</button>
 <button type="button" class="live-session-clear-btn" id="live-session-clear-cache" title="Очистить сохранённый в браузере журнал сделок и позиции песочницы (биржевые позиции не затрагиваются)" aria-label="Очистить сохранённый журнал">🧹</button>

@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-19-page-boot-status-v34";
+  const CALC_PAGE_VERSION = "2026-06-20-live-single-step-v35b";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -2539,7 +2539,7 @@
     persistBrokerDepositFromDom, syncVolDepositDomFromBroker, activeView, clearLiveRuntimeBroker,
     ensureTbankTokenUnlocked, loadTbankAccounts, loadTbankDeposit, fillTbankAccounts,
     openBrokerPassphraseUi, scheduleBrokerUnlockPrompt, bootstrapBrokerOnPageInit, closeTbankPassphraseModal,
-    toggleLiveTrading, sellAllMarketLive, liveTradingReconcile, refreshLiveCandleStream,
+    toggleLiveTrading, runSingleLiveTradingIteration, sellAllMarketLive, liveTradingReconcile, refreshLiveCandleStream,
     refreshLiveManualLimitPrice, refreshLiveChartsUi, refreshLiveEquityChartsUi,
     renderLiveOrdersPanel, renderLivePositionsPanel, syncLiveManualOrderUi,
     syncLivePeriodControls, placeManualLiveOrder,
@@ -9445,6 +9445,17 @@ ${referenceBlock}
           state.live.lastError = err.message;
           syncLiveTradingUi();
           noteLiveTech("toggleLiveTrading", err.message);
+        });
+        return;
+      }
+      const singleBtn = e.target?.closest?.("#live-trading-single-step");
+      if (singleBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        runSingleLiveTradingIteration().catch((err) => {
+          state.live.lastError = err.message;
+          syncLiveTradingUi();
+          noteLiveTech("runSingleLiveTradingIteration", err.message);
         });
         return;
       }

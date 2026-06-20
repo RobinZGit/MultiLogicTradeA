@@ -61,6 +61,8 @@ export interface FinrespLiveViewModel {
   toggleText: string;
   toggleActive: boolean;
   toggleDisabled: boolean;
+  singleStepDisabled: boolean;
+  singleStepBusy: boolean;
   sellAllDisabled: boolean;
   commissionLabel: string;
   journalMetaText: string;
@@ -88,6 +90,8 @@ export const EMPTY_FINRESP_LIVE: FinrespLiveViewModel = {
   toggleText: 'Начать торговлю',
   toggleActive: false,
   toggleDisabled: true,
+  singleStepDisabled: true,
+  singleStepBusy: false,
   sellAllDisabled: true,
   commissionLabel: 'Комиссии уплачено (реально), ₽',
   journalMetaText:

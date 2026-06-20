@@ -2767,6 +2767,15 @@
     return !isLive;
   }
 
+  /** Одна итерация: не во время reconcile/sell-all; в реале — не на время полного расчёта. */
+  function liveCriticalSingleStepDisabled(isLive) {
+    if (!isLive) return true;
+    if (runSingleLiveTradingIteration._busy) return true;
+    if (state.live.reconcileBusy || state.live.tradingActionBusy || state.live.sellAllInFlight) return true;
+    if (!isLiveSandbox() && state.uiBusy) return true;
+    return false;
+  }
+
   /** Сброс зависших флагов busy (стоп торговли / аварийное восстановление UI). */
   function resetLiveTradingBusyFlags() {
     state.live.tradingActionBusy = false;
@@ -3749,6 +3758,201 @@ ${renderBlock}
 <script>try { MLTradeProtocol.boot(); } catch (_) { /* render missing */ }</script></body></html>`;
   }
 
+  const ITERATION_PROTOCOL_FORMAT = "multilogic-live-iteration-protocol-v1";
+
+  function iterationProtocolEsc(s) {
+    return String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function buildBrokerConnectionSummary() {
+    const cred = activeBrokerState();
+    const brokerId = readBrokerIdFromUi();
+    const statusEl = brokerId === "alor" ? $("alor-status") : $("tbank-status");
+    return {
+      brokerId,
+      brokerLabel: brokerLabel(),
+      sandbox: isLiveSandbox(),
+      tokenStored: !!safeStorageGet(brokerTokenStoreKey()),
+      tokenUnlocked: !!cred.token,
+      accountId: cred.selectedAccountId || null,
+      depositLoaded: !!cred.depositLoaded,
+      depositRub: +($("vol-deposit")?.value || 0) || null,
+      statusText: statusEl?.textContent?.trim() || ""
+    };
+  }
+
+  function buildFundConnectionSummary() {
+    const data = bondTbruData();
+    return {
+      fundTicker: "TBRU",
+      fundName: "БПИФ Т-Капитал Облигации",
+      sourceUrl: data?.source || "https://porti.ru/etf/holders/MOEX:TBRU",
+      asOf: data?.asOf || null,
+      holdingsCount: (data?.holdings || []).length,
+      logicActive: bondTbruActive()
+    };
+  }
+
+  /** Полная сверка облигаций TBRU: счёт vs цель фонда (даже без сделок). */
+  async function buildBondTbruReconcileProtocol() {
+    const proc = bondTbruProc();
+    const data = bondTbruData();
+    const targets = state.live.bondTbruTargets || [];
+    const sandbox = isLiveSandbox();
+    const actual = sandbox ? sandboxPositionsByTicker() : await tbankPositionsByTicker();
+    const positionsBySec = {};
+    for (const [, pos] of actual) {
+      const sec = String(pos.sec || pos.ticker || "").toUpperCase();
+      if (!proc?.isBondIsin(sec)) continue;
+      positionsBySec[sec] = Math.max(0, Math.trunc(+pos.pieces || 0));
+    }
+    const rows = [];
+    const seen = new Set();
+    for (const t of targets) {
+      const sec = String(t.sec || "").toUpperCase();
+      if (!sec) continue;
+      seen.add(sec);
+      const tgt = Math.max(0, Math.trunc(+t.pos || 0));
+      const cur = positionsBySec[sec] ?? 0;
+      rows.push({
+        sec,
+        inFund: true,
+        targetPieces: tgt,
+        accountPieces: cur,
+        delta: tgt - cur,
+        aligned: tgt === cur,
+        weight: t.weight,
+        unitPrice: t.unitPrice
+      });
+    }
+    for (const [sec, cur] of Object.entries(positionsBySec)) {
+      if (seen.has(sec)) continue;
+      rows.push({
+        sec,
+        inFund: false,
+        targetPieces: 0,
+        accountPieces: cur,
+        delta: -cur,
+        aligned: cur === 0,
+        orphan: true
+      });
+    }
+    const mismatches = rows.filter((r) => !r.aligned);
+    return {
+      fundSource: data?.source || "https://porti.ru/etf/holders/MOEX:TBRU",
+      asOf: data?.asOf || null,
+      allAligned: mismatches.length === 0,
+      summary: mismatches.length === 0
+        ? "Все облигации на счёте совпадают с целью по составу фонда (или вне deploy-конверта)."
+        : `Расхождений: ${mismatches.length} из ${rows.length} строк сверки.`,
+      rows
+    };
+  }
+
+  async function buildSingleIterationProtocol(ctx) {
+    const hashTag = ctx.hashTag || `#iter-${Date.now().toString(36)}`;
+    return {
+      format: ITERATION_PROTOCOL_FORMAT,
+      hashTag,
+      exportedAt: new Date().toISOString(),
+      pageVersion: (typeof root.__mlFinrespVersion === "string" ? root.__mlFinrespVersion : null),
+      mode: isLiveSandbox() ? "sandbox" : "real",
+      iteration: {
+        startedAt: ctx.startedAt,
+        finishedAt: new Date().toISOString(),
+        tickOk: !!ctx.tickOk,
+        logicIds: effectiveLogicIds().slice(),
+        tradingActive: !!state.live.active
+      },
+      broker: buildBrokerConnectionSummary(),
+      fund: bondTbruActive() ? buildFundConnectionSummary() : null,
+      bondReconcile: bondTbruActive() ? await buildBondTbruReconcileProtocol() : null,
+      reconcile: state.live.lastReconcile || ctx.reconcileReport || null,
+      trades: ctx.newTrades || [],
+      issues: {
+        lastError: state.live.lastError || "",
+        lastReconcileAbort: state.live.lastReconcileAbort || null
+      }
+    };
+  }
+
+  function buildIterationProtocolHtml(payload) {
+    const esc = iterationProtocolEsc;
+    const br = payload.broker || {};
+    const fund = payload.fund;
+    const bond = payload.bondReconcile;
+    const rec = payload.reconcile;
+    const trades = payload.trades || [];
+    const bondRows = (bond?.rows || []).map((r) => {
+      const cls = r.aligned ? "ok" : "warn";
+      const tag = r.orphan ? "вне фонда" : (r.inFund ? "в фонде" : "—");
+      return `<tr class="${cls}"><td>${esc(r.sec)}</td><td>${esc(tag)}</td><td>${r.targetPieces}</td><td>${r.accountPieces}</td><td>${r.delta >= 0 ? "+" : ""}${r.delta}</td><td>${r.aligned ? "✓" : "≠"}</td></tr>`;
+    }).join("");
+    const targetRows = (rec?.targetDetails || []).map((td) => {
+      return `<tr><td>${esc(td.sec || td.ticker)}</td><td>${esc(td.action)}</td><td>${td.target ?? "—"}</td><td>${td.current ?? "—"}</td><td>${td.delta ?? "—"}</td><td>${esc(td.reason || "")}</td></tr>`;
+    }).join("");
+    const tradeRows = trades.map((t) => {
+      return `<tr><td>${esc(t.when)}</td><td>${esc(t.ticker || t.sec)}</td><td>${esc(t.directionLabel || t.direction)}</td><td>${t.pieces ?? "—"}</td><td>${esc(t.tradeSourceLabel || t.tradeSource || "")}</td></tr>`;
+    }).join("") || "<tr><td colspan=\"5\">Сделок в этой итерации нет</td></tr>";
+    return `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>${esc(payload.hashTag)} — итерация live</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:1rem 1.25rem;line-height:1.45;color:#111}
+h1{font-size:1.35rem} h2{font-size:1.05rem;margin-top:1.35rem}
+.tag{display:inline-block;background:#fef3c7;border:1px solid #f59e0b;padding:.2rem .55rem;border-radius:6px;font-weight:700}
+table{border-collapse:collapse;width:100%;margin:.5rem 0 1rem;font-size:.88rem}
+th,td{border:1px solid #cbd5e1;padding:.35rem .5rem;text-align:left}
+th{background:#f1f5f9} tr.ok td:last-child{color:#047857;font-weight:700} tr.warn td:last-child{color:#b45309;font-weight:700}
+.meta{color:#64748b;font-size:.9rem}
+</style></head><body>
+<h1>Однократная торговая итерация <span class="tag">${esc(payload.hashTag)}</span></h1>
+<p class="meta">${esc(payload.exportedAt)} · ${esc(payload.mode)} · ${esc(payload.pageVersion || "—")}</p>
+<h2>Подключение к брокеру</h2>
+<table><tr><th>Брокер</th><td>${esc(br.brokerLabel)} (${esc(br.brokerId)})</td></tr>
+<tr><th>Токен</th><td>${br.tokenUnlocked ? "расшифрован" : (br.tokenStored ? "сохранён, нужен пароль" : "нет")}</td></tr>
+<tr><th>Счёт</th><td>${esc(br.accountId || "—")}</td></tr>
+<tr><th>Депозит</th><td>${br.depositLoaded ? `${br.depositRub} ₽` : "не загружен"}</td></tr>
+<tr><th>Статус</th><td>${esc(br.statusText || "—")}</td></tr></table>
+${fund ? `<h2>Состав фонда TBRU (porti.ru)</h2>
+<table><tr><th>Источник</th><td><a href="${esc(fund.sourceUrl)}">${esc(fund.sourceUrl)}</a></td></tr>
+<tr><th>Срез asOf</th><td>${esc(fund.asOf || "—")}</td></tr>
+<tr><th>Позиций в фонде</th><td>${fund.holdingsCount}</td></tr></table>` : ""}
+${bond ? `<h2>Сверка облигаций (счёт vs цель фонда)</h2>
+<p><strong>${esc(bond.summary)}</strong></p>
+<table><thead><tr><th>ISIN</th><th>Роль</th><th>Цель, шт</th><th>На счёте, шт</th><th>Δ</th><th></th></tr></thead><tbody>${bondRows}</tbody></table>` : ""}
+<h2>Reconcile (итерация)</h2>
+<table><tr><th>Заявок</th><td>${rec?.placed ?? 0}</td></tr>
+<tr><th>Уже на цели</th><td>${rec?.aligned ?? 0}</td></tr>
+<tr><th>Целей всего</th><td>${rec?.targetCount ?? "—"}</td></tr></table>
+${targetRows ? `<table><thead><tr><th>Тикер</th><th>Действие</th><th>Цель</th><th>Сейчас</th><th>Δ</th><th>Причина</th></tr></thead><tbody>${targetRows}</tbody></table>` : ""}
+<h2>Сделки итерации</h2>
+<table><thead><tr><th>Время</th><th>Тикер</th><th>Сторона</th><th>Шт</th><th>Источник</th></tr></thead><tbody>${tradeRows}</tbody></table>
+${payload.issues?.lastError ? `<p><strong>Замечание:</strong> ${esc(payload.issues.lastError)}</p>` : ""}
+</body></html>`;
+  }
+
+  async function exportSingleIterationProtocol(payload) {
+    const day = new Date().toISOString().slice(0, 10);
+    const slug = String(payload.hashTag || "iter").replace(/[^\w#-]+/g, "").replace(/^#/, "");
+    const filename = `multilogic_iteration_${payload.mode}_${slug}_${day}.html`;
+    const html = buildIterationProtocolHtml(payload);
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const preview = window.open(url, "_blank", "noopener");
+    if (!preview) {
+      setCalcStatus(`Протокол ${payload.hashTag} скачан. Разрешите всплывающие окна для предпросмотра.`);
+    }
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 120_000);
+    noteLiveTech("live-iteration-protocol", `saved ${filename}`, payload.hashTag);
+  }
+
   /** Открыть HTML-протокол и скачать автономный .html-файл (без брокера и без перезагрузки SPA). */
   async function exportTradeHistoryProtocolFile() {
     if (!isLiveMode()) return;
@@ -4687,7 +4891,7 @@ ${renderBlock}
     await refreshBondTbruTargets();
     state.live.lastCandleRefreshAt = new Date().toISOString();
     state.live.candleSource = "bond-tbru";
-    if (state.live.active && liveFinrespReady()
+    if ((state.live.active || o.forceReconcile) && liveFinrespReady()
       && !state.live.tradingActionBusy && !state.live.sellAllInFlight && !state.live.reconcileBusy) {
       await liveTradingReconcile();
     }
@@ -4810,6 +5014,8 @@ ${renderBlock}
       toggleText,
       toggleActive,
       toggleDisabled,
+      singleStepDisabled: liveCriticalSingleStepDisabled(isLive),
+      singleStepBusy: !!runSingleLiveTradingIteration._busy,
       sellAllDisabled,
     };
   }
@@ -9671,8 +9877,9 @@ ${referenceBlock}
   }
 
   /** Сверка позиций/заявок с брокером (T-Bank) или локальным ledger песочницы. */
-  async function liveTradingReconcile() {
-    if (!state.live.active) {
+  async function liveTradingReconcile(opts) {
+    const o = opts && typeof opts === "object" ? opts : {};
+    if (!state.live.active && !o.allowInactive) {
       noteLiveReconcileAbort("торговля не активна", `active=${!!state.live.active}`);
       return;
     }
@@ -10001,6 +10208,95 @@ ${referenceBlock}
     await refreshLivePortfolioStats();
     startLiveStopPoll();
     syncLiveTradingUi();
+  }
+
+  /** Одна торговая итерация без включения непрерывного опроса; протокол с хэштегом. */
+  async function runSingleLiveTradingIteration() {
+    if (!isLiveMode()) return;
+    if (runSingleLiveTradingIteration._busy) return;
+    runSingleLiveTradingIteration._busy = true;
+    const startedAt = new Date().toISOString();
+    const hashTag = `#iter-${Date.now().toString(36)}`;
+    syncLiveTradingUi();
+    try {
+      const check = validateLiveTradingStart();
+      if (!check.ok) {
+        state.live.lastError = check.error;
+        setCalcStatus(`Итерация ${hashTag}: ${check.error}`);
+        syncLiveTradingUi();
+        return;
+      }
+
+      ensureLiveChartSession();
+
+      if (isLiveSandbox()) {
+        const sb = ensureSandboxState();
+        if (!Number.isFinite(sb.startPortfolio)) {
+          await enableLiveSandbox();
+        }
+      } else {
+        if (!(await ensureTbankTokenUnlocked({ interactive: true, openUi: true, useModal: true }))) {
+          state.live.lastError = "нужен токен и пароль";
+          setCalcStatus(`Итерация ${hashTag}: расшифруйте токен брокера.`);
+          syncLiveTradingUi();
+          return;
+        }
+        if (!activeBrokerState().selectedAccountId) await loadTbankAccounts();
+        await refreshLivePortfolioStats();
+      }
+
+      const histBefore = ensureLiveTradeHistory().map((h) => h.id || h.orderId || h.when).join("|");
+      let tickOk = false;
+
+      if (bondTbruActive()) {
+        tickOk = await runBondTbruLiveSync({ force: true, forceReconcile: true });
+      } else {
+        tickOk = await refreshLiveCandleStream({ silent: false });
+        if (liveFinrespReady()) {
+          refreshLiveChartsUi();
+          await runLiveStopMonitorTick({ source: "single-iteration", includePositionStops: false });
+          await liveTradingReconcile({ allowInactive: true });
+        }
+      }
+
+      syncTradeHistoryFromSources({ force: true });
+      const histAfter = ensureLiveTradeHistory();
+      const newTrades = histAfter.filter((h) => {
+        const key = h.id || h.orderId || h.when;
+        return !histBefore.includes(String(key));
+      }).map(tradeHistoryProtocolTradeRow);
+
+      const payload = await buildSingleIterationProtocol({
+        hashTag,
+        startedAt,
+        tickOk,
+        newTrades
+      });
+      await exportSingleIterationProtocol(payload);
+
+      const rec = state.live.lastReconcile;
+      const placed = rec?.placed ?? 0;
+      const aligned = rec?.aligned ?? 0;
+      const bondNote = payload.bondReconcile?.allAligned === false
+        ? ` · облигации: ${payload.bondReconcile.summary}`
+        : (payload.bondReconcile ? " · облигации совпадают" : "");
+      setCalcStatus(
+        `Итерация ${hashTag}: заявок ${placed}, на цели ${aligned}${bondNote}. Протокол сохранён.`
+      );
+      recordLogicSessionEvent({
+        action: "single_iteration",
+        scope: "stack",
+        reason: "user_single_step",
+        meta: { hashTag, placed, aligned, tickOk }
+      });
+    } catch (err) {
+      state.live.lastError = err.message || String(err);
+      setCalcStatus(`Итерация ${hashTag}: ошибка — ${state.live.lastError}`);
+      noteLiveTech("live-single-iteration", err.message || String(err));
+    } finally {
+      runSingleLiveTradingIteration._busy = false;
+      syncLiveTradingUi();
+    }
   }
 
   /** Вкл/выкл live-торговлю: старт/стоп опросов, reconcile, FINRESP на барах. */
@@ -10973,6 +11269,7 @@ ${referenceBlock}
       bootstrapBrokerOnPageInit,
       closeTbankPassphraseModal,
       toggleLiveTrading,
+      runSingleLiveTradingIteration,
       sellAllMarketLive,
       liveTradingReconcile,
       refreshLiveCandleStream,
