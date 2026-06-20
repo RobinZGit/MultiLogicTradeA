@@ -2767,12 +2767,12 @@
     return !isLive;
   }
 
-  /** Одна итерация: не во время reconcile/sell-all; в реале — не на время полного расчёта. */
+  /** Одна итерация: как «Начать торговлю», плюс блок на время самой итерации и sell-all. */
   function liveCriticalSingleStepDisabled(isLive) {
     if (!isLive) return true;
     if (runSingleLiveTradingIteration._busy) return true;
-    if (state.live.reconcileBusy || state.live.tradingActionBusy || state.live.sellAllInFlight) return true;
-    if (!isLiveSandbox() && state.uiBusy) return true;
+    if (state.live.sellAllInFlight) return true;
+    if (!isLiveSandbox() && state.uiBusy && !state.live.active) return true;
     return false;
   }
 
@@ -5077,6 +5077,7 @@ ${payload.issues?.lastError ? `<p><strong>Замечание:</strong> ${esc(pay
       bindLivePanelHeavyRenderOnOpen();
       bindTradeHistoryProtocolExport();
       bindLiveSessionClearUi();
+      bindLiveSingleStepUi();
       bindLiveGoalUi();
       bindLiveNotifyUi();
       if (!shouldThrottleLiveGoalUi(options)) {
@@ -7346,6 +7347,32 @@ ${payload.issues?.lastError ? `<p><strong>Замечание:</strong> ${esc(pay
     syncLiveTradingUi({ skipGoalCheck: true });
     refreshLiveEquityChartsUi();
     noteLiveTech("live-session-clear", `${brokerId} sandbox=${sandbox}`);
+  }
+
+  function bindLiveSingleStepUi() {
+    const btn = $("live-trading-single-step");
+    if (!btn || btn.dataset.liveSingleStepBound === "1") return;
+    btn.dataset.liveSingleStepBound = "1";
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!isLiveMode()) return;
+      if (liveCriticalSingleStepDisabled(true)) {
+        if (runSingleLiveTradingIteration._busy) {
+          setCalcStatus("Итерация уже выполняется…");
+        } else if (state.live.sellAllInFlight) {
+          setCalcStatus("Дождитесь завершения «Закрыть все позиции».");
+        } else if (!isLiveSandbox() && state.uiBusy && !state.live.active) {
+          setCalcStatus("Дождитесь окончания расчёта FINRESP.");
+        }
+        return;
+      }
+      void runSingleLiveTradingIteration().catch((err) => {
+        state.live.lastError = err.message || String(err);
+        syncLiveTradingUi();
+        noteLiveTech("runSingleLiveTradingIteration", state.live.lastError);
+      });
+    });
   }
 
   function bindLiveSessionClearUi() {

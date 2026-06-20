@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-20-live-single-step-v35b";
+  const CALC_PAGE_VERSION = "2026-06-20-live-single-step-v35d";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -9452,6 +9452,7 @@ ${referenceBlock}
       if (singleBtn) {
         e.preventDefault();
         e.stopPropagation();
+        if (singleBtn.classList.contains("live-trading-btn-single--disabled")) return;
         runSingleLiveTradingIteration().catch((err) => {
           state.live.lastError = err.message;
           syncLiveTradingUi();
