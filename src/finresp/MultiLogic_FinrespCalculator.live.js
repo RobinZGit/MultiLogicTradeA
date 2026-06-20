@@ -3797,10 +3797,18 @@ ${renderBlock}
     };
   }
 
+  function iterationProtocolFmtYield(pct) {
+    if (!Number.isFinite(pct)) return "—";
+    return `${pct.toFixed(2).replace(".", ",")}%`;
+  }
+
+  const ITERATION_BOND_YIELD_HEADER = "Доходность, % годовых (номинал × купон% ÷ чистая цена)";
+
   /** Полная сверка облигаций TBRU: счёт vs цель фонда (даже без сделок). */
   async function buildBondTbruReconcileProtocol() {
     const proc = bondTbruProc();
     const data = bondTbruData();
+    const holdings = data?.holdings || [];
     const targets = state.live.bondTbruTargets || [];
     const sandbox = isLiveSandbox();
     const actual = sandbox ? sandboxPositionsByTicker() : await tbankPositionsByTicker();
@@ -3810,45 +3818,79 @@ ${renderBlock}
       if (!proc?.isBondIsin(sec)) continue;
       positionsBySec[sec] = Math.max(0, Math.trunc(+pos.pieces || 0));
     }
-    const rows = [];
-    const seen = new Set();
+    const targetBySec = {};
+    const priceFromTarget = {};
     for (const t of targets) {
       const sec = String(t.sec || "").toUpperCase();
       if (!sec) continue;
-      seen.add(sec);
-      const tgt = Math.max(0, Math.trunc(+t.pos || 0));
+      targetBySec[sec] = Math.max(0, Math.trunc(+t.pos || 0));
+      if (Number.isFinite(+t.unitPrice) && +t.unitPrice > 0) priceFromTarget[sec] = +t.unitPrice;
+    }
+    const pricesBySec = {};
+    for (const h of holdings) {
+      const sec = String(h.sec || "").toUpperCase();
+      pricesBySec[sec] = priceFromTarget[sec]
+        ?? state.live.bondSandboxQuotes?.[sec]
+        ?? bondSandboxUnitPrice(h);
+    }
+    const fundRows = [];
+    for (const h of holdings) {
+      const sec = String(h.sec || "").toUpperCase();
+      if (!sec) continue;
+      const tgt = targetBySec[sec] ?? 0;
       const cur = positionsBySec[sec] ?? 0;
-      rows.push({
+      const unitPrice = pricesBySec[sec];
+      const yieldPct = proc?.bondCurrentYieldPct ? proc.bondCurrentYieldPct(h, unitPrice) : null;
+      fundRows.push({
         sec,
         inFund: true,
+        weight: h.weight,
+        yieldPct,
+        unitPrice,
+        couponAnnualPct: h.couponAnnualPct,
+        nominal: h.nominal,
         targetPieces: tgt,
         accountPieces: cur,
         delta: tgt - cur,
         aligned: tgt === cur,
-        weight: t.weight,
-        unitPrice: t.unitPrice
+        onAccount: cur > 0
       });
     }
+    fundRows.sort((a, b) => {
+      if (a.onAccount !== b.onAccount) return a.onAccount ? -1 : 1;
+      const dy = (b.yieldPct ?? 0) - (a.yieldPct ?? 0);
+      if (Math.abs(dy) > 1e-9) return dy;
+      return (b.weight || 0) - (a.weight || 0);
+    });
+    const seen = new Set(fundRows.map((r) => r.sec));
+    const orphanRows = [];
     for (const [sec, cur] of Object.entries(positionsBySec)) {
       if (seen.has(sec)) continue;
-      rows.push({
+      orphanRows.push({
         sec,
         inFund: false,
+        weight: null,
+        yieldPct: null,
         targetPieces: 0,
         accountPieces: cur,
         delta: -cur,
         aligned: cur === 0,
-        orphan: true
+        orphan: true,
+        onAccount: cur > 0
       });
     }
+    const rows = [...fundRows, ...orphanRows];
     const mismatches = rows.filter((r) => !r.aligned);
     return {
       fundSource: data?.source || "https://porti.ru/etf/holders/MOEX:TBRU",
       asOf: data?.asOf || null,
+      yieldColumnTitle: ITERATION_BOND_YIELD_HEADER,
       allAligned: mismatches.length === 0,
       summary: mismatches.length === 0
         ? "Все облигации на счёте совпадают с целью по составу фонда (или вне deploy-конверта)."
         : `Расхождений: ${mismatches.length} из ${rows.length} строк сверки.`,
+      fundRows,
+      orphanRows,
       rows
     };
   }
@@ -3887,10 +3929,16 @@ ${renderBlock}
     const bond = payload.bondReconcile;
     const rec = payload.reconcile;
     const trades = payload.trades || [];
-    const bondRows = (bond?.rows || []).map((r) => {
+    const bondRows = (bond?.fundRows || bond?.rows || []).map((r) => {
       const cls = r.aligned ? "ok" : "warn";
       const tag = r.orphan ? "вне фонда" : (r.inFund ? "в фонде" : "—");
-      return `<tr class="${cls}"><td>${esc(r.sec)}</td><td>${esc(tag)}</td><td>${r.targetPieces}</td><td>${r.accountPieces}</td><td>${r.delta >= 0 ? "+" : ""}${r.delta}</td><td>${r.aligned ? "✓" : "≠"}</td></tr>`;
+      const weight = Number.isFinite(r.weight) ? r.weight.toFixed(2).replace(".", ",") : "—";
+      const yieldCell = r.inFund ? iterationProtocolFmtYield(r.yieldPct) : "—";
+      return `<tr class="${cls}"><td>${esc(r.sec)}</td><td>${esc(tag)}</td><td>${weight}</td><td>${yieldCell}</td><td>${r.accountPieces}</td><td>${r.targetPieces}</td><td>${r.delta >= 0 ? "+" : ""}${r.delta}</td><td>${r.aligned ? "✓" : "≠"}</td></tr>`;
+    }).join("");
+    const orphanRowsHtml = (bond?.orphanRows || []).map((r) => {
+      const cls = r.aligned ? "ok" : "warn";
+      return `<tr class="${cls}"><td>${esc(r.sec)}</td><td>вне фонда</td><td>—</td><td>—</td><td>${r.accountPieces}</td><td>0</td><td>${r.delta >= 0 ? "+" : ""}${r.delta}</td><td>${r.aligned ? "✓" : "≠"}</td></tr>`;
     }).join("");
     const targetRows = (rec?.targetDetails || []).map((td) => {
       return `<tr><td>${esc(td.sec || td.ticker)}</td><td>${esc(td.action)}</td><td>${td.target ?? "—"}</td><td>${td.current ?? "—"}</td><td>${td.delta ?? "—"}</td><td>${esc(td.reason || "")}</td></tr>`;
@@ -3907,6 +3955,8 @@ table{border-collapse:collapse;width:100%;margin:.5rem 0 1rem;font-size:.88rem}
 th,td{border:1px solid #cbd5e1;padding:.35rem .5rem;text-align:left}
 th{background:#f1f5f9} tr.ok td:last-child{color:#047857;font-weight:700} tr.warn td:last-child{color:#b45309;font-weight:700}
 .meta{color:#64748b;font-size:.9rem}
+.col-hint{font-weight:500;font-size:.78rem;color:#64748b}
+tr.fund-section td{background:#f8fafc}
 </style></head><body>
 <h1>Однократная торговая итерация <span class="tag">${esc(payload.hashTag)}</span></h1>
 <p class="meta">${esc(payload.exportedAt)} · ${esc(payload.mode)} · ${esc(payload.pageVersion || "—")}</p>
@@ -3920,9 +3970,10 @@ ${fund ? `<h2>Состав фонда TBRU (porti.ru)</h2>
 <table><tr><th>Источник</th><td><a href="${esc(fund.sourceUrl)}">${esc(fund.sourceUrl)}</a></td></tr>
 <tr><th>Срез asOf</th><td>${esc(fund.asOf || "—")}</td></tr>
 <tr><th>Позиций в фонде</th><td>${fund.holdingsCount}</td></tr></table>` : ""}
-${bond ? `<h2>Сверка облигаций (счёт vs цель фонда)</h2>
+${bond ? `<h2>Состав и сверка облигаций TBRU (porti.ru)</h2>
 <p><strong>${esc(bond.summary)}</strong></p>
-<table><thead><tr><th>ISIN</th><th>Роль</th><th>Цель, шт</th><th>На счёте, шт</th><th>Δ</th><th></th></tr></thead><tbody>${bondRows}</tbody></table>` : ""}
+<p class="meta">Срез фонда: ${esc(bond.asOf || "—")} · сначала ISIN на счёте, затем остальные бумаги фонда с нулевыми количествами.</p>
+<table><thead><tr><th>ISIN</th><th>Роль</th><th>Вес в фонде, %</th><th>${esc(bond.yieldColumnTitle || ITERATION_BOND_YIELD_HEADER)}</th><th>На счёте, шт</th><th>Цель, шт</th><th>Δ</th><th></th></tr></thead><tbody>${bondRows}${orphanRowsHtml}</tbody></table>` : ""}
 <h2>Reconcile (итерация)</h2>
 <table><tr><th>Заявок</th><td>${rec?.placed ?? 0}</td></tr>
 <tr><th>Уже на цели</th><td>${rec?.aligned ?? 0}</td></tr>
