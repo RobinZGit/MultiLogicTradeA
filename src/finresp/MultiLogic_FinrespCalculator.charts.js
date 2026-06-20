@@ -4,7 +4,7 @@
 (function (root) {
   "use strict";
 
-  const CHARTS_MODULE_VERSION = "2026-06-19-indicator-toggle-v3";
+  const CHARTS_MODULE_VERSION = "2026-06-20-chart-ind-controls-v12";
 
   const PRICE_KEYS = [
     "high", "low", "open", "close",
@@ -157,10 +157,14 @@
   }
 
   /** Легенда линий индикаторов под графиком (только присутствующие в данных). */
-  function buildIndicatorLegend(rows) {
+  function buildIndicatorLegend(rows, extraIndLines) {
     const items = [];
     const active = IND_LINE.filter((spec) => rowHasKey(rows, spec.key));
     for (const spec of active) {
+      items.push(`<span class="ml-chart-legend-item">${legendLineSample(spec)}<span>${esc(spec.label)}</span></span>`);
+    }
+    for (const spec of extraIndLines || []) {
+      if (!rowHasKey(rows, spec.key)) continue;
       items.push(`<span class="ml-chart-legend-item">${legendLineSample(spec)}<span>${esc(spec.label)}</span></span>`);
     }
     if (rowHasEquity(rows)) {
@@ -346,7 +350,8 @@
       secTitle = "",
       compact = false,
       decor = {},
-      format = {}
+      format = {},
+      extraIndLines = []
     } = options || {};
     const axisPrice = format.axisPrice || ((v) => String(v));
     const axisTime = format.axisTime || ((t) => String(t ?? ""));
@@ -373,7 +378,8 @@
     const plotH = h - top - bottom;
 
     const slice = rows.slice(v0, v1 + 1);
-    let vals = slice.flatMap((r) => PRICE_KEYS.map((k) => r?.[k]).filter((v) => v != null));
+    const extraKeys = (extraIndLines || []).map((s) => s.key);
+    let vals = slice.flatMap((r) => [...PRICE_KEYS, ...extraKeys].map((k) => r?.[k]).filter((v) => v != null));
     if (!vals.length) return "";
     const min = Math.min(...vals);
     const max = Math.max(...vals);
@@ -437,16 +443,28 @@
 </g>`;
     }).join("");
 
-    const indLines = IND_LINE.filter((spec) => rowHasKey(slice, spec.key)).map((spec) => {
-      const pts = slice.map((r, j) => {
-        const v = r?.[spec.key];
-        if (v == null) return null;
-        return `${x(v0 + j).toFixed(1)},${y(v).toFixed(1)}`;
-      }).filter(Boolean).join(" ");
-      if (!pts) return "";
-      const dash = spec.dash ? ` stroke-dasharray="${spec.dash}"` : "";
-      return `<polyline fill="none" stroke="${spec.stroke}" stroke-width="${spec.width}"${dash} opacity="${spec.opacity}" points="${pts}"/>`;
-    }).join("");
+    const indLines = [
+      ...IND_LINE.filter((spec) => rowHasKey(slice, spec.key)).map((spec) => {
+        const pts = slice.map((r, j) => {
+          const v = r?.[spec.key];
+          if (v == null) return null;
+          return `${x(v0 + j).toFixed(1)},${y(v).toFixed(1)}`;
+        }).filter(Boolean).join(" ");
+        if (!pts) return "";
+        const dash = spec.dash ? ` stroke-dasharray="${spec.dash}"` : "";
+        return `<polyline fill="none" stroke="${spec.stroke}" stroke-width="${spec.width}"${dash} opacity="${spec.opacity}" points="${pts}"/>`;
+      }),
+      ...(extraIndLines || []).filter((spec) => rowHasKey(slice, spec.key)).map((spec) => {
+        const pts = slice.map((r, j) => {
+          const v = r?.[spec.key];
+          if (v == null) return null;
+          return `${x(v0 + j).toFixed(1)},${y(v).toFixed(1)}`;
+        }).filter(Boolean).join(" ");
+        if (!pts) return "";
+        const dash = spec.dash ? ` stroke-dasharray="${spec.dash}"` : "";
+        return `<polyline fill="none" stroke="${spec.stroke}" stroke-width="${spec.width}"${dash} opacity="${spec.opacity}" points="${pts}"><title>${esc(spec.label)}</title></polyline>`;
+      })
+    ].join("");
 
     let eqLine = "";
     if (showEq && yEq) {
@@ -588,6 +606,7 @@ ${finBadgeSvg}
     let interactRaf = 0;
     let pendingView = null;
     let indicatorsOnChart = false;
+    let extraIndLines = Array.isArray(options?.extraIndLines) ? [...options.extraIndLines] : [];
 
     host.innerHTML = "";
     const wrap = document.createElement("div");
@@ -595,6 +614,11 @@ ${finBadgeSvg}
 
     let copyBtn = null;
     let indBtn = null;
+    let addIndBtn = null;
+    let removeIndBtn = null;
+    const logicIndLabel = options?.logicIndBtnLabel || "Индикаторы логик";
+    const logicIndOnLabel = options?.logicIndBtnOnLabel || "Индикаторы логик на графике";
+    const removeIndLabel = options?.removeIndBtnLabel || "Удалить индикаторы";
     if (options?.secTitle) {
       const header = document.createElement("div");
       header.className = "chart-mini-header";
@@ -611,15 +635,28 @@ ${finBadgeSvg}
       if (typeof options?.indicatorLoader === "function") {
         indBtn = document.createElement("button");
         indBtn.type = "button";
-        indBtn.className = "ml-chart-copy-btn";
-        indBtn.textContent = "Показать индикаторы";
-        indBtn.title = "Загрузить линии выбранных индикаторов и легенду только для этого графика";
+        indBtn.className = "ml-chart-copy-btn ml-chart-logic-ind-btn";
+        indBtn.textContent = logicIndLabel;
+        indBtn.title = "Показать линии индикаторов выбранных логик на этом графике";
         indBtn.addEventListener("click", async (ev) => {
           ev.stopPropagation();
           if (indicatorsOnChart) return;
+          if (typeof options?.onChartIndicatorClickStart === "function") {
+            options.onChartIndicatorClickStart();
+          }
           indBtn.disabled = true;
           const prev = indBtn.textContent;
           indBtn.textContent = "Загрузка…";
+          let uiDone = false;
+          const stuckTimer = setTimeout(() => {
+            if (!uiDone) {
+              indBtn.disabled = false;
+              indBtn.textContent = prev;
+              if (typeof options?.onChartIndicatorStuck === "function") {
+                options.onChartIndicatorStuck();
+              }
+            }
+          }, 50000);
           await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
           try {
             await options.indicatorLoader();
@@ -630,18 +667,180 @@ ${finBadgeSvg}
             }
             indicatorsOnChart = true;
             view = { start: 0, end: rows.length - 1 };
+            indBtn.textContent = logicIndOnLabel;
+            indBtn.classList.add("ml-chart-copy-btn--ok");
+            indBtn.disabled = false;
+            if (typeof options?.onChartIndicatorPhase === "function") {
+              options.onChartIndicatorPhase("render");
+            }
             await new Promise((resolve) => requestAnimationFrame(resolve));
             render();
-            indBtn.textContent = "Индикаторы на графике";
-            indBtn.classList.add("ml-chart-copy-btn--ok");
-          } catch (_) {
+            if (typeof options?.onChartIndicatorPhase === "function") {
+              options.onChartIndicatorPhase("done");
+            }
+          } catch (err) {
             indBtn.disabled = false;
-            indBtn.textContent = prev;
+            const msg = String(err?.message || "");
+            if (msg.includes("chart-ind-no-calc")) indBtn.textContent = "Сначала «Рассчитать»";
+            else if (msg.includes("timeout")) indBtn.textContent = "Таймаут";
+            else indBtn.textContent = "Ошибка загрузки";
+            indBtn.classList.add("ml-chart-copy-btn--err");
+            setTimeout(() => {
+              indBtn.textContent = prev;
+              indBtn.classList.remove("ml-chart-copy-btn--err");
+            }, 2800);
+          } finally {
+            uiDone = true;
+            clearTimeout(stuckTimer);
+          }
+        });
+      }
+      if (typeof options?.openAddIndicatorDialog === "function" && typeof options?.applyAddIndicatorText === "function") {
+        addIndBtn = document.createElement("button");
+        addIndBtn.type = "button";
+        addIndBtn.className = "ml-chart-copy-btn ml-chart-add-ind-btn";
+        addIndBtn.textContent = "Добавить индикатор";
+        addIndBtn.title = "Выбрать и отредактировать индикаторы с параметрами; несколько строк — несколько линий на графике";
+        addIndBtn.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          const prev = addIndBtn.textContent;
+          let uiDone = false;
+          const stuckTimer = setTimeout(() => {
+            if (!uiDone) {
+              addIndBtn.disabled = false;
+              addIndBtn.textContent = prev;
+              if (typeof options?.onChartIndicatorStuck === "function") {
+                options.onChartIndicatorStuck();
+              }
+            }
+          }, 50000);
+          try {
+            const dlgResult = await options.openAddIndicatorDialog();
+            if (!dlgResult?.ok) return;
+            addIndBtn.disabled = true;
+            addIndBtn.textContent = "Загрузка…";
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const result = await options.applyAddIndicatorText(dlgResult.text);
+            if (!result?.ok) {
+              addIndBtn.disabled = false;
+              addIndBtn.textContent = prev;
+              if (result?.messages?.length && typeof options?.onChartAddIndicatorMessage === "function") {
+                options.onChartAddIndicatorMessage(result.messages);
+              }
+              return;
+            }
+            if (!result.lineSpecs?.length) {
+              addIndBtn.disabled = false;
+              addIndBtn.textContent = prev;
+              if (typeof options?.onChartAddIndicatorMessage === "function") {
+                options.onChartAddIndicatorMessage(result.messages?.length
+                  ? result.messages
+                  : ["Индикаторы не отрисованы — нет линий для графика"]);
+              }
+              return;
+            }
+            extraIndLines = result.lineSpecs;
+            indicatorsOnChart = true;
+            view = { start: 0, end: rows.length - 1 };
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+            render();
+            addIndBtn.textContent = "Индикаторы добавлены";
+            addIndBtn.classList.add("ml-chart-copy-btn--ok");
+            addIndBtn.disabled = false;
+          } catch (_) {
+            addIndBtn.disabled = false;
+            addIndBtn.textContent = prev;
+          } finally {
+            uiDone = true;
+            clearTimeout(stuckTimer);
+          }
+        });
+      } else if (typeof options?.addIndicatorHandler === "function") {
+        addIndBtn = document.createElement("button");
+        addIndBtn.type = "button";
+        addIndBtn.className = "ml-chart-copy-btn ml-chart-add-ind-btn";
+        addIndBtn.textContent = "Добавить индикатор";
+        addIndBtn.title = "Выбрать и отредактировать индикаторы с параметрами; несколько строк — несколько линий на графике";
+        addIndBtn.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          const prev = addIndBtn.textContent;
+          let uiDone = false;
+          const stuckTimer = setTimeout(() => {
+            if (!uiDone) {
+              addIndBtn.disabled = false;
+              addIndBtn.textContent = prev;
+              if (typeof options?.onChartIndicatorStuck === "function") {
+                options.onChartIndicatorStuck();
+              }
+            }
+          }, 50000);
+          try {
+            const result = await options.addIndicatorHandler();
+            if (!result?.refresh) return;
+            addIndBtn.disabled = true;
+            addIndBtn.textContent = "Загрузка…";
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            if (result.lineSpecs?.length) extraIndLines = result.lineSpecs;
+            indicatorsOnChart = true;
+            view = { start: 0, end: rows.length - 1 };
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+            render();
+            addIndBtn.textContent = "Индикаторы добавлены";
+            addIndBtn.classList.add("ml-chart-copy-btn--ok");
+            addIndBtn.disabled = false;
+          } catch (_) {
+            addIndBtn.disabled = false;
+            addIndBtn.textContent = prev;
+          } finally {
+            uiDone = true;
+            clearTimeout(stuckTimer);
+          }
+        });
+      }
+      if (typeof options?.clearIndicatorsHandler === "function") {
+        removeIndBtn = document.createElement("button");
+        removeIndBtn.type = "button";
+        removeIndBtn.className = "ml-chart-copy-btn ml-chart-remove-ind-btn";
+        removeIndBtn.textContent = removeIndLabel;
+        removeIndBtn.title = "Снять все линии индикаторов: из логик и добавленные вручную";
+        removeIndBtn.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          removeIndBtn.disabled = true;
+          const prev = removeIndBtn.textContent;
+          removeIndBtn.textContent = "Удаление…";
+          try {
+            const result = await options.clearIndicatorsHandler();
+            if (!result?.refresh) {
+              removeIndBtn.disabled = false;
+              removeIndBtn.textContent = prev;
+              return;
+            }
+            extraIndLines = [];
+            indicatorsOnChart = false;
+            view = { start: 0, end: rows.length - 1 };
+            if (indBtn) {
+              indBtn.disabled = false;
+              indBtn.textContent = logicIndLabel;
+              indBtn.classList.remove("ml-chart-copy-btn--ok", "ml-chart-copy-btn--err");
+            }
+            if (addIndBtn) {
+              addIndBtn.disabled = false;
+              addIndBtn.textContent = "Добавить индикатор";
+              addIndBtn.classList.remove("ml-chart-copy-btn--ok");
+            }
+            render();
+            removeIndBtn.textContent = removeIndLabel;
+          } catch (_) {
+            removeIndBtn.textContent = prev;
+          } finally {
+            removeIndBtn.disabled = false;
           }
         });
       }
       actions.appendChild(copyBtn);
       if (indBtn) actions.appendChild(indBtn);
+      if (addIndBtn) actions.appendChild(addIndBtn);
+      if (removeIndBtn) actions.appendChild(removeIndBtn);
       actions.appendChild(buildChartNavToolbar());
       header.appendChild(titleEl);
       header.appendChild(actions);
@@ -744,12 +943,12 @@ ${finBadgeSvg}
 
     function renderChartOnly() {
       normalizeView();
-      viewport.innerHTML = renderChartSvg(rows, view, options);
+      viewport.innerHTML = renderChartSvg(rows, view, { ...options, extraIndLines });
     }
 
     function render() {
       renderChartOnly();
-      legendHost.innerHTML = buildIndicatorLegend(rows);
+      legendHost.innerHTML = buildIndicatorLegend(rows, extraIndLines);
     }
 
     if (copyBtn) wireCopyButton(copyBtn, viewport);
@@ -944,10 +1143,26 @@ ${finBadgeSvg}
         view = { start: 0, end: rows.length - 1 };
         render();
         if (indBtn) {
-          indBtn.textContent = "Индикаторы на графике";
+          indBtn.textContent = logicIndOnLabel;
           indBtn.classList.add("ml-chart-copy-btn--ok");
           indBtn.disabled = true;
         }
+      },
+      clearIndicators() {
+        extraIndLines = [];
+        indicatorsOnChart = false;
+        view = { start: 0, end: rows.length - 1 };
+        if (indBtn) {
+          indBtn.disabled = false;
+          indBtn.textContent = logicIndLabel;
+          indBtn.classList.remove("ml-chart-copy-btn--ok", "ml-chart-copy-btn--err");
+        }
+        if (addIndBtn) {
+          addIndBtn.disabled = false;
+          addIndBtn.textContent = "Добавить индикатор";
+          addIndBtn.classList.remove("ml-chart-copy-btn--ok");
+        }
+        render();
       },
       panByBars,
       zoomIn() {

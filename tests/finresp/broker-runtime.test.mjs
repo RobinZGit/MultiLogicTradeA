@@ -153,9 +153,13 @@ test('source contracts: page init bootstrap broker connect + deposit', () => {
   const boot = fs.readFileSync(bootPath, 'utf8');
 
   assert.match(live, /function bootstrapBrokerOnPageInit\(\)/);
+  assert.match(live, /function connectTbankForLiveBackground\(source\)/);
+  assert.match(boot, /connectTbankForLiveBackground\("page-init"\)/);
   assert.match(boot, /bootstrapBrokerOnPageInit\(\)/);
   assert.match(boot, /trackBootBackground/);
   assert.match(boot, /setBootStatus/);
+  assert.match(boot, /onAngularScriptsReady/);
+  assert.match(boot, /bootWatchdogFired/);
   assert.match(boot, /if \(!state\.tbank\.token\) state\.tbank\.depositLoaded = false/);
 
   const connectBlock = live.match(/function scheduleBrokerConnectIfReady\(source\)[\s\S]*?^  \}/m);
@@ -163,6 +167,11 @@ test('source contracts: page init bootstrap broker connect + deposit', () => {
   assert.match(connectBlock[0], /isPageInit/);
   assert.match(connectBlock[0], /return scheduleBrokerUnlockPrompt/);
   assert.match(connectBlock[0], /interactive:\s*false/);
+
+  const liveBgBlock = live.match(/function connectTbankForLiveBackground\(source\)[\s\S]*?^  \}/m);
+  assert.ok(liveBgBlock);
+  assert.match(liveBgBlock[0], /interactive:\s*false/);
+  assert.doesNotMatch(liveBgBlock[0], /interactive:\s*true/);
 
   const unlockBlock = live.match(/function scheduleBrokerUnlockPrompt\(source, opsGen\)[\s\S]*?^  \}/m);
   assert.ok(unlockBlock);

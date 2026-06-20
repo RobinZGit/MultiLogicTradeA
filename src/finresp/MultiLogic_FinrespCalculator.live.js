@@ -10392,6 +10392,61 @@ ${referenceBlock}
     }, 15000);
   }
 
+  /** Фоновое подключение при загрузке страницы — без модального пароля (не блокирует баннер). */
+  async function connectTbankForLiveBackground(source) {
+    if (!isLiveMode()) return;
+    const src = source || "page-init";
+    if (isLiveSandbox()) {
+      await yieldToUi();
+      await enableLiveSandbox().catch((err) => {
+        noteLiveTech("connectTbankForLiveBackground-sandbox", err.message);
+      });
+      syncLiveTradingUi();
+      return;
+    }
+    if (!safeStorageGet(brokerTokenStoreKey())) return;
+    if (!activeBrokerState().token && !getBrokerPassphrase()) {
+      const hint = `Брокер ${brokerLabel()}: введите пароль в блоке настроек и нажмите «Расшифровать и подключить».`;
+      setBrokerConnectionStatus(hint, true);
+      noteBrokerTechDeduped("unlock-needed", src);
+      return;
+    }
+    const connectGen = brokerOpsGeneration;
+    const brokerAtStart = readBrokerIdFromUi();
+    try {
+      await brokerConnectTimeout((async () => {
+        await yieldToUi();
+        if (isStaleBrokerOps(connectGen) || readBrokerIdFromUi() !== brokerAtStart) return;
+        if (!(await ensureTbankTokenUnlocked({
+          interactive: false,
+          openUi: false,
+          useModal: false,
+          loadDeposit: false
+        }))) {
+          noteBrokerTechDeduped("unlock-needed", `${src}-no-token`);
+          return;
+        }
+        if (isStaleBrokerOps(connectGen) || readBrokerIdFromUi() !== brokerAtStart) return;
+        await ensureBrokerDepositLoaded();
+        tryRestoreLiveSessionFromStorage({ sandbox: false, onlyIfEmpty: true });
+        await refreshLiveOrders();
+        await refreshLivePortfolioStats();
+        startLiveStopPoll();
+        syncLiveTradingUi();
+      })(), brokerLabel());
+    } catch (err) {
+      const msg = err?.message || String(err);
+      setBrokerConnectionStatus(`Подключение: ${msg}`, true);
+      noteBrokerTech("live-init-bg-fail", msg);
+      if (/таймаут|timeout/i.test(msg)) {
+        setCalcStatus(`Брокер ${brokerLabel()}: сервис не отвечает (${msg}). Форма доступна.`);
+      }
+      window.__mlFinresp?.forceClearBootStatus?.(
+        `Брокер ${brokerLabel()}: сервис не отвечает — форма доступна.`
+      );
+    }
+  }
+
   /** Подключение T-Bank перед live-торговлей (токен, счёт, депозит). */
   async function connectTbankForLive() {
     if (!isLiveMode()) return;
@@ -11388,6 +11443,7 @@ ${referenceBlock}
     }
     syncAccountModeUi();
     if (state.accountMode !== "live") {
+      window.__mlFinresp?.forceClearBootStatus?.();
       if (state.packs.length && (!isTbankBackedMode() || activeBrokerState().depositLoaded)) invalidateFinrespResult();
     }
   }
@@ -11449,6 +11505,7 @@ ${referenceBlock}
       initAccountMode,
       connectTbankAndLoadDeposit,
       connectTbankForLive,
+      connectTbankForLiveBackground,
       saveTbankToken,
       saveAlorToken,
       unlockTbankTokenInteractive,

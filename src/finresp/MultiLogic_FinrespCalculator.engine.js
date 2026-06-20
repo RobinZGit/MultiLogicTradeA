@@ -1897,18 +1897,612 @@
 
   /** Колонки индикаторов по барам пакета (для быстрого наложения на строки графика). */
   function buildChartDisplayIndicatorColumns(cache, specs, indicatorSelection) {
-    warmChartDisplayIndicatorSeries(cache, specs, indicatorSelection);
-    const n = cache.candles.length;
-    const columns = {};
-    for (let idx = 0; idx < n; idx++) {
-      const ind = collectChartIndicatorsForDisplay(cache, specs, indicatorSelection, idx);
-      for (const [k, v] of Object.entries(ind)) {
-        if (v == null) continue;
-        if (!columns[k]) columns[k] = new Array(n);
-        columns[k][idx] = v;
+    return buildChartDisplayIndicatorColumnsFast(cache, specs, indicatorSelection);
+  }
+
+  /** Список шагов warm для ценовых оверлеев (без warmChartIndicatorCacheForSpecs). */
+  function listChartOverlayWarmThunks(cache, specs, indicatorSelection) {
+    const thunks = [];
+    const seen = new Set();
+    const q = (sig, fn) => {
+      if (seen.has(sig)) return;
+      seen.add(sig);
+      thunks.push(fn);
+    };
+
+    const queueAtom = (atom) => {
+      const pm = parseParamsMap(atom.params);
+      const kind = indicatorKey(atom.kind);
+      if (kind === "sma") {
+        const len = pm.L || parseInt(atom.params, 10) || 100;
+        q(`sma:${len}`, () => cache.sma(len));
+        const spreadRaw = pm.Spread ?? pm.spread;
+        if (spreadRaw) q(`atr:${parseLinRegAtrLen(pm)}`, () => cache.atr(parseLinRegAtrLen(pm)));
+      } else if (kind === "cma") {
+        const len = pm.L || parseInt(atom.params, 10) || 100;
+        const powRaw = pm.P ?? pm.Pow ?? pm.pow ?? pm.Deg ?? pm.deg;
+        const pow = powRaw != null && powRaw !== "" ? parseFloat(powRaw) : 1;
+        q(`cma:${len};${pow}`, () => cache.cma(len, Number.isFinite(pow) ? pow : 1));
+      } else if (kind === "linreg") {
+        const len = pm.L || parseInt(atom.params, 10) || 20;
+        const useAtrBand = pm.K != null || pm.k != null
+          || /BLLINK|ABLINK|ABREGK|BLREGK/i.test(String(atom.signal || ""));
+        if (useAtrBand) {
+          const kMult = parseLinRegK(pm, atom.params);
+          const atrLen = parseLinRegAtrLen(pm);
+          q(`linregAtr:${len};${kMult};${atrLen}`, () => cache.linregAtr(len, kMult, atrLen));
+        } else {
+          const dev = parseFloat(pm.Dev || pm.dev || "2");
+          q(`linreg:${len};${dev}`, () => cache.linreg(len, dev));
+        }
+      } else if (kind === "bollinger") {
+        const len = pm.L || parseInt(atom.params, 10) || 20;
+        const dev = parseFloat(pm.Dev || pm.dev || "2");
+        q(`boll:${len};${dev}`, () => cache.bollinger(len, dev));
+      } else if (kind === "vwap") {
+        q("vwap", () => cache.vwap());
+      }
+    };
+
+    for (const spec of specs || []) {
+      if (!spec || spec.disabled) continue;
+      if (spec.type === "logic_line" && spec.parsed) {
+        for (const atom of [...(spec.parsed.opAtoms || []), ...(spec.parsed.clAtoms || [])]) {
+          queueAtom(atom);
+        }
+      } else if (spec.type === "sma_spread" || spec.type === "sma_corridor") {
+        const len = spec.smaLen || 100;
+        q(`sma:${len}`, () => cache.sma(len));
+        if (spec.type === "sma_corridor") {
+          const atrLen = Math.max(2, Number(spec.slTpAtrLen) || DEFAULT_PARAMS.slTpAtrLen);
+          q(`atr:${atrLen}`, () => cache.atr(atrLen));
+        }
+      } else if (spec.type === "cma_spread") {
+        const len = spec.cmaLen || 100;
+        const pow = Number.isFinite(spec.cmaPow) ? spec.cmaPow : 1;
+        q(`cma:${len};${pow}`, () => cache.cma(len, pow));
       }
     }
+
+    const sel = normalizeIndicatorSelection(indicatorSelection);
+    if (sel.sma) q("sma:100", () => cache.sma(100));
+    if (sel.cma) q("cma:100;1", () => cache.cma(100, 1));
+    if (sel.linreg) q("linreg:20;2", () => cache.linreg(20, 2));
+    if (sel.bollinger) q("boll:20;2", () => cache.bollinger(20, 2));
+    if (sel.vwap) q("vwap", () => cache.vwap());
+    return thunks;
+  }
+
+  /**
+   * План ценовых оверлеев: полные серии (без цикла collect* на каждом баре).
+   * @returns {{ key: string, values: (number|null)[] }[]}
+   */
+  function chartDisplayOverlaySeriesPlan(cache, specs, indicatorSelection) {
+    const n = cache?.candles?.length || 0;
+    if (!n) return [];
+    const entries = [];
+    const seen = new Set();
+
+    const add = (key, values) => {
+      if (!key || seen.has(key) || !values?.length) return;
+      seen.add(key);
+      entries.push({ key, values: values.length >= n ? values : values.slice(0, n) });
+    };
+
+    const addSmaCorridor = (smaArr, corridorK, atrLen) => {
+      add("sma", smaArr);
+      const a = cache.atr(atrLen);
+      const upper = new Array(n);
+      const lower = new Array(n);
+      for (let i = 0; i < n; i++) {
+        const s = smaArr[i];
+        const av = a[i];
+        if (s == null || av == null || av <= 0) continue;
+        const band = corridorK * av;
+        upper[i] = s + band;
+        lower[i] = s - band;
+      }
+      add("smaUpper", upper);
+      add("smaLower", lower);
+    };
+
+    const addAtomSeries = (atom) => {
+      const pm = parseParamsMap(atom.params);
+      const kind = indicatorKey(atom.kind);
+      if (kind === "sma") {
+        const len = pm.L || parseInt(atom.params, 10) || 100;
+        const smaArr = cache.sma(len);
+        const spreadRaw = pm.Spread ?? pm.spread;
+        if (spreadRaw) {
+          const corridorK = parseFloat(String(spreadRaw).replace(/ATR/i, "").trim()) || 1;
+          addSmaCorridor(smaArr, corridorK, parseLinRegAtrLen(pm));
+        } else {
+          add("sma", smaArr);
+        }
+      } else if (kind === "cma") {
+        const len = pm.L || parseInt(atom.params, 10) || 100;
+        const powRaw = pm.P ?? pm.Pow ?? pm.pow ?? pm.Deg ?? pm.deg;
+        const pow = powRaw != null && powRaw !== "" ? parseFloat(powRaw) : 1;
+        add("cma", cache.cma(len, Number.isFinite(pow) ? pow : 1));
+      } else if (kind === "linreg") {
+        const len = pm.L || parseInt(atom.params, 10) || 20;
+        const useAtrBand = pm.K != null || pm.k != null
+          || /BLLINK|ABLINK|ABREGK|BLREGK/i.test(String(atom.signal || ""));
+        if (useAtrBand) {
+          const bands = cache.linregAtr(len, parseLinRegK(pm, atom.params), parseLinRegAtrLen(pm));
+          add("linregMid", bands.center);
+          add("linregUp", bands.up);
+          add("linregDn", bands.down);
+        } else {
+          const dev = parseFloat(pm.Dev || pm.dev || "2");
+          const lr = cache.linreg(len, dev);
+          add("linregMid", lr.center);
+          add("linregUp", lr.up);
+          add("linregDn", lr.down);
+        }
+      } else if (kind === "bollinger") {
+        const len = pm.L || parseInt(atom.params, 10) || 20;
+        const dev = parseFloat(pm.Dev || pm.dev || "2");
+        const bb = cache.bollinger(len, dev);
+        add("bollingerMid", bb.center);
+        add("bollingerUp", bb.up);
+        add("bollingerDn", bb.down);
+      } else if (kind === "vwap") {
+        add("vwap", cache.vwap());
+      }
+    };
+
+    for (const spec of specs || []) {
+      if (!spec || spec.disabled) continue;
+      if (spec.type === "logic_line" && spec.parsed) {
+        const atoms = [...(spec.parsed.opAtoms || []), ...(spec.parsed.clAtoms || [])];
+        for (const atom of atoms) addAtomSeries(atom);
+      } else if (spec.type === "sma_spread" || spec.type === "sma_corridor") {
+        const len = spec.smaLen || 100;
+        if (spec.type === "sma_corridor") {
+          const corridorK = Math.max(0, Number(spec.corridorAtr) || 0);
+          const atrLen = Math.max(2, Number(spec.slTpAtrLen) || DEFAULT_PARAMS.slTpAtrLen);
+          addSmaCorridor(cache.sma(len), corridorK, atrLen);
+        } else {
+          add("sma", cache.sma(len));
+        }
+      } else if (spec.type === "cma_spread") {
+        const len = spec.cmaLen || 100;
+        const pow = Number.isFinite(spec.cmaPow) ? spec.cmaPow : 1;
+        add("cma", cache.cma(len, pow));
+      }
+    }
+
+    const sel = normalizeIndicatorSelection(indicatorSelection);
+    if (sel.sma && !seen.has("sma")) add("sma", cache.sma(100));
+    if (sel.cma && !seen.has("cma")) add("cma", cache.cma(100, 1));
+    if (sel.linreg && !seen.has("linregMid")) {
+      const lr = cache.linreg(20, 2);
+      add("linregMid", lr.center);
+      add("linregUp", lr.up);
+      add("linregDn", lr.down);
+    }
+    if (sel.bollinger && !seen.has("bollingerMid")) {
+      const bb = cache.bollinger(20, 2);
+      add("bollingerMid", bb.center);
+      add("bollingerUp", bb.up);
+      add("bollingerDn", bb.down);
+    }
+    if (sel.vwap && !seen.has("vwap")) add("vwap", cache.vwap());
+
+    return entries;
+  }
+
+  /** Быстрое построение колонок: копия серий, без collect* на каждом баре. */
+  function buildChartDisplayIndicatorColumnsFast(cache, specs, indicatorSelection, skipWarm) {
+    if (!skipWarm) warmChartDisplayIndicatorSeries(cache, specs, indicatorSelection);
+    const n = cache.candles.length;
+    const columns = {};
+    for (const { key, values } of chartDisplayOverlaySeriesPlan(cache, specs, indicatorSelection)) {
+      columns[key] = values.length >= n ? values : values.slice(0, n);
+    }
     return columns;
+  }
+
+  /** Кооперативный warm ценовых серий (уступки UI между шагами). */
+  async function warmChartDisplayIndicatorSeriesAsync(cache, specs, indicatorSelection, onYield) {
+    if (onYield) await onYield();
+    const thunks = listChartOverlayWarmThunks(cache, specs, indicatorSelection);
+    for (let i = 0; i < thunks.length; i++) {
+      thunks[i]();
+      if (onYield) await onYield();
+    }
+    if (onYield) await onYield();
+  }
+
+  /** Async-обёртка: yield до/после warm, затем быстрые колонки. */
+  async function buildChartDisplayIndicatorColumnsAsync(cache, specs, indicatorSelection, onYield) {
+    await warmChartDisplayIndicatorSeriesAsync(cache, specs, indicatorSelection, onYield);
+    if (onYield) await onYield();
+    const n = cache.candles.length;
+    const columns = {};
+    const plan = chartDisplayOverlaySeriesPlan(cache, specs, indicatorSelection);
+    for (let i = 0; i < plan.length; i++) {
+      const { key, values } = plan[i];
+      columns[key] = values.length >= n ? values : values.slice(0, n);
+      if (onYield) await onYield();
+    }
+    if (onYield) await onYield();
+    return columns;
+  }
+
+  const CHART_INDICATOR_EDITOR_DEFAULTS = Object.freeze({
+    sma: "100",
+    cma: "100;P=1",
+    atr: "14",
+    stoch: "14-3-3",
+    totstoch: "14-3-3",
+    ctgstoch: "14-3-3",
+    linreg: "20;Dev=2",
+    macd: "12,26,9",
+    cci: "20",
+    bollinger: "20;Dev=2",
+    momentum: "10",
+    vwap: "",
+    rand: ""
+  });
+
+  const CHART_PRICE_OVERLAY_KINDS = new Set(["sma", "cma", "linreg", "bollinger", "vwap", "composite"]);
+
+  /** Пользовательские составные индикаторы (конструктор). */
+  let compositeIndicatorCatalog = [];
+
+  function setCompositeIndicatorCatalog(entries) {
+    compositeIndicatorCatalog = (entries || []).map((e) => ({
+      id: String(e.id || e.name || "").trim(),
+      name: String(e.name || "").trim(),
+      label: String(e.label || e.name || "").trim(),
+      formula: String(e.formula || "").trim()
+    })).filter((e) => e.id && e.name && e.formula);
+  }
+
+  function findCompositeIndicator(nameOrId) {
+    const s = String(nameOrId || "").trim();
+    if (!s) return null;
+    return compositeIndicatorCatalog.find((c) => c.id === s || c.name === s || c.label === s) || null;
+  }
+
+  function evalCompositeIndicatorSeries(cache, comp) {
+    const P = typeof MultiLogicFinrespPoly !== "undefined" ? MultiLogicFinrespPoly : null;
+    if (!P || !comp?.formula || !cache) return [];
+    const parsed = P.parsePolyIndicatorFormula(comp.formula, {
+      resolveKind: (label) => chartIndicatorEditorLabelToKey(label),
+      resolveCustom: (label) => findCompositeIndicator(label)
+    });
+    if (!parsed.ok) return [];
+    return P.evalPolyIndicatorSeries(parsed.ast, cache, {
+      parseParamsMap,
+      resolveKind: (label) => chartIndicatorEditorLabelToKey(label),
+      resolveCustom: (label) => findCompositeIndicator(label),
+      evalCustomFormula: (c, formula) => {
+        const sub = findCompositeIndicator(formula);
+        if (sub && sub.id !== comp.id) return evalCompositeIndicatorSeries(c, sub);
+        return [];
+      }
+    });
+  }
+
+  const CHART_EXTRA_OVERLAY_PALETTE = [
+    "#be185d", "#0e7490", "#65a30d", "#a855f7", "#ea580c", "#4b5563",
+    "#db2777", "#059669", "#7c2d12", "#4338ca", "#b45309", "#525252"
+  ];
+
+  /** Строки каталога для редактора «Добавить индикатор» на графике. */
+  function chartIndicatorEditorCatalogLines() {
+    const builtIn = INDICATOR_OPTIONS.map(({ key, label }) => {
+      const params = CHART_INDICATOR_EDITOR_DEFAULTS[key] ?? "";
+      return `${label}(${params})`;
+    });
+    const custom = compositeIndicatorCatalog.map((c) => `${c.name}()`);
+    return [...builtIn, ...custom];
+  }
+
+  function chartIndicatorEditorLabelToKey(label) {
+    const s = String(label || "").trim();
+    const hit = INDICATOR_OPTIONS.find((o) => o.label.toLowerCase() === s.toLowerCase());
+    if (hit) return hit.key;
+    return indicatorKey(s);
+  }
+
+  /** Разбор одной строки редактора: `SMA(100)` или `LinReg(20;Dev=2)`. */
+  function parseChartIndicatorEditorLine(raw) {
+    const s = String(raw || "").trim();
+    if (!s || s.startsWith("#") || s.startsWith("//")) return { skip: true };
+    const m = s.match(/^([A-Za-z][A-Za-z0-9_]*)\s*\((.*)\)\s*$/);
+    if (!m) return { ok: false, error: `«${s}» — ожидается Имя(параметры)` };
+    const comp = findCompositeIndicator(m[1]);
+    if (comp) {
+      return {
+        ok: true,
+        atom: { kind: "composite", params: comp.id, signal: "Ab", compositeName: comp.name, formula: comp.formula },
+        line: s
+      };
+    }
+    const kind = chartIndicatorEditorLabelToKey(m[1]);
+    if (!INDICATOR_KEY_SET.has(kind)) {
+      return { ok: false, error: `Неизвестный индикатор «${m[1]}» в строке «${s}»` };
+    }
+    const params = m[2].trim();
+    return { ok: true, atom: { kind, params, signal: "Ab" }, line: s };
+  }
+
+  /** Многострочный ввод редактора: непустые строки → atoms; ошибки не прерывают разбор остальных. */
+  function parseChartIndicatorEditorLines(text) {
+    const lines = String(text || "").split(/\r?\n/);
+    const atoms = [];
+    const errors = [];
+    let skipped = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const r = parseChartIndicatorEditorLine(lines[i]);
+      if (r.skip) { skipped += 1; continue; }
+      if (!r.ok) { errors.push(r.error); continue; }
+      atoms.push(r.atom);
+    }
+    return { atoms, errors, skipped };
+  }
+
+  function atomOverlaySlug(atom) {
+    const p = String(atom.params || "").replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_|_$/g, "") || "def";
+    return `${indicatorKey(atom.kind)}_${p}`;
+  }
+
+  function chartOverlayLabel(kind, params) {
+    const opt = INDICATOR_OPTIONS.find((o) => o.key === kind);
+    const labelBase = opt?.label || String(kind).toUpperCase();
+    const paramDisp = String(params ?? "");
+    return paramDisp ? `${labelBase}(${paramDisp})` : `${labelBase}()`;
+  }
+
+  function collectPriceOverlayFromAtom(cache, atom, idx, slug, colorIdx) {
+    const out = {};
+    const specs = [];
+    const pm = parseParamsMap(atom.params);
+    const kind = indicatorKey(atom.kind);
+    const paramDisp = atom.params || "";
+    const stroke = CHART_EXTRA_OVERLAY_PALETTE[colorIdx % CHART_EXTRA_OVERLAY_PALETTE.length];
+    const stroke2 = CHART_EXTRA_OVERLAY_PALETTE[(colorIdx + 1) % CHART_EXTRA_OVERLAY_PALETTE.length];
+    const stroke3 = CHART_EXTRA_OVERLAY_PALETTE[(colorIdx + 2) % CHART_EXTRA_OVERLAY_PALETTE.length];
+
+    if (kind === "sma") {
+      const len = pm.L || parseInt(atom.params, 10) || 100;
+      const key = `xind_${slug}`;
+      out[key] = cache.sma(len)[idx];
+      specs.push({
+        key, stroke, width: 1, dash: "5 4", opacity: 0.85,
+        label: chartOverlayLabel(kind, paramDisp || String(len))
+      });
+      const spreadRaw = pm.Spread ?? pm.spread;
+      if (spreadRaw) {
+        const corridorK = parseFloat(String(spreadRaw).replace(/ATR/i, "").trim()) || 1;
+        const atrLen = parseLinRegAtrLen(pm);
+        const smaVal = out[key];
+        const a = cache.atr(atrLen)[idx];
+        if (smaVal != null && a != null && a > 0) {
+          const band = corridorK * a;
+          const ku = `xind_${slug}_up`;
+          const kl = `xind_${slug}_dn`;
+          out[ku] = smaVal + band;
+          out[kl] = smaVal - band;
+          specs.push({ key: ku, stroke: stroke2, width: 0.9, dash: "2 4", opacity: 0.75, label: `${chartOverlayLabel(kind, paramDisp)} верх ±K×ATR` });
+          specs.push({ key: kl, stroke: stroke2, width: 0.9, dash: "2 4", opacity: 0.75, label: `${chartOverlayLabel(kind, paramDisp)} низ ±K×ATR` });
+        }
+      }
+    } else if (kind === "cma") {
+      const len = pm.L || parseInt(atom.params, 10) || 100;
+      const powRaw = pm.P ?? pm.Pow ?? pm.pow ?? pm.Deg ?? pm.deg;
+      const pow = powRaw != null && powRaw !== "" ? parseFloat(powRaw) : 1;
+      const key = `xind_${slug}`;
+      out[key] = cache.cma(len, Number.isFinite(pow) ? pow : 1)[idx];
+      specs.push({
+        key, stroke, width: 1, dash: "4 3", opacity: 0.85,
+        label: chartOverlayLabel(kind, paramDisp || `${len};P=${Number.isFinite(pow) ? pow : 1}`)
+      });
+    } else if (kind === "linreg") {
+      const len = pm.L || parseInt(atom.params, 10) || 20;
+      const useAtrBand = pm.K != null || pm.k != null
+        || /BLLINK|ABLINK|ABREGK|BLREGK/i.test(String(atom.signal || ""));
+      if (useAtrBand) {
+        const kMult = parseLinRegK(pm, atom.params);
+        const atrLen = parseLinRegAtrLen(pm);
+        const bands = cache.linregAtr(len, kMult, atrLen);
+        const km = `xind_${slug}_mid`;
+        const ku = `xind_${slug}_up`;
+        const kl = `xind_${slug}_dn`;
+        out[km] = bands.center[idx];
+        out[ku] = bands.up[idx];
+        out[kl] = bands.down[idx];
+        specs.push({ key: km, stroke, width: 1, dash: null, opacity: 0.7, label: `${chartOverlayLabel(kind, paramDisp)} центр` });
+        specs.push({ key: ku, stroke: stroke2, width: 0.9, dash: "3 3", opacity: 0.65, label: `${chartOverlayLabel(kind, paramDisp)} верх` });
+        specs.push({ key: kl, stroke: stroke2, width: 0.9, dash: "3 3", opacity: 0.65, label: `${chartOverlayLabel(kind, paramDisp)} низ` });
+      } else {
+        const dev = parseFloat(pm.Dev || pm.dev || "2");
+        const lr = cache.linreg(len, dev);
+        const km = `xind_${slug}_mid`;
+        const ku = `xind_${slug}_up`;
+        const kl = `xind_${slug}_dn`;
+        out[km] = lr.center[idx];
+        out[ku] = lr.up[idx];
+        out[kl] = lr.down[idx];
+        specs.push({ key: km, stroke, width: 1, dash: null, opacity: 0.7, label: `${chartOverlayLabel(kind, paramDisp)} центр` });
+        specs.push({ key: ku, stroke: stroke2, width: 0.9, dash: "3 3", opacity: 0.65, label: `${chartOverlayLabel(kind, paramDisp)} верх` });
+        specs.push({ key: kl, stroke: stroke2, width: 0.9, dash: "3 3", opacity: 0.65, label: `${chartOverlayLabel(kind, paramDisp)} низ` });
+      }
+    } else if (kind === "bollinger") {
+      const len = pm.L || parseInt(atom.params, 10) || 20;
+      const dev = parseFloat(pm.Dev || pm.dev || "2");
+      const bb = cache.bollinger(len, dev);
+      const km = `xind_${slug}_mid`;
+      const ku = `xind_${slug}_up`;
+      const kl = `xind_${slug}_dn`;
+      out[km] = bb.center[idx];
+      out[ku] = bb.up[idx];
+      out[kl] = bb.down[idx];
+      specs.push({ key: km, stroke, width: 0.9, dash: null, opacity: 0.65, label: `${chartOverlayLabel(kind, paramDisp)} средняя` });
+      specs.push({ key: ku, stroke: stroke2, width: 0.8, dash: "2 3", opacity: 0.7, label: `${chartOverlayLabel(kind, paramDisp)} верх` });
+      specs.push({ key: kl, stroke: stroke2, width: 0.8, dash: "2 3", opacity: 0.7, label: `${chartOverlayLabel(kind, paramDisp)} низ` });
+    } else if (kind === "vwap") {
+      const key = `xind_${slug}`;
+      out[key] = cache.vwap()[idx];
+      specs.push({
+        key, stroke, width: 1, dash: "7 3", opacity: 0.7,
+        label: chartOverlayLabel(kind, paramDisp || "сессия")
+      });
+    } else if (kind === "composite") {
+      const comp = findCompositeIndicator(atom.params) || { name: atom.compositeName || "composite", formula: atom.formula };
+      const key = `xind_${slug}`;
+      const series = evalCompositeIndicatorSeries(cache, comp);
+      out[key] = series[idx];
+      specs.push({
+        key, stroke, width: 1.1, dash: "6 3", opacity: 0.88,
+        label: comp.name || comp.label || "составной"
+      });
+    }
+    return { values: out, specs };
+  }
+
+  /**
+   * Пользовательские индикаторы на графике цены (редактор «Добавить индикатор»).
+   * @returns {{ columns: object, lineSpecs: object[], warnings: string[], errors: string[] }}
+   */
+  function buildCustomChartIndicatorOverlay(cache, atoms) {
+    const warnings = [];
+    const errors = [];
+    const priceAtoms = [];
+    const n = cache?.candles?.length || 0;
+    if (!n) return { columns: {}, lineSpecs: [], warnings, errors };
+
+    for (const atom of atoms || []) {
+      const kind = indicatorKey(atom.kind);
+      if (!CHART_PRICE_OVERLAY_KINDS.has(kind)) {
+        warnings.push(`${chartOverlayLabel(kind, atom.params)}: не на шкале цены — пропущен`);
+        continue;
+      }
+      priceAtoms.push(atom);
+    }
+
+    const columns = {};
+    const lineSpecs = [];
+    const slugUsed = new Set();
+
+    for (let ai = 0; ai < priceAtoms.length; ai++) {
+      const atom = priceAtoms[ai];
+      let slug = atomOverlaySlug(atom);
+      if (slugUsed.has(slug)) slug = `${slug}_${ai}`;
+      slugUsed.add(slug);
+
+      const kind = indicatorKey(atom.kind);
+      if (kind === "composite") {
+        const comp = findCompositeIndicator(atom.params) || {
+          name: atom.compositeName || "composite",
+          formula: atom.formula
+        };
+        const series = evalCompositeIndicatorSeries(cache, comp);
+        const stroke = CHART_EXTRA_OVERLAY_PALETTE[ai % CHART_EXTRA_OVERLAY_PALETTE.length];
+        const key = `xind_${slug}`;
+        const col = new Array(n);
+        for (let idx = 0; idx < n; idx++) col[idx] = series[idx] ?? null;
+        columns[key] = col;
+        lineSpecs.push({
+          key, stroke, width: 1.1, dash: "6 3", opacity: 0.88,
+          label: comp.name || comp.label || "составной"
+        });
+        continue;
+      }
+
+      collectPriceOverlayFromAtom(cache, atom, 0, slug, ai);
+      if (n > 1) collectPriceOverlayFromAtom(cache, atom, n - 1, slug, ai);
+
+      const specKeys = new Set();
+      for (let idx = 0; idx < n; idx++) {
+        const { values, specs } = collectPriceOverlayFromAtom(cache, atom, idx, slug, ai);
+        for (const [k, v] of Object.entries(values)) {
+          if (v == null) continue;
+          if (!columns[k]) columns[k] = new Array(n);
+          columns[k][idx] = v;
+        }
+        for (const spec of specs) {
+          if (!specKeys.has(spec.key)) {
+            specKeys.add(spec.key);
+            if (!lineSpecs.some((s) => s.key === spec.key)) lineSpecs.push(spec);
+          }
+        }
+      }
+    }
+    return { columns, lineSpecs, warnings, errors };
+  }
+
+  /** Кооперативная версия overlay для UI (yield каждые 32 бара). */
+  async function buildCustomChartIndicatorOverlayAsync(cache, atoms, onYield) {
+    const warnings = [];
+    const errors = [];
+    const priceAtoms = [];
+    const n = cache?.candles?.length || 0;
+    if (!n) return { columns: {}, lineSpecs: [], warnings, errors };
+
+    for (const atom of atoms || []) {
+      const kind = indicatorKey(atom.kind);
+      if (!CHART_PRICE_OVERLAY_KINDS.has(kind)) {
+        warnings.push(`${chartOverlayLabel(kind, atom.params)}: не на шкале цены — пропущен`);
+        continue;
+      }
+      priceAtoms.push(atom);
+    }
+
+    const columns = {};
+    const lineSpecs = [];
+    const slugUsed = new Set();
+    const YIELD_EVERY = 32;
+
+    for (let ai = 0; ai < priceAtoms.length; ai++) {
+      const atom = priceAtoms[ai];
+      let slug = atomOverlaySlug(atom);
+      if (slugUsed.has(slug)) slug = `${slug}_${ai}`;
+      slugUsed.add(slug);
+
+      const kind = indicatorKey(atom.kind);
+      if (kind === "composite") {
+        const comp = findCompositeIndicator(atom.params) || {
+          name: atom.compositeName || "composite",
+          formula: atom.formula
+        };
+        const series = evalCompositeIndicatorSeries(cache, comp);
+        const stroke = CHART_EXTRA_OVERLAY_PALETTE[ai % CHART_EXTRA_OVERLAY_PALETTE.length];
+        const key = `xind_${slug}`;
+        const col = new Array(n);
+        for (let idx = 0; idx < n; idx++) col[idx] = series[idx] ?? null;
+        columns[key] = col;
+        lineSpecs.push({
+          key, stroke, width: 1.1, dash: "6 3", opacity: 0.88,
+          label: comp.name || comp.label || "составной"
+        });
+        if (onYield) await onYield();
+        continue;
+      }
+
+      const specKeys = new Set();
+      for (let idx = 0; idx < n; idx++) {
+        const { values, specs } = collectPriceOverlayFromAtom(cache, atom, idx, slug, ai);
+        for (const [k, v] of Object.entries(values)) {
+          if (v == null) continue;
+          if (!columns[k]) columns[k] = new Array(n);
+          columns[k][idx] = v;
+        }
+        for (const spec of specs) {
+          if (!specKeys.has(spec.key)) {
+            specKeys.add(spec.key);
+            if (!lineSpecs.some((s) => s.key === spec.key)) lineSpecs.push(spec);
+          }
+        }
+        if (onYield && idx > 0 && idx % YIELD_EVERY === 0) await onYield();
+      }
+      if (onYield) await onYield();
+    }
+    return { columns, lineSpecs, warnings, errors };
   }
 
   /** Кэш индикаторов по свечам (для обогащения строк графика). */
@@ -6009,6 +6603,19 @@
     warmChartIndicatorCacheForSpecs,
     warmChartDisplayIndicatorSeries,
     collectChartIndicatorsForDisplay,
-    buildChartDisplayIndicatorColumns
+    buildChartDisplayIndicatorColumns,
+    chartDisplayOverlaySeriesPlan,
+    buildChartDisplayIndicatorColumnsFast,
+    listChartOverlayWarmThunks,
+    warmChartDisplayIndicatorSeriesAsync,
+    buildChartDisplayIndicatorColumnsAsync,
+    chartIndicatorEditorCatalogLines,
+    parseChartIndicatorEditorLine,
+    parseChartIndicatorEditorLines,
+    buildCustomChartIndicatorOverlay,
+    buildCustomChartIndicatorOverlayAsync,
+    setCompositeIndicatorCatalog,
+    findCompositeIndicator,
+    evalCompositeIndicatorSeries
   };
 })(typeof window !== "undefined" ? window : globalThis);

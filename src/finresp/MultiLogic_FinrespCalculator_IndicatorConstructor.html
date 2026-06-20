@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MultiLogic — конструктор составных индикаторов</title>
+<style>
+:root{--bg:#f4f6fa;--paper:#fff;--text:#1a1d26;--muted:#5c6370;--border:#dde2eb;--accent:#7c3aed;--accent-soft:#f5f3ff;--code-bg:#eef1f6;--example-bg:#faf5ff;--example-border:#ddd6fe;}
+*{box-sizing:border-box;}
+body{margin:0;font-family:Segoe UI,system-ui,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;font-size:15px;}
+.help-hdr{background:linear-gradient(180deg,#fff 0%,var(--accent-soft) 100%);border-bottom:1px solid var(--border);padding:1.5rem 1.75rem 1.25rem;}
+.help-hdr h1{margin:0 0 .4rem;font-size:1.55rem;color:#4c1d95;}
+.help-sub{margin:.2rem 0;color:var(--muted);font-size:.92rem;}
+.help-layout{max-width:920px;margin:0 auto;padding:1.25rem 1rem 3rem;}
+.help-main{background:var(--paper);border:1px solid var(--border);border-radius:12px;padding:1.5rem 1.75rem 2rem;box-shadow:0 1px 4px rgba(0,0,0,.05);}
+h2{font-size:1.2rem;margin:1.6rem 0 .7rem;padding-bottom:.35rem;border-bottom:2px solid var(--accent);scroll-margin-top:12px;}
+h2:first-child{margin-top:0;}
+h3{font-size:1.02rem;margin:1.15rem 0 .45rem;color:#374151;}
+p,ul{margin:.55rem 0;}
+ul{padding-left:1.35rem;}
+li{margin:.28rem 0;}
+code{font-family:Consolas,monospace;background:var(--code-bg);padding:.1em .35em;border-radius:4px;font-size:.88em;}
+.op{font-weight:700;color:#047857;}
+.note{color:var(--muted);font-size:.93rem;}
+.warn{background:#fffbeb;border:1px solid #e7c96f;border-left:4px solid #b45309;border-radius:8px;padding:.65rem .9rem;margin:.75rem 0;font-size:.93rem;}
+pre.formula{background:var(--example-bg);border:1px solid var(--example-border);border-radius:8px;padding:.75rem 1rem;margin:.65rem 0 1rem;overflow-x:auto;font-family:Consolas,monospace;font-size:.9rem;line-height:1.55;white-space:pre-wrap;}
+table{width:100%;border-collapse:collapse;margin:.65rem 0 1rem;font-size:.9rem;}
+th,td{border:1px solid var(--border);padding:.45rem .6rem;text-align:left;vertical-align:top;}
+th{background:var(--accent-soft);width:22%;}
+a{color:var(--accent);}
+.help-ftr{text-align:center;padding:1.5rem;color:var(--muted);font-size:.82rem;border-top:1px solid var(--border);}
+</style>
+</head>
+<body>
+<header class="help-hdr">
+<h1>Конструктор составных индикаторов</h1>
+<p class="help-sub">Калькулятор FINRESP · блок «Используемые индикаторы» · кнопки <strong>+</strong> и <strong>i.</strong></p>
+<p class="help-sub"><a href="../../finresp">← Калькулятор</a> · <a href="MultiLogic_FinrespCalculator_Help.html">Справка калькулятора</a> · <a href="../MultiLogic_PolynomialIndicators.html">Многочлены и операции * #</a></p>
+</header>
+<div class="help-layout">
+<main class="help-main">
+
+<h2 id="idea">1. Идея</h2>
+<p>Индикатор — <strong>ряд чисел</strong> (по одному значению на бар), как многочлен: коэффициенты задают вклад на каждой позиции. Составной индикатор собирается из встроенных рядов (<code>SMA(20)</code>, <code>CMA(100;P=2)</code>, <code>pp</code> …) операциями ниже. Он сохраняется в конфиге, подсвечивается фиолетовым в списке и доступен на графике как <code>Имя()</code>.</p>
+<p class="note">Математика свёртки и покомпонентного умножения — в <a href="../MultiLogic_PolynomialIndicators.html">базе знаний по многочленам</a>; здесь — синтаксис конструктора.</p>
+
+<h2 id="atoms">2. Атомы (что можно писать)</h2>
+<table>
+<tr><th>Рынок</th><td><code>pp</code> close, <code>oo</code> open, <code>hh</code> high, <code>ll</code> low, <code>vv</code> volume</td></tr>
+<tr><th>Встроенные</th><td>Те же формы, что в чекбоксах: <code>SMA(100)</code>, <code>CMA(100;P=1)</code>, <code>LinReg(20;Dev=2)</code>, <code>Bollinger(20;Dev=2)</code>, <code>ATR(14)</code>, <code>Stoch(14-3-3)</code>, <code>MACD(12,26,9)</code>, <code>CCI(20)</code>, <code>Momentum(10)</code>, <code>VWAP()</code> и др.</td></tr>
+<tr><th>Другие составные</th><td>Имя без скобок, если индикатор уже создан: <code>Spread20_50</code></td></tr>
+<tr><th>Число</th><td>Литерал: <code>2</code>, <code>0.05</code>, <code>1,5</code> (запятая как десятичный разделитель)</td></tr>
+</table>
+
+<h2 id="ops">3. Операции</h2>
+<table>
+<tr><th><code>+</code> <code>−</code></th><td>Сложение и вычитание рядов по барам</td></tr>
+<tr><th><code>#</code></th><td><strong>Покомпонентное</strong> умножение: на каждом баре <code>a[k] × b[k]</code></td></tr>
+<tr><th><code>/#</code></th><td>Покомпонентное деление (деление на 0 → пусто)</td></tr>
+<tr><th><code>*</code></th><td><strong>Свёртка</strong> многочленов: <code>(a*b)[k] = Σ a[i]·b[j]</code> при <code>i+j=k</code>. Имитация «фильтра» / скользящего окна</td></tr>
+<tr><th><code>( )</code></th><td>Группировка</td></tr>
+<tr><th><code>[n]</code></th><td><strong>Сдвиг:</strong> как фактор <code>[5]</code> — дельта на позиции 5; свёртка <code>[5] * pp</code> сдвигает цену на 5 баров. Постфикс <code>pp[5]</code> или <code>SMA(20)[5]</code> — сдвиг уже собранного ряда</td></tr>
+</table>
+
+<h2 id="braces">4. Фигурные скобки <code>{ … }</code></h2>
+
+<h3>4.1. Одно число — константа</h3>
+<pre class="formula">{1000}</pre>
+<p>Скаляр <code>1000</code> на всех барах. Умножение: <code>pp # {2}</code> — удвоить цену покомпонентно.</p>
+
+<h3>4.2. Список коэффициентов — многочлен</h3>
+<pre class="formula">{1;0;0;0}</pre>
+<p>Многочлен с коэффициентами <code>1, 0, 0, 0</code> (единица на позиции 0). Эквивалент сдвига «умножить на <code>x³</code>» в дискретной модели. Дроби через слэш:</p>
+<pre class="formula">{1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20}</pre>
+<p>Нормированное окно из 20 равных весов (свёртка с <code>pp</code> даёт простое MA(20)):</p>
+<pre class="formula">pp * {1/20;1/20;…;1/20}</pre>
+
+<div class="warn"><strong>Важно:</strong> <code>{1000}</code> — одно число; <code>{1;0;0;0}</code> — четыре коэффициента (многочлен). Не путать с записью «один и нули» через точку с запятой.</div>
+
+<h3>4.3. Сумма по индексу</h3>
+<pre class="formula">{ SMA(n); n=5..30 }</pre>
+<p>Сумма <code>SMA(5)+SMA(6)+…+SMA(30)</code>. Альтернатива границ: <code>n0=5; n1=30</code>. Переменная в формуле члена должна совпадать с именем в <code>n=…</code>.</p>
+<pre class="formula">{1; n=1..100}</pre>
+<p>Сумма ста единиц — константа 100 на каждом баре (после свёртки/сложения с рядом даёт масштабирование).</p>
+
+<h2 id="examples">5. Примеры формул</h2>
+
+<h3>Спред двух SMA</h3>
+<pre class="formula">SMA(20) - SMA(50)</pre>
+<p>Классический «спред» скользящих; имя в конструкторе, например <code>Spread20_50</code>.</p>
+
+<h3>Отклонение от SMA</h3>
+<pre class="formula">(pp - SMA(20)) # 2</pre>
+<p>Удвоенное расстояние цены от SMA(20) на каждом баре.</p>
+
+<h3>Цена со сдвигом</h3>
+<pre class="formula">[5] * pp</pre>
+<p>Close пять баров назад, выровненный по текущей шкале времени.</p>
+
+<h3>Свёртка цены с окном</h3>
+<pre class="formula">pp * {1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20}</pre>
+
+<h3>Сумма SMA по диапазону</h3>
+<pre class="formula">{ SMA(n); n=5..30 }</pre>
+
+<h3>Комбинированный пример (как в placeholder формы)</h3>
+<pre class="formula">SMA(20) - SMA(50)
+pp * {1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20}
+(pp - SMA(20)) # 2
+[5] * pp
+{ SMA(n); n=5..30 }
+{1; n=1..100} * {1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20;1/20}</pre>
+
+<h2 id="ui">6. Интерфейс</h2>
+<ul>
+<li><strong>+</strong> — диалог: имя (латиница, цифры, <code>_ . -</code>) и формула. <strong>OK</strong> — индикатор добавляется с включённой галочкой и фиолетовой подсветкой.</li>
+<li><strong>i.</strong> — эта справка.</li>
+<li>На графике инструмента в «Добавить индикатор» введите <code>Имя()</code> (параметры в скобках не нужны).</li>
+<li>Составные пока используются в расчёте FINRESP только если подключены в строках логики вручную; основной сценарий — визуализация на графике и хранение в конфиге.</li>
+</ul>
+
+<h2 id="limits">7. Ограничения</h2>
+<ul>
+<li>Имя должно быть уникальным среди составных индикаторов.</li>
+<li>В формуле доступны только индикаторы из списка чекбоксов (встроенные формы с параметрами).</li>
+<li>Циклические ссылки между составными индикаторами не допускаются.</li>
+<li>Строки, начинающиеся с <code>#</code> в поле формулы, при проверке считаются комментариями (в placeholder).</li>
+</ul>
+
+<p class="note">Версия справки: 2026-06-20 · модуль <code>poly/poly-indicator.js</code> · boot <code>indicator-constructor-v50</code></p>
+
+</main>
+</div>
+<footer class="help-ftr">MultiLogicTradeA · FINRESP</footer>
+</body>
+</html>

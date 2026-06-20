@@ -27,6 +27,7 @@ const INDICATOR_SCRIPTS = [
   join('ctg', 'contango-series.js'),
   join('ctg', 'ctgstoch.js')
 ].map((p) => join(INDICATOR_DIR, p));
+const POLY_PATH = join(FINRESP_ROOT, 'poly', 'poly-indicator.js');
 const LOGIC_SCRIPTS = [
   'parser.js',
   'registry.js',
@@ -74,6 +75,7 @@ export function loadEngine() {
     const src = readFileSync(p, 'utf8');
     vm.runInContext(src, context, { filename: p });
   }
+  vm.runInContext(readFileSync(POLY_PATH, 'utf8'), context, { filename: POLY_PATH });
   vm.runInContext(readFileSync(TRADING_PERIODS_PATH, 'utf8'), context, { filename: TRADING_PERIODS_PATH });
   vm.runInContext(code, context, { filename: ENGINE_PATH });
   const E = context.MultiLogicFinrespEngine;

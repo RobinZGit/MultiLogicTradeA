@@ -13,7 +13,16 @@ export interface MlFinrespGlobal {
   deferBrokerConnect?: boolean;
   setBootStatus?: (text: string, opts?: { status?: string }) => void;
   clearBootStatus?: () => void;
+  forceClearBootStatus?: (note?: string) => void;
   trackBootBackground?: (promise: Promise<unknown>) => Promise<unknown>;
+  onAngularScriptsReady?: () => void;
+  bootDiag?: {
+    phase?: string;
+    bannerText?: string;
+    bannerPending?: number;
+    blockingOn?: string | null;
+    watchdogFired?: boolean;
+  };
   saveConfig?: () => void;
   unstickUi?: (reason?: string) => void;
   applyMonthSelectionFromValue?: (month: string) => {

@@ -52,6 +52,7 @@ export class FinrespCalculatorComponent implements OnInit {
         boot(`Загрузка модулей FINRESP (${done}/${total})…`);
       }
       boot('Инициализация калькулятора…');
+      window.__mlFinresp?.onAngularScriptsReady?.();
     } catch (err) {
       window.__mlFinresp?.clearBootStatus?.();
       console.error('FINRESP bootstrap failed', err);

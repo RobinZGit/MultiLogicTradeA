@@ -22,7 +22,9 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-20-sandbox-mode-isolation-v38";
+  const CALC_PAGE_VERSION = "2026-06-20-indicator-constructor-v51";
+  const BOOT_BACKGROUND_TIMEOUT_MS = 60000;
+  const BOOT_BANNER_WATCHDOG_MS = 20000;
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -126,19 +128,43 @@
     return lastCalcStatusText || ($("calc-status")?.textContent ?? "");
   }
 
+  const bootDiag = {
+    phase: "boot-start",
+    startedAt: new Date().toISOString(),
+    scriptsReadyAt: null,
+    formReadyAt: null,
+    liveInitAt: null,
+    liveInitDoneAt: null,
+    bannerText: "",
+    bannerPending: 0,
+    blockingOn: null,
+    watchdogFired: false
+  };
+  window.__mlFinresp.bootDiag = bootDiag;
+
+  function setBootPhase(phase, blockingOn) {
+    bootDiag.phase = String(phase || "—");
+    if (blockingOn !== undefined) bootDiag.blockingOn = blockingOn || null;
+    updateTechInfo("boot-phase");
+  }
+
   let bootBannerPending = 0;
+  let bootWatchdogArmed = false;
+
   /** Баннер «идёт загрузка страницы» — не блокирует форму. */
   function setBootStatus(text, opts) {
     const o = opts || {};
     const el = $("calc-boot-text");
     const banner = $("calc-boot-banner");
-    if (el && text != null) el.textContent = String(text);
+    if (text != null) bootDiag.bannerText = String(text);
+    if (el && text != null) el.textContent = bootDiag.bannerText;
     if (banner) {
       banner.hidden = false;
       banner.setAttribute("aria-busy", "true");
       document.body.classList.add("page-booting");
     }
     if (o.status) setCalcStatus(o.status);
+    bootDiag.bannerPending = bootBannerPending;
   }
   function clearBootStatus() {
     if (bootBannerPending > 0) return;
@@ -148,17 +174,69 @@
       banner.setAttribute("aria-busy", "false");
     }
     document.body.classList.remove("page-booting");
+    bootDiag.bannerPending = 0;
+  }
+  function forceClearBootStatus(note) {
+    bootBannerPending = 0;
+    bootDiag.bannerPending = 0;
+    clearBootStatus();
+    if (note) {
+      setCalcStatus(note);
+      noteTechError(`boot-force-clear: ${note}`);
+    }
+  }
+  function armBootBannerWatchdog() {
+    if (bootWatchdogArmed) return;
+    bootWatchdogArmed = true;
+    const armedAt = Date.now();
+    setTimeout(() => {
+      const banner = $("calc-boot-banner");
+      if (!banner || banner.hidden || !document.body.classList.contains("page-booting")) return;
+      if (window.__mlFinresp?.bootPhase === "ok" && bootDiag.liveInitDoneAt) return;
+      bootDiag.watchdogFired = true;
+      const elapsedSec = Math.round((Date.now() - armedAt) / 1000);
+      const block = bootDiag.blockingOn || bootDiag.phase || "инициализация";
+      const msg = `${block}: сервис не отвечает (${elapsedSec} с) — форма доступна.`;
+      forceClearBootStatus(msg);
+      setBootPhase("watchdog-timeout", block);
+    }, BOOT_BANNER_WATCHDOG_MS);
   }
   function trackBootBackground(promise) {
     bootBannerPending += 1;
-    return Promise.resolve(promise).finally(() => {
-      bootBannerPending = Math.max(0, bootBannerPending - 1);
-      if (bootBannerPending === 0) clearBootStatus();
-    });
+    bootDiag.bannerPending = bootBannerPending;
+    const wrapped = Promise.race([
+      Promise.resolve(promise),
+      new Promise((_, reject) => {
+        setTimeout(
+          () => reject(new Error(`фоновая инициализация: таймаут ${BOOT_BACKGROUND_TIMEOUT_MS / 1000} с`)),
+          BOOT_BACKGROUND_TIMEOUT_MS
+        );
+      })
+    ]);
+    return wrapped
+      .catch((err) => {
+        const msg = err?.message || String(err);
+        noteTechError(`boot-background: ${msg}`);
+        if (/таймаут|timeout/i.test(msg)) {
+          forceClearBootStatus(`Фоновая инициализация: сервис не отвечает. Форма доступна.`);
+        }
+      })
+      .finally(() => {
+        bootBannerPending = Math.max(0, bootBannerPending - 1);
+        bootDiag.bannerPending = bootBannerPending;
+        if (bootBannerPending === 0) clearBootStatus();
+      });
   }
   window.__mlFinresp.setBootStatus = setBootStatus;
   window.__mlFinresp.clearBootStatus = clearBootStatus;
+  window.__mlFinresp.forceClearBootStatus = forceClearBootStatus;
   window.__mlFinresp.trackBootBackground = trackBootBackground;
+  window.__mlFinresp.onAngularScriptsReady = () => {
+    bootDiag.scriptsReadyAt = new Date().toISOString();
+    setBootPhase("scripts-ready");
+    if (window.__mlFinresp.bootPhase === "ok") clearBootStatus();
+    armBootBannerWatchdog();
+  };
 
   function appendCalcStatus(suffix) {
     setCalcStatus(getCalcStatus() + suffix);
@@ -694,7 +772,19 @@
       `createCandleCache=${!!E?.createCandleCache}`,
       `cacheVersion=${E?.CANDLE_CACHE_VERSION ?? "—"}`,
       `chartsModule=${typeof MLInstrumentChart !== "undefined" ? (MLInstrumentChart.version || "legacy") : "missing"}`,
-      `tradeMarkersFromBar=${!!E?.tradeMarkersFromBar}`
+      `tradeMarkersFromBar=${!!E?.tradeMarkersFromBar}`,
+      `bootPhase=${window.__mlFinresp?.bootPhase || "—"}`,
+      `bootBannerVisible=${!$("calc-boot-banner")?.hidden}`,
+      `bootBannerText=${bootDiag.bannerText || "—"}`,
+      `bootBannerPending=${bootDiag.bannerPending}`,
+      `initPhase=${bootDiag.phase || "—"}`,
+      `initBlockingOn=${bootDiag.blockingOn || "—"}`,
+      `initElapsedMs=${Math.max(0, Date.now() - Date.parse(bootDiag.startedAt || techLog.startedAt))}`,
+      `scriptsReadyAt=${bootDiag.scriptsReadyAt || "—"}`,
+      `formReadyAt=${bootDiag.formReadyAt || "—"}`,
+      `liveInitAt=${bootDiag.liveInitAt || "—"}`,
+      `liveInitDoneAt=${bootDiag.liveInitDoneAt || "—"}`,
+      `bootWatchdogFired=${!!bootDiag.watchdogFired}`
     ];
     if (calcState) {
       const selected = typeof selectedInstruments === "function" ? selectedInstruments() : [];
@@ -916,6 +1006,37 @@
     }
     lines.push(`liveTradingStatus=${$("live-trading-status")?.textContent || "—"}`);
     lines.push(`statusLine=${getCalcStatus() || "—"}`);
+    const ci = calcState?.chartIndDiag;
+    lines.push(
+      `hasLastResult=${!!state.lastResult?.perSec?.length}`,
+      `chartIndNote=локальный расчёт при клике (без HTTP/MOEX)`,
+      `chartIndBusy=${!!ci?.busy}`,
+      `chartIndPhase=${ci?.phase || "idle"}`,
+      `chartIndSec=${ci?.sec || "—"}`,
+      `chartIndRows=${ci?.rowCount ?? "—"}`,
+      `chartIndCandles=${ci?.candleCount ?? "—"}`,
+      `chartIndCols=${ci?.columnKeys ?? "—"}`,
+      `chartIndElapsedMs=${ci?.elapsedMs ?? "—"}`,
+      `chartIndError=${ci?.error || "—"}`,
+      `chartIndPrewarm=${ci?.prewarm ? "yes" : "no"}`,
+      `chartIndClickId=${ci?.clickId ?? "—"}`,
+      `chartIndStuck=${ci?.stuck ? "yes" : "no"}`,
+      `chartIndMode=${ci?.mode || "—"}`,
+      `chartIndPrewarmSec=${ci?.prewarmSec || "—"}`,
+      `chartIndPrewarmLeft=${ci?.prewarmLeft ?? "—"}`
+    );
+    const cc = calcState?.chartCustomIndDiag;
+    lines.push(
+      `chartCustomBusy=${!!cc?.busy}`,
+      `chartCustomPhase=${cc?.phase || "idle"}`,
+      `chartCustomSec=${cc?.sec || "—"}`,
+      `chartCustomAtoms=${cc?.atomCount ?? "—"}`,
+      `chartCustomLineSpecs=${cc?.lineSpecCount ?? "—"}`,
+      `chartCustomElapsedMs=${cc?.elapsedMs ?? "—"}`,
+      `chartCustomError=${cc?.error || "—"}`,
+      `chartCustomRowKeys=${cc?.rowKeysApplied ?? "—"}`,
+      `chartCustomPackExt=${cc?.packExtended ? "yes" : "no"}`
+    );
     const cd = calcState?.lastChartDiag;
     if (cd?.instruments?.length) {
       lines.push(
@@ -1270,7 +1391,8 @@
       dots: 0,
       dotTimer: null,
       runToken: 0
-    }
+    },
+    customIndicators: []
   };
   calcState = state;
   const INDICATOR_OPTIONS = E.INDICATOR_OPTIONS || [
@@ -1290,6 +1412,8 @@
   ];
   const INDICATOR_KEYS_DEFAULT_ON = new Set(["totstoch", "ctgstoch"]);
   const INDICATOR_LABELS = Object.fromEntries(INDICATOR_OPTIONS.map((x) => [x.key, x.label]));
+  const P = typeof MultiLogicFinrespPoly !== "undefined" ? MultiLogicFinrespPoly : null;
+  const INDICATOR_CONSTRUCTOR_HELP = "MultiLogic_FinrespCalculator_IndicatorConstructor.html";
   const OPT_BTN_ICON = "⚡";
   const OPT_BUTTONS = [
     { kind: "sl", btnId: "opt-sl", inputId: "param-sl", label: "@SL", position: true },
@@ -1535,6 +1659,12 @@
         futures: $("prefix-futures")?.value || ""
       },
       indicators: selectedIndicatorKeys(),
+      customIndicators: (state.customIndicators || []).map((c) => ({
+        id: c.id,
+        name: c.name,
+        formula: c.formula,
+        enabled: c.enabled !== false
+      })),
       logicLines: visibleLogicLinesConfig(),
       logicLineKeys: state.logicLineKeys.filter((k) => !hiddenLogicKeySet().has(k)),
       hiddenLogicKeys: (state.hiddenLogicKeys || []).slice(),
@@ -1858,6 +1988,18 @@
       }
       if (Array.isArray(cfg.indicators)) applyIndicatorSelection(cfg.indicators);
       else applyIndicatorSelection(null);
+      if (Array.isArray(cfg.customIndicators)) {
+        state.customIndicators = cfg.customIndicators
+          .filter((c) => c?.name && c?.formula)
+          .map((c) => ({
+            id: c.id || `ci_${slugifyIndicatorName(c.name)}`,
+            name: String(c.name).trim(),
+            formula: String(c.formula).trim(),
+            enabled: c.enabled !== false
+          }));
+      }
+      syncCompositeCatalogToEngine();
+      renderIndicatorToggles();
       if (Array.isArray(cfg.hiddenLogicKeys)) {
         state.hiddenLogicKeys = cfg.hiddenLogicKeys.filter(Boolean);
       } else if (!Array.isArray(state.hiddenLogicKeys)) {
@@ -2533,7 +2675,7 @@
     syncLiveStatsHint, renderLiveFreeCashStat, renderLiveFinResultStat,
     snapshotLiveSessionPortfolioBaseline, liveFreeCashRub, liveFinResultRub,
     requireTbankDepositForRun, initAccountMode, connectTbankAndLoadDeposit,
-    connectTbankForLive, saveTbankToken, saveAlorToken, unlockTbankTokenInteractive, unlockAlorTokenInteractive,
+    connectTbankForLive, connectTbankForLiveBackground, saveTbankToken, saveAlorToken, unlockTbankTokenInteractive, unlockAlorTokenInteractive,
     syncBrokerSettingsPanels, syncBrokerProviderFromDom, readBrokerIdFromUi, activeBrokerState, brokerTokenStoreKey,
     onBrokerProviderChange, resetBrokerInst, setAlorStatus,
     persistBrokerDepositFromDom, syncVolDepositDomFromBroker, activeView, clearLiveRuntimeBroker,
@@ -2953,8 +3095,36 @@
   /** Выбранные элементы UI: `selectedIndicatorKeys`. */
   function selectedIndicatorKeys() {
     const boxes = Array.from(document.querySelectorAll("#indicator-toggles input[type=checkbox]"));
-    if (!boxes.length) return INDICATOR_OPTIONS.map((x) => x.key);
+    if (!boxes.length) {
+      const keys = INDICATOR_OPTIONS.map((x) => x.key);
+      for (const c of state.customIndicators || []) {
+        if (c.enabled !== false) keys.push(customIndicatorKey(c));
+      }
+      return keys;
+    }
     return boxes.filter((el) => el.checked).map((el) => el.value).filter(Boolean);
+  }
+
+  function customIndicatorKey(ci) {
+    return `ci:${ci.id || ci.name}`;
+  }
+
+  function slugifyIndicatorName(name) {
+    return String(name || "ind").trim().replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_|_$/g, "").toLowerCase() || "ind";
+  }
+
+  function syncCompositeCatalogToEngine() {
+    if (!E.setCompositeIndicatorCatalog) return;
+    const enabled = new Set(selectedIndicatorKeys());
+    const catalog = (state.customIndicators || [])
+      .filter((c) => enabled.has(customIndicatorKey(c)))
+      .map((c) => ({
+        id: c.id || `ci_${slugifyIndicatorName(c.name)}`,
+        name: c.name,
+        label: c.name,
+        formula: c.formula
+      }));
+    E.setCompositeIndicatorCatalog(catalog);
   }
 
   /** Подпрограмма `indicatorSelection`. */
@@ -5977,14 +6147,207 @@
 
   /** Подпрограмма `initIndicatorToggles`. */
   function initIndicatorToggles() {
+    renderIndicatorToggles();
+    initIndicatorConstructorUi();
+  }
+
+  function renderIndicatorToggles() {
     const box = $("indicator-toggles");
     if (!box) return;
+    const prevChecked = new Map();
+    box.querySelectorAll("input[type=checkbox]").forEach((el) => {
+      prevChecked.set(el.value, el.checked);
+    });
     box.innerHTML = "";
     for (const { key, label } of INDICATOR_OPTIONS) {
       const item = document.createElement("label");
       item.className = "indicator-toggle";
-      item.innerHTML = `<input type="checkbox" value="${key}" checked> <span>${label}</span>`;
+      const checked = prevChecked.has(key) ? prevChecked.get(key) : true;
+      item.innerHTML = `<input type="checkbox" value="${key}" ${checked ? "checked" : ""}> <span>${label}</span>`;
       box.appendChild(item);
+    }
+    for (const ci of state.customIndicators || []) {
+      const item = document.createElement("div");
+      item.className = "indicator-toggle indicator-toggle--custom";
+      item.title = ci.formula;
+      const ck = customIndicatorKey(ci);
+      const checked = prevChecked.has(ck) ? prevChecked.get(ck) : (ci.enabled !== false);
+      const safeId = String(ci.id || "").replace(/"/g, "");
+      item.innerHTML = `<label class="indicator-toggle-label"><input type="checkbox" value="${ck}" ${checked ? "checked" : ""}> <span>${escSvgText(ci.name)}</span></label><button type="button" class="indicator-toggle-trash" data-remove-custom-indicator="${safeId}" title="Удалить составной индикатор" aria-label="Удалить составной индикатор">🗑</button>`;
+      box.appendChild(item);
+    }
+    box.querySelectorAll("input[type=checkbox]").forEach((el) => {
+      el.addEventListener("change", () => {
+        syncCompositeCatalogToEngine();
+        saveConfig();
+        renderFromParams();
+      });
+    });
+    syncCompositeCatalogToEngine();
+  }
+
+  function ensureIndicatorConstructorDialog() {
+    let dlg = document.getElementById("indicator-constructor-dialog");
+    if (dlg) return dlg;
+    dlg = document.createElement("dialog");
+    dlg.id = "indicator-constructor-dialog";
+    dlg.className = "ml-ind-constructor-dialog";
+    dlg.innerHTML = `<form method="dialog" class="ml-ind-constructor-form">
+<p class="ml-ind-constructor-title">Составной индикатор</p>
+<p class="ml-ind-constructor-hint">Формула из встроенных индикаторов (SMA, CMA, …), <code>pp</code> и операций <code>*</code> <code>#</code> <code>/#</code> <code>+</code> <code>−</code>, сдвига <code>[n]</code> и суммы <code>{…; n=a..b}</code>. Подробнее — кнопка <strong>i.</strong></p>
+<label class="ml-ind-constructor-label">Имя (латиница/цифры, для списка и графика)
+<input type="text" class="ml-ind-constructor-name" maxlength="48" required placeholder="Spread20_50" spellcheck="false"></label>
+<label class="ml-ind-constructor-label">Формула
+<textarea class="ml-ind-constructor-formula" rows="12" spellcheck="false" aria-label="Формула индикатора"></textarea></label>
+<p class="ml-ind-constructor-status" role="status"></p>
+<div class="ml-ind-constructor-actions">
+<button type="button" class="ml-ind-constructor-ok">OK</button>
+<button type="button" value="cancel" class="ml-ind-constructor-cancel">Отмена</button>
+</div>
+</form>`;
+    dlg.querySelector(".ml-ind-constructor-cancel")?.addEventListener("click", () => dlg.close("cancel"));
+    const form = dlg.querySelector(".ml-ind-constructor-form");
+    const okBtn = dlg.querySelector(".ml-ind-constructor-ok");
+    okBtn?.addEventListener("click", () => {
+      const nameEl = dlg.querySelector(".ml-ind-constructor-name");
+      const ta = dlg.querySelector(".ml-ind-constructor-formula");
+      const statusEl = dlg.querySelector(".ml-ind-constructor-status");
+      const name = String(nameEl?.value || "").trim();
+      const formula = String(ta?.value || "").trim();
+      if (!/^[\w][\w.\-]*$/.test(name)) {
+        if (statusEl) statusEl.textContent = "Имя: латиница, цифры, _ . - (с буквы)";
+        return;
+      }
+      const valid = validateCustomIndicatorFormula(formula);
+      if (!valid.ok) {
+        if (statusEl) statusEl.textContent = (valid.errors || []).join(" · ");
+        return;
+      }
+      dlg.returnValue = "ok";
+      dlg.close();
+    });
+    document.body.appendChild(dlg);
+    return dlg;
+  }
+
+  function finrespAssetUrl(relativePath) {
+    const base = (typeof window !== "undefined" && window.__mlFinrespAssetBase)
+      || (() => {
+        const script = document.querySelector("script[data-ml-finresp]");
+        if (script?.src) return script.src.replace(/[^/]+$/, "");
+        const href = document.querySelector("base")?.getAttribute("href") || "/";
+        const b = href.endsWith("/") ? href : `${href}/`;
+        return `${b}assets/finresp/`;
+      })();
+    return `${base}${relativePath}`;
+  }
+
+  function openIndicatorConstructorHelp() {
+    window.open(finrespAssetUrl(INDICATOR_CONSTRUCTOR_HELP), "_blank", "noopener");
+  }
+
+  function validateCustomIndicatorFormula(formula) {
+    if (!P?.validatePolyIndicatorFormula) {
+      return { ok: false, errors: ["Модуль конструктора индикаторов не загружен"] };
+    }
+    return P.validatePolyIndicatorFormula(formula, {
+      resolveKind: (label) => (E.chartIndicatorEditorLabelToKey
+        ? E.chartIndicatorEditorLabelToKey(label)
+        : String(label || "").toLowerCase()),
+      resolveCustom: (label) => (state.customIndicators || []).find((c) => c.name === label) || null
+    });
+  }
+
+  async function openIndicatorConstructorDialog() {
+    const dlg = ensureIndicatorConstructorDialog();
+    const nameEl = dlg.querySelector(".ml-ind-constructor-name");
+    const ta = dlg.querySelector(".ml-ind-constructor-formula");
+    const statusEl = dlg.querySelector(".ml-ind-constructor-status");
+    if (ta) ta.value = P?.EXAMPLE_PLACEHOLDER || "SMA(20) - SMA(50)";
+    if (nameEl) nameEl.value = "";
+    if (statusEl) statusEl.textContent = "";
+    return new Promise((resolve) => {
+      const onClose = () => {
+        dlg.removeEventListener("close", onClose);
+        if (dlg.returnValue !== "ok") {
+          resolve({ ok: false });
+          return;
+        }
+        resolve({
+          ok: true,
+          name: String(nameEl?.value || "").trim(),
+          formula: String(ta?.value || "").trim()
+        });
+      };
+      dlg.addEventListener("close", onClose);
+      if (typeof dlg.showModal === "function") dlg.showModal();
+      else resolve({ ok: false });
+    });
+  }
+
+  function removeCustomIndicator(idOrKey) {
+    const key = String(idOrKey || "").trim();
+    if (!key || !state.customIndicators?.length) return;
+    const before = state.customIndicators.length;
+    state.customIndicators = state.customIndicators.filter(
+      (c) => c.id !== key && customIndicatorKey(c) !== key
+    );
+    if (state.customIndicators.length === before) return;
+    renderIndicatorToggles();
+    syncCompositeCatalogToEngine();
+    saveConfig();
+    renderFromParams();
+  }
+
+  function addCustomIndicator(entry) {
+    const name = String(entry?.name || "").trim();
+    const formula = String(entry?.formula || "").trim();
+    if (!name || !formula) return false;
+    const id = `ci_${slugifyIndicatorName(name)}`;
+    const dup = (state.customIndicators || []).some((c) => c.name.toLowerCase() === name.toLowerCase());
+    if (dup) return false;
+    if (!state.customIndicators) state.customIndicators = [];
+    state.customIndicators.push({ id, name, formula, enabled: true });
+    renderIndicatorToggles();
+    const ck = customIndicatorKey({ id, name });
+    const box = document.querySelector(`#indicator-toggles input[value="${ck}"]`);
+    if (box) box.checked = true;
+    syncCompositeCatalogToEngine();
+    saveConfig();
+    renderFromParams();
+    return true;
+  }
+
+  function initIndicatorConstructorUi() {
+    const addBtn = $("ind-constructor-add");
+    const helpBtn = $("ind-constructor-help");
+    if (addBtn && !addBtn.dataset.wired) {
+      addBtn.dataset.wired = "1";
+      addBtn.addEventListener("click", async () => {
+        const r = await openIndicatorConstructorDialog();
+        if (!r.ok) return;
+        if (!addCustomIndicator(r)) {
+          setCalcStatus("Индикатор с таким именем уже есть");
+        }
+      });
+    }
+    if (helpBtn && !helpBtn.dataset.wired) {
+      helpBtn.dataset.wired = "1";
+      helpBtn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        openIndicatorConstructorHelp();
+      });
+    }
+    const togglesBox = $("indicator-toggles");
+    if (togglesBox && !togglesBox.dataset.removeCustomWired) {
+      togglesBox.dataset.removeCustomWired = "1";
+      togglesBox.addEventListener("click", (ev) => {
+        const btn = ev.target?.closest?.("[data-remove-custom-indicator]");
+        if (!btn) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        removeCustomIndicator(btn.getAttribute("data-remove-custom-indicator"));
+      });
     }
   }
 
@@ -7041,14 +7404,661 @@
   let chartIndicatorSpecsCache = null;
   let chartIndicatorColumnsBySec = null;
   let chartIndicatorPrewarmGen = null;
+  const chartIndicatorColumnsPending = Object.create(null);
+  let chartIndicatorPrewarmCancelled = false;
+  const chartIndicatorRowsFpBySec = Object.create(null);
+  const CHART_INDICATOR_APPLY_TIMEOUT_MS = 45000;
+  const CHART_INDICATOR_UI_STUCK_MS = 50000;
+  const CHART_IND_LOGIC_BTN = "Индикаторы логик";
+  const CHART_IND_LOGIC_BTN_ON = "Индикаторы логик на графике";
+  const CHART_IND_REMOVE_BTN = "Удалить индикаторы";
+  let chartIndActiveSec = null;
+  let chartIndClickSeq = 0;
+
+  /** Нормализация времени бара для сопоставления строк графика и MOEX-пакета. */
+  function chartTimeKey(t) {
+    let s = String(t ?? "").trim().replace("T", " ");
+    if (!s) return "";
+    s = s.replace(/\.\d{1,9}(?=$|[+-])/, "").replace(/Z$/i, "").replace(/[+-]\d{2}:\d{2}$/, "");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s} 00:00:00`;
+    const hm = s.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})$/);
+    if (hm) return `${hm[1]} ${hm[2]}:00`;
+    return s;
+  }
+
+  /** Свечи только из строк графика (окно расчёта), без полного MOEX-пакета. */
+  function rowsToCandlePack(rows, sec) {
+    if (!rows?.length) return [];
+    return rows.map((r) => ({
+      time: r.time,
+      open: r.open ?? r.close,
+      high: r.high ?? r.close,
+      low: r.low ?? r.close,
+      close: r.close,
+      sec: r.sec || sec || "",
+      market: r.market || "shares"
+    })).filter((c) => c.close != null);
+  }
+
+  /**
+   * Пакет свечей для расчёта индикаторов на графике: MOEX-история с прогревом + индекс строки графика → бар пакета.
+   */
+  function chartTfBarMinutes(tf) {
+    const t = String(tf || "60");
+    if (t === "24" || t === "D") return 24 * 60;
+    if (t === "7" || t === "W") return 7 * 24 * 60;
+    return Math.max(1, parseInt(t, 10) || 60);
+  }
+
+  function chartIndicatorLoadFromDate(firstTime, warmupBars, tf) {
+    const barMin = chartTfBarMinutes(tf);
+    const days = Math.ceil((warmupBars * barMin) / (60 * 24)) + 12;
+    const dk = chartTimeKey(firstTime).slice(0, 10);
+    const d = new Date(`${dk}T12:00:00`);
+    if (Number.isNaN(d.getTime())) return null;
+    d.setDate(d.getDate() - days);
+    return formatDay(d);
+  }
+
+  function mergeCandleSeriesByTimeKey(seriesList) {
+    const map = new Map();
+    for (const arr of seriesList || []) {
+      for (const c of arr || []) {
+        if (c?.close == null) continue;
+        const k = chartTimeKey(c.time);
+        if (!k) continue;
+        map.set(k, { ...c });
+      }
+    }
+    return [...map.values()].sort((a, b) => chartTimeKey(a.time).localeCompare(chartTimeKey(b.time)));
+  }
+
+  function chartCustomIndicatorWarmupBars(atoms) {
+    let maxL = 20;
+    for (const a of atoms || []) {
+      const k = indicatorKey(a.kind);
+      if (!["sma", "cma", "linreg", "bollinger", "vwap"].includes(k)) continue;
+      const raw = String(a.params || "");
+      const head = raw.split(";")[0].trim();
+      const len = parseInt(head, 10);
+      if (Number.isFinite(len) && len > maxL) maxL = len;
+    }
+    return Math.max(120, maxL + 20);
+  }
+
+  function chartLogicIndicatorWarmupBars() {
+    return E.warmupBars ? E.warmupBars() : 120;
+  }
+
+  function mapChartRowsToPackIndices(packFull, rows) {
+    const rowToPack = new Array(rows?.length || 0).fill(-1);
+    if (!packFull?.length || !rows?.length) {
+      return { rowToPack, minPi: Infinity, maxPi: -1, matched: 0 };
+    }
+    const timeIdx = new Map(packFull.map((c, i) => [chartTimeKey(c.time), i]));
+    const p0 = timeIdx.get(chartTimeKey(rows[0].time));
+    const pN = timeIdx.get(chartTimeKey(rows[rows.length - 1].time));
+    if (p0 != null && pN != null && pN >= p0 && pN - p0 + 1 === rows.length) {
+      for (let ri = 0; ri < rows.length; ri++) rowToPack[ri] = p0 + ri;
+      return { rowToPack, minPi: p0, maxPi: pN, matched: rows.length };
+    }
+    let minPi = Infinity;
+    let maxPi = -1;
+    let matched = 0;
+    for (let ri = 0; ri < rows.length; ri++) {
+      const pi = timeIdx.get(chartTimeKey(rows[ri].time));
+      if (pi == null) continue;
+      rowToPack[ri] = pi;
+      matched += 1;
+      if (pi < minPi) minPi = pi;
+      if (pi > maxPi) maxPi = pi;
+    }
+    return { rowToPack, minPi, maxPi, matched };
+  }
+
+  function slicePackForRowMapping(packFull, rowToPack, minPi, maxPi, warmupBars) {
+    const start = Math.max(0, minPi - warmupBars);
+    const pack = packFull.slice(start, maxPi + 1);
+    const adj = rowToPack.map((pi) => (pi >= 0 ? pi - start : -1));
+    return { pack, rowToPack: adj, packStart: start };
+  }
+
+  function mapIndicatorColumnsToRows(columns, rowToPack, rowCount) {
+    const keys = Object.keys(columns || {});
+    if (!keys.length) return columns;
+    const out = {};
+    for (let ki = 0; ki < keys.length; ki++) {
+      const k = keys[ki];
+      out[k] = new Array(rowCount);
+      for (let ri = 0; ri < rowCount; ri++) {
+        const pi = rowToPack[ri];
+        if (pi == null || pi < 0) continue;
+        const v = columns[k][pi];
+        if (v != null) out[k][ri] = v;
+      }
+    }
+    return out;
+  }
+
+  async function ensureChartIndicatorPackForRows(rows, sec, warmupBars) {
+    let packFull = packForSec(sec);
+    if (!packFull?.length || !rows?.length) {
+      const pack = rowsToCandlePack(rows, sec);
+      const packTimeIdx = new Map(pack.map((c, i) => [chartTimeKey(c.time), i]));
+      const rowToPack = rows.map((r) => {
+        const pi = packTimeIdx.get(chartTimeKey(r.time));
+        return pi != null ? pi : -1;
+      });
+      return { pack, rowToPack, source: "rows", packExtended: false };
+    }
+
+    let mapped = mapChartRowsToPackIndices(packFull, rows);
+    let packExtended = false;
+
+    if (mapped.matched > 0 && Number.isFinite(mapped.minPi) && mapped.minPi < warmupBars && E.loadInstrumentSec) {
+      const head = packFull[0];
+      const market = head.market || "shares";
+      const tf = $("calc-tf")?.value || "60";
+      const loadFrom = chartIndicatorLoadFromDate(rows[0]?.time || head.time, warmupBars, tf);
+      const loadTill = chartTimeKey(rows[0]?.time || head.time).slice(0, 10);
+      if (loadFrom && loadTill && loadFrom < loadTill) {
+        try {
+          const ext = await E.loadInstrumentSec(sec, loadFrom, loadTill, tf, market, state.candleCache || null);
+          if (ext?.ok && ext.pack?.length) {
+            packFull = mergeCandleSeriesByTimeKey([ext.pack, packFull]);
+            mapped = mapChartRowsToPackIndices(packFull, rows);
+            if (mapped.matched > 0) packExtended = true;
+          }
+        } catch (_) { /* расширение истории опционально */ }
+      }
+    }
+
+    if (mapped.matched > 0 && Number.isFinite(mapped.minPi)) {
+      const sliced = slicePackForRowMapping(packFull, mapped.rowToPack, mapped.minPi, mapped.maxPi, warmupBars);
+      return { ...sliced, source: "moex", packExtended };
+    }
+
+    const pack = rowsToCandlePack(rows, sec);
+    const packTimeIdx = new Map(pack.map((c, i) => [chartTimeKey(c.time), i]));
+    const rowToPack = rows.map((r) => {
+      const pi = packTimeIdx.get(chartTimeKey(r.time));
+      return pi != null ? pi : -1;
+    });
+    return { pack, rowToPack, source: "rows", packExtended: false };
+  }
+
+  /** @deprecated sync shim — используйте ensureChartIndicatorPackForRows */
+  function chartCandlePackForIndicators(rows, sec, warmupBars = 110) {
+    const packFull = packForSec(sec);
+    if (!packFull?.length) {
+      const pack = rowsToCandlePack(rows, sec);
+      const rowToPack = rows.map((_, ri) => (ri < pack.length ? ri : -1));
+      return { pack, rowToPack, source: "rows" };
+    }
+    const mapped = mapChartRowsToPackIndices(packFull, rows);
+    if (mapped.matched > 0 && Number.isFinite(mapped.minPi)) {
+      const sliced = slicePackForRowMapping(packFull, mapped.rowToPack, mapped.minPi, mapped.maxPi, warmupBars);
+      return { pack: sliced.pack, rowToPack: sliced.rowToPack, source: "moex" };
+    }
+    const pack = rowsToCandlePack(rows, sec);
+    const packTimeIdx = new Map(pack.map((c, i) => [chartTimeKey(c.time), i]));
+    const rowToPack = rows.map((r) => {
+      const pi = packTimeIdx.get(chartTimeKey(r.time));
+      return pi != null ? pi : -1;
+    });
+    return { pack, rowToPack, source: "rows" };
+  }
+
+  function chartIndicatorRowsFingerprint(rows) {
+    if (!rows?.length) return "0";
+    return `${rows.length}:${rows[0]?.time}:${rows[rows.length - 1]?.time}`;
+  }
+
+  function withChartIndicatorTimeout(promise, sec) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error(`chart-indicators-timeout:${sec}`)), CHART_INDICATOR_APPLY_TIMEOUT_MS);
+      })
+    ]);
+  }
+  const chartCustomAtomsBySec = Object.create(null);
+  const chartCustomIndicatorSpecsBySec = Object.create(null);
+  const chartCustomEditorDraftBySec = Object.create(null);
+
+  function customChartIndicatorLineSpecs(sec) {
+    return chartCustomIndicatorSpecsBySec[sec] || [];
+  }
+
+  function chartAddIndicatorDefaultText(sec) {
+    if (chartCustomEditorDraftBySec[sec]) return chartCustomEditorDraftBySec[sec];
+    if (E.chartIndicatorEditorCatalogLines) {
+      return E.chartIndicatorEditorCatalogLines().join("\n");
+    }
+    return "";
+  }
+
+  function ensureChartAddIndicatorDialog() {
+    let dlg = document.getElementById("chart-add-indicator-dialog");
+    if (dlg) return dlg;
+    dlg = document.createElement("dialog");
+    dlg.id = "chart-add-indicator-dialog";
+    dlg.className = "ml-chart-add-ind-dialog";
+    dlg.innerHTML = `<form method="dialog" class="ml-chart-add-ind-form">
+<p class="ml-chart-add-ind-title">Добавить индикатор на график</p>
+<p class="ml-chart-add-ind-hint">Оставьте нужные строки, отредактируйте параметры в скобках. Пустые строки и строки с <code>#</code> игнорируются. Нераспознанные строки — сообщение, остальные применяются.</p>
+<textarea class="ml-chart-add-ind-text" rows="14" spellcheck="false" aria-label="Индикаторы"></textarea>
+<p class="ml-chart-add-ind-status" role="status"></p>
+<div class="ml-chart-add-ind-actions">
+<button type="submit" value="ok" class="ml-chart-add-ind-ok">OK</button>
+<button type="button" value="cancel" class="ml-chart-add-ind-cancel">Отмена</button>
+</div>
+</form>`;
+    const cancelBtn = dlg.querySelector(".ml-chart-add-ind-cancel");
+    cancelBtn?.addEventListener("click", () => dlg.close("cancel"));
+    document.body.appendChild(dlg);
+    return dlg;
+  }
+
+  function openChartAddIndicatorDialog(sec) {
+    const dlg = ensureChartAddIndicatorDialog();
+    const ta = dlg.querySelector(".ml-chart-add-ind-text");
+    const statusEl = dlg.querySelector(".ml-chart-add-ind-status");
+    if (ta) ta.value = chartAddIndicatorDefaultText(sec);
+    if (statusEl) statusEl.textContent = "";
+    return new Promise((resolve) => {
+      const onClose = () => {
+        dlg.removeEventListener("close", onClose);
+        const ok = dlg.returnValue === "ok";
+        resolve(ok ? { ok: true, text: ta?.value || "" } : { ok: false });
+      };
+      dlg.addEventListener("close", onClose);
+      if (typeof dlg.showModal === "function") dlg.showModal();
+      else resolve({ ok: false });
+    });
+  }
+
+  async function applyCustomChartIndicatorsInPlace(rows, sec, atoms) {
+    if (!rows?.length || !atoms?.length || !E.buildCustomChartIndicatorOverlay) {
+      return { ok: false, lineSpecs: customChartIndicatorLineSpecs(sec), messages: [], rowKeysApplied: 0 };
+    }
+    const warmupBars = chartCustomIndicatorWarmupBars(atoms);
+    const { pack, rowToPack, source, packExtended } = await ensureChartIndicatorPackForRows(rows, sec, warmupBars);
+    if (!pack.length) {
+      return { ok: false, lineSpecs: customChartIndicatorLineSpecs(sec), messages: ["Нет свечей для расчёта индикаторов"], rowKeysApplied: 0 };
+    }
+    const cache = indicatorCacheForPack(pack);
+    if (!cache) {
+      return { ok: false, lineSpecs: customChartIndicatorLineSpecs(sec), messages: ["Кэш индикаторов недоступен"], rowKeysApplied: 0 };
+    }
+    cancelChartIndicatorPrewarm();
+    beginChartCustomIndDiag(sec, rows, atoms);
+    setChartCustomIndDiag({ phase: "pack", packBars: pack.length, packSource: source, packExtended: !!packExtended });
+    let overlay;
+    try {
+      setChartCustomIndDiag({ phase: "overlay" });
+      overlay = await withChartIndicatorTimeout(
+        buildCustomChartIndicatorOverlayAsync(cache, atoms, () => yieldToUi()),
+        sec
+      );
+    } catch (err) {
+      endChartCustomIndDiag(false, err);
+      return { ok: false, lineSpecs: customChartIndicatorLineSpecs(sec), messages: [String(err?.message || err)], rowKeysApplied: 0 };
+    }
+    const columns = overlay.columns || {};
+    const keys = Object.keys(columns);
+    if (!keys.length) {
+      endChartCustomIndDiag(false, new Error("custom-ind-no-columns"), { lineSpecCount: 0, rowKeysApplied: 0 });
+      return {
+        ok: false,
+        lineSpecs: customChartIndicatorLineSpecs(sec),
+        messages: overlay.warnings?.length ? overlay.warnings : ["Индикатор не дал линий на графике цены"],
+        rowKeysApplied: 0
+      };
+    }
+    setChartCustomIndDiag({ phase: "apply", columnKeys: keys.length });
+    let rowKeysApplied = 0;
+    const CHUNK = 40;
+    for (let ri = 0; ri < rows.length; ri++) {
+      const pi = rowToPack[ri];
+      if (pi == null || pi < 0) continue;
+      const row = rows[ri];
+      let wrote = false;
+      for (let ki = 0; ki < keys.length; ki++) {
+        const v = columns[keys[ki]][pi];
+        if (v != null) {
+          row[keys[ki]] = v;
+          wrote = true;
+        }
+      }
+      if (wrote) rowKeysApplied += 1;
+      if (ri > 0 && ri % CHUNK === 0) await yieldToUi();
+    }
+    if (!rowKeysApplied) {
+      endChartCustomIndDiag(false, new Error("custom-ind-no-row-values"), { rowKeysApplied: 0 });
+      return {
+        ok: false,
+        lineSpecs: customChartIndicatorLineSpecs(sec),
+        messages: ["Индикаторы рассчитаны, но не совпали бары графика и свечей (проверьте период/тикер)"],
+        rowKeysApplied: 0
+      };
+    }
+    const merged = (overlay.lineSpecs || []).slice();
+    chartCustomIndicatorSpecsBySec[sec] = merged;
+    endChartCustomIndDiag(true, null, { lineSpecCount: merged.length, rowKeysApplied });
+    return { ok: true, lineSpecs: merged, messages: overlay.warnings || [], rowKeysApplied };
+  }
+
+  async function applyCustomChartIndicatorsFromEditor(rows, sec, text) {
+    if (!E.parseChartIndicatorEditorLines) {
+      return { ok: false, messages: ["Редактор индикаторов недоступен (engine)"] };
+    }
+    chartCustomEditorDraftBySec[sec] = text;
+    const parsed = E.parseChartIndicatorEditorLines(text);
+    const messages = [...(parsed.errors || [])];
+    if (!parsed.atoms.length) {
+      return { ok: false, messages: messages.length ? messages : ["Нет распознанных строк индикаторов"] };
+    }
+    const atomSig = (a) => `${indicatorKey(a.kind)}(${a.params})`;
+    const prevAtoms = chartCustomAtomsBySec[sec] || [];
+    const seen = new Set(prevAtoms.map(atomSig));
+    const newAtoms = parsed.atoms.filter((a) => {
+      const sig = atomSig(a);
+      if (seen.has(sig)) return false;
+      seen.add(sig);
+      return true;
+    });
+    if (!newAtoms.length) {
+      if (parsed.atoms.length && !(customChartIndicatorLineSpecs(sec).length)) {
+        const retry = await applyCustomChartIndicatorsInPlace(rows, sec, parsed.atoms);
+        messages.push(...(retry.messages || []));
+        if (retry.ok) {
+          chartCustomAtomsBySec[sec] = parsed.atoms.slice();
+          return { ok: true, messages, lineSpecs: retry.lineSpecs || [] };
+        }
+      }
+      messages.push("Все распознанные индикаторы уже на графике");
+      return { ok: false, messages };
+    }
+    const allAtoms = [...prevAtoms, ...newAtoms];
+    const applied = await applyCustomChartIndicatorsInPlace(rows, sec, allAtoms);
+    messages.push(...(applied.messages || []));
+    if (!applied.ok) {
+      return { ok: false, messages };
+    }
+    chartCustomAtomsBySec[sec] = allAtoms;
+    return { ok: true, messages, lineSpecs: applied.lineSpecs || customChartIndicatorLineSpecs(sec) };
+  }
+
+  async function applyChartAddIndicatorText(rows, sec, text) {
+    return applyCustomChartIndicatorsFromEditor(rows, sec, text);
+  }
+
+  function indicatorKey(kind) {
+    return E.indicatorKey ? E.indicatorKey(kind) : String(kind || "").toLowerCase();
+  }
+
+  async function reapplyStoredCustomChartIndicators(rows, sec) {
+    const atoms = chartCustomAtomsBySec[sec];
+    if (!atoms?.length) return;
+    await applyCustomChartIndicatorsInPlace(rows, sec, atoms);
+  }
+
+  function showChartAddIndicatorMessages(sec, messages) {
+    const dlg = document.getElementById("chart-add-indicator-dialog");
+    const statusEl = dlg?.querySelector(".ml-chart-add-ind-status");
+    if (statusEl && messages?.length) {
+      statusEl.textContent = messages.join(" · ");
+    }
+    if (messages?.length) {
+      const brief = messages.length > 2
+        ? `${messages.slice(0, 2).join(" · ")} (+${messages.length - 2})`
+        : messages.join(" · ");
+      setCalcStatus(`График ${sec}: ${brief}`);
+    }
+  }
+
+  function wireChartAddIndicatorButton(btn, sec, rawRows, onRowsReady) {
+    if (!btn || !rawRows?.length || !E.parseChartIndicatorEditorLines) return;
+    btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const dlgResult = await openChartAddIndicatorDialog(sec);
+      if (!dlgResult.ok) return;
+      const prev = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Загрузка…";
+      let uiDone = false;
+      const stuckTimer = setTimeout(() => {
+        if (!uiDone) {
+          btn.disabled = false;
+          btn.textContent = prev;
+          setCalcStatus(`График ${sec}: добавление индикатора — таймаут UI, повторите.`);
+        }
+      }, CHART_INDICATOR_UI_STUCK_MS);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      try {
+        const result = await applyCustomChartIndicatorsFromEditor(rawRows, sec, dlgResult.text);
+        showChartAddIndicatorMessages(sec, result.messages);
+        if (!result.ok) {
+          btn.disabled = false;
+          btn.textContent = prev;
+          return;
+        }
+        if (!result.lineSpecs?.length) {
+          btn.disabled = false;
+          btn.textContent = prev;
+          setCalcStatus(`График ${sec}: индикаторы не отрисованы — см. сообщение в диалоге`);
+          return;
+        }
+        btn.textContent = "Индикаторы добавлены";
+        btn.classList.add("ml-chart-copy-btn--ok");
+        await Promise.resolve(onRowsReady(rawRows, result.lineSpecs || customChartIndicatorLineSpecs(sec)));
+        btn.disabled = false;
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = prev;
+        setCalcStatus(`График ${sec}: ${err?.message || err}`);
+      } finally {
+        uiDone = true;
+        clearTimeout(stuckTimer);
+      }
+    });
+  }
+
+  function createChartAddIndicatorButton(sec, rawRows, onRowsReady) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ml-chart-copy-btn ml-chart-add-ind-btn";
+    btn.textContent = "Добавить индикатор";
+    btn.title = "Выбрать и отредактировать индикаторы с параметрами; несколько строк — несколько линий на графике";
+    wireChartAddIndicatorButton(btn, sec, rawRows, onRowsReady);
+    return btn;
+  }
 
   function resetChartIndicatorSpecsCache() {
     chartIndicatorSpecsCache = null;
     chartIndicatorColumnsBySec = null;
     chartIndicatorPrewarmGen = null;
+    for (const k of Object.keys(chartIndicatorRowsFpBySec)) delete chartIndicatorRowsFpBySec[k];
+    for (const k of Object.keys(chartCustomAtomsBySec)) delete chartCustomAtomsBySec[k];
+    for (const k of Object.keys(chartCustomIndicatorSpecsBySec)) delete chartCustomIndicatorSpecsBySec[k];
+    for (const k of Object.keys(chartCustomEditorDraftBySec)) delete chartCustomEditorDraftBySec[k];
+    chartIndActiveSec = null;
+  }
+
+  function chartRowsReadyForIndicators(rows) {
+    return !!rows?.length && rows.some((r) => r?.close != null);
+  }
+
+  function chartIndDiagOpts(sec) {
+    return chartIndActiveSec === sec ? {} : { prewarmOnly: true };
+  }
+
+  function setChartIndDiag(patch, opts) {
+    if (!calcState) return;
+    const o = opts || {};
+    const prev = calcState.chartIndDiag || {};
+    if (o.prewarmOnly && prev.busy) return;
+    calcState.chartIndDiag = {
+      ...prev,
+      ...patch,
+      prewarm: !!o.prewarmOnly,
+      updatedAt: new Date().toISOString()
+    };
+    updateTechInfo("chart-ind");
+  }
+
+  function beginChartIndDiag(sec, rows) {
+    chartIndClickSeq += 1;
+    chartIndActiveSec = sec || null;
+    cancelChartIndicatorPrewarm();
+    setChartIndDiag({
+      busy: true,
+      mode: "logic",
+      sec: sec || "—",
+      phase: "click",
+      clickId: chartIndClickSeq,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      elapsedMs: null,
+      rowCount: rows?.length || 0,
+      candleCount: 0,
+      columnKeys: 0,
+      error: null,
+      stuck: false,
+      network: "none"
+    });
+  }
+
+  function endChartIndDiag(ok, err, extra) {
+    const d = calcState?.chartIndDiag;
+    const t0 = d?.startedAt ? Date.parse(d.startedAt) : Date.now();
+    setChartIndDiag({
+      busy: false,
+      phase: ok ? "done" : "error",
+      finishedAt: new Date().toISOString(),
+      elapsedMs: Math.max(0, Date.now() - t0),
+      error: err ? String(err?.message || err) : null,
+      stuck: false,
+      ...(extra || {})
+    });
+    chartIndActiveSec = null;
+  }
+
+  function markChartIndUiStuck(sec) {
+    setChartIndDiag({
+      busy: false,
+      phase: "stuck",
+      sec: sec || chartIndActiveSec || "—",
+      stuck: true,
+      error: "ui-stuck: кнопка не отвисла"
+    });
+    chartIndActiveSec = null;
+  }
+
+  function listChartIndicatorKeysOnRows(rows, sec) {
+    const keys = new Set();
+    const cols = chartIndicatorColumnsBySec?.[sec];
+    if (cols) Object.keys(cols).forEach((k) => keys.add(k));
+    for (const s of chartCustomIndicatorSpecsBySec[sec] || []) {
+      if (s?.key) keys.add(s.key);
+    }
+    if (rows?.length) {
+      for (const r of rows) {
+        for (const k of Object.keys(r)) {
+          if (/^(sma|cma|linreg|boll|vwap|atr|stoch|macd|cci|mom|rand)/i.test(k) || k.startsWith("ind_") || k.startsWith("xind_")) {
+            keys.add(k);
+          }
+        }
+      }
+    }
+    return [...keys];
+  }
+
+  function clearAllChartIndicatorsForSec(sec, rows) {
+    const keys = listChartIndicatorKeysOnRows(rows, sec);
+    if (rows?.length && keys.length) {
+      for (const r of rows) {
+        for (const k of keys) delete r[k];
+      }
+    }
+    if (chartIndicatorColumnsBySec) delete chartIndicatorColumnsBySec[sec];
+    delete chartIndicatorRowsFpBySec[sec];
+    delete chartIndicatorColumnsPending[sec];
+    delete chartCustomAtomsBySec[sec];
+    delete chartCustomIndicatorSpecsBySec[sec];
+    delete chartCustomEditorDraftBySec[sec];
+    setChartIndDiag({
+      phase: "cleared",
+      sec,
+      busy: false,
+      error: null,
+      stuck: false,
+      columnKeys: 0
+    }, chartIndDiagOpts(sec));
+    return keys;
+  }
+
+  function cancelChartIndicatorPrewarm() {
+    chartIndicatorPrewarmCancelled = true;
+    chartIndicatorPrewarmGen = null;
+    for (const k of Object.keys(chartIndicatorColumnsPending)) delete chartIndicatorColumnsPending[k];
+  }
+
+  function setChartCustomIndDiag(patch) {
+    if (!calcState) return;
+    const prev = calcState.chartCustomIndDiag || {};
+    calcState.chartCustomIndDiag = {
+      ...prev,
+      ...patch,
+      updatedAt: new Date().toISOString()
+    };
+    updateTechInfo("chart-custom-ind");
+  }
+
+  function beginChartCustomIndDiag(sec, rows, atoms) {
+    setChartCustomIndDiag({
+      busy: true,
+      sec: sec || "—",
+      phase: "start",
+      startedAt: new Date().toISOString(),
+      rowCount: rows?.length || 0,
+      atomCount: atoms?.length || 0,
+      lineSpecCount: 0,
+      elapsedMs: null,
+      error: null
+    });
+  }
+
+  function endChartCustomIndDiag(ok, err, extra) {
+    const d = calcState?.chartCustomIndDiag;
+    const t0 = d?.startedAt ? Date.parse(d.startedAt) : Date.now();
+    setChartCustomIndDiag({
+      busy: false,
+      phase: ok ? "done" : "error",
+      finishedAt: new Date().toISOString(),
+      elapsedMs: Math.max(0, Date.now() - t0),
+      error: err ? String(err?.message || err) : null,
+      ...(extra || {})
+    });
+  }
+
+  async function buildCustomChartIndicatorOverlayAsync(cache, atoms, onYield) {
+    if (E.buildCustomChartIndicatorOverlayAsync) {
+      return E.buildCustomChartIndicatorOverlayAsync(cache, atoms, onYield);
+    }
+    if (onYield) await onYield();
+    return E.buildCustomChartIndicatorOverlay(cache, atoms);
   }
 
   async function buildChartIndicatorColumnsAsync(cache, specs, indicators, packLen, onYield) {
+    if (E.buildChartDisplayIndicatorColumnsAsync) {
+      return E.buildChartDisplayIndicatorColumnsAsync(cache, specs, indicators, onYield);
+    }
+    if (onYield) await onYield();
+    if (E.buildChartDisplayIndicatorColumnsFast) {
+      return E.buildChartDisplayIndicatorColumnsFast(cache, specs, indicators);
+    }
     if (E.warmChartDisplayIndicatorSeries) {
       E.warmChartDisplayIndicatorSeries(cache, specs, indicators);
     }
@@ -7071,39 +8081,62 @@
 
   async function ensureChartIndicatorColumns(sec, rows) {
     if (!chartIndicatorColumnsBySec) chartIndicatorColumnsBySec = Object.create(null);
-    if (chartIndicatorColumnsBySec[sec]) return chartIndicatorColumnsBySec[sec];
-    const packFull = packForSec(sec);
-    if (!packFull?.length || !rows?.length) return null;
-    const { pack } = packWindowForRows(packFull, rows);
-    const cache = indicatorCacheForPack(pack);
-    if (!cache) return null;
-    await yieldToUi();
-    const columns = await buildChartIndicatorColumnsAsync(
-      cache,
-      chartIndicatorSpecs(),
-      indicatorSelection(),
-      pack.length,
-      () => yieldToUi()
-    );
-    chartIndicatorColumnsBySec[sec] = columns;
-    return columns;
+    const fp = chartIndicatorRowsFingerprint(rows);
+    if (chartIndicatorColumnsBySec[sec] && chartIndicatorRowsFpBySec[sec] === fp) {
+      return chartIndicatorColumnsBySec[sec];
+    }
+    if (chartIndicatorRowsFpBySec[sec] !== fp) {
+      delete chartIndicatorColumnsBySec[sec];
+    }
+    if (chartIndicatorColumnsPending[sec]) return chartIndicatorColumnsPending[sec];
+
+    chartIndicatorColumnsPending[sec] = (async () => {
+      try {
+        if (!rows?.length) return null;
+        setChartIndDiag({ phase: "pack", sec }, chartIndDiagOpts(sec));
+        const warmupBars = chartLogicIndicatorWarmupBars();
+        const { pack, rowToPack, source } = await ensureChartIndicatorPackForRows(rows, sec, warmupBars);
+        if (!pack.length) return null;
+        setChartIndDiag({ phase: "cache", candleCount: pack.length, packSource: source }, chartIndDiagOpts(sec));
+        const cache = indicatorCacheForPack(pack);
+        if (!cache) return null;
+        await yieldToUi();
+        setChartIndDiag({ phase: "warm" }, chartIndDiagOpts(sec));
+        const columnsPack = await buildChartIndicatorColumnsAsync(
+          cache,
+          chartIndicatorSpecs(),
+          indicatorSelection(),
+          pack.length,
+          () => yieldToUi()
+        );
+        const columns = mapIndicatorColumnsToRows(columnsPack, rowToPack, rows.length);
+        setChartIndDiag({ phase: "columns", columnKeys: Object.keys(columns || {}).length }, chartIndDiagOpts(sec));
+        chartIndicatorColumnsBySec[sec] = columns;
+        chartIndicatorRowsFpBySec[sec] = fp;
+        return columns;
+      } finally {
+        delete chartIndicatorColumnsPending[sec];
+      }
+    })();
+
+    return chartIndicatorColumnsPending[sec];
   }
 
   /** Наложить предрасчитанные колонки индикаторов на строки графика (in-place). */
   async function applyChartIndicatorsInPlace(rows, sec) {
     if (!rows?.length) return rows;
+    if (!chartRowsReadyForIndicators(rows)) return rows;
     await yieldToUi();
+    setChartIndDiag({ phase: "ensure", sec, rowCount: rows.length }, chartIndDiagOpts(sec));
     const columns = await ensureChartIndicatorColumns(sec, rows);
-    if (!columns) return rows;
-    const { timeToIdx } = packWindowForRows(packForSec(sec), rows);
+    if (!columns || !Object.keys(columns).length) return rows;
+    setChartIndDiag({ phase: "apply", columnKeys: Object.keys(columns).length }, chartIndDiagOpts(sec));
     const keys = Object.keys(columns);
     const CHUNK = 80;
     for (let ri = 0; ri < rows.length; ri++) {
-      const idx = timeToIdx.get(rows[ri].time);
-      if (idx == null) continue;
       const row = rows[ri];
       for (let ki = 0; ki < keys.length; ki++) {
-        const v = columns[keys[ki]][idx];
+        const v = columns[keys[ki]][ri];
         if (v != null) row[keys[ki]] = v;
       }
       if (ri > 0 && ri % CHUNK === 0) await yieldToUi();
@@ -7111,18 +8144,42 @@
     return rows;
   }
 
+  async function applyChartIndicatorsForButton(rows, sec) {
+    beginChartIndDiag(sec, rows);
+    try {
+      if (!chartRowsReadyForIndicators(rows)) {
+        throw new Error("chart-ind-no-calc: сначала «Рассчитать»");
+      }
+      await applyChartIndicatorsInPlace(rows, sec);
+      endChartIndDiag(true, null);
+      return rows;
+    } catch (err) {
+      endChartIndDiag(false, err);
+      throw err;
+    }
+  }
+
   async function queueChartIndicatorPrewarm(entries) {
     const gen = state.runGeneration;
     chartIndicatorPrewarmGen = gen;
-    for (const entry of entries) {
-      if (entry.kind !== "ok" || chartIndicatorPrewarmGen !== gen) return;
-      const rawRows = entry.row?.rows;
-      const sec = entry.row?.sec;
-      if (!sec || !rawRows?.length) continue;
-      if (chartIndicatorColumnsBySec?.[sec]) continue;
+    chartIndicatorPrewarmCancelled = false;
+    const todo = (entries || []).filter((e) => e.kind === "ok" && e.row?.sec && e.row?.rows?.length);
+    let left = todo.length;
+    for (const entry of todo) {
+      if (chartIndicatorPrewarmCancelled || chartIndActiveSec || chartIndicatorPrewarmGen !== gen) return;
+      const rawRows = entry.row.rows;
+      const sec = entry.row.sec;
+      if (chartIndicatorColumnsBySec?.[sec]) {
+        left -= 1;
+        continue;
+      }
+      setChartIndDiag({ phase: "prewarm", prewarmSec: sec, prewarmLeft: left, mode: "prewarm" }, { prewarmOnly: true });
       await ensureChartIndicatorColumns(sec, rawRows);
+      left -= 1;
       await yieldToUi();
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
+    setChartIndDiag({ phase: "prewarm-done", prewarmSec: "—", prewarmLeft: 0 }, { prewarmOnly: true });
   }
 
   function chartIndicatorSpecs() {
@@ -7138,22 +8195,26 @@
   /** Узкое окно свечей под строки графика (быстрее кэш индикаторов). */
   function packWindowForRows(pack, rows) {
     if (!pack?.length || !rows?.length) {
-      return { pack, timeToIdx: new Map(pack?.map((c, i) => [c.time, i]) || []) };
+      return { pack, timeToIdx: new Map(pack?.map((c, i) => [chartTimeKey(c.time), i]) || []) };
     }
-    const fullIdx = new Map(pack.map((c, i) => [c.time, i]));
+    const fullIdx = new Map(pack.map((c, i) => [chartTimeKey(c.time), i]));
     let min = Infinity;
     let max = -1;
     for (const r of rows) {
-      const i = fullIdx.get(r.time);
+      const i = fullIdx.get(chartTimeKey(r.time));
       if (i == null) continue;
       if (i < min) min = i;
       if (i > max) max = i;
     }
     if (!Number.isFinite(min)) {
+      const rowPack = rowsToCandlePack(rows);
+      if (rowPack.length) {
+        return { pack: rowPack, timeToIdx: new Map(rowPack.map((c, i) => [chartTimeKey(c.time), i])) };
+      }
       return { pack, timeToIdx: fullIdx };
     }
     const sliced = pack.slice(min, max + 1);
-    return { pack: sliced, timeToIdx: new Map(sliced.map((c, i) => [c.time, i])) };
+    return { pack: sliced, timeToIdx: new Map(sliced.map((c, i) => [chartTimeKey(c.time), i])) };
   }
 
   /** Кэш индикаторов по пакету свечей (один раз на инструмент за отрисовку). */
@@ -7184,15 +8245,16 @@
       return {
         ...r,
         ...inferred,
-        open: r.open ?? candle?.open ?? r.close,
-        high: r.high ?? candle?.high ?? r.close,
-        low: r.low ?? candle?.low ?? r.close
+        close: r.close ?? candle?.close,
+        open: r.open ?? candle?.open ?? r.close ?? candle?.close,
+        high: r.high ?? candle?.high ?? r.close ?? candle?.close,
+        low: r.low ?? candle?.low ?? r.close ?? candle?.close
       };
     };
     if (enrichOpts?.withIndicators !== true) {
       const out = new Array(rows.length);
       for (let ri = 0; ri < rows.length; ri++) {
-        out[ri] = withOhlc(rows[ri], timeToIdx.get(rows[ri].time));
+        out[ri] = withOhlc(rows[ri], timeToIdx.get(chartTimeKey(rows[ri].time)));
       }
       return out;
     }
@@ -7200,26 +8262,66 @@
     return rows;
   }
 
-  /** Кнопка «Показать индикаторы» для одного графика (после расчёта). */
+  /** Кнопка «Индикаторы логик» для одного графика (после расчёта). */
   function wireChartIndicatorButton(btn, sec, rawRows, onRowsReady) {
     if (!btn || !rawRows?.length) return;
     let loaded = false;
     btn.addEventListener("click", async (ev) => {
       ev.stopPropagation();
       if (loaded) return;
+      cancelChartIndicatorPrewarm();
       btn.disabled = true;
       const prev = btn.textContent;
       btn.textContent = "Загрузка…";
+      const stuckTimer = setTimeout(() => {
+        if (!loaded && btn.disabled) {
+          btn.disabled = false;
+          btn.textContent = prev;
+          markChartIndUiStuck(sec);
+          setCalcStatus(`График ${sec}: индикаторы — таймаут UI, повторите клик.`);
+        }
+      }, CHART_INDICATOR_UI_STUCK_MS);
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       try {
-        await applyChartIndicatorsInPlace(rawRows, sec);
+        await withChartIndicatorTimeout(applyChartIndicatorsForButton(rawRows, sec), sec);
         loaded = true;
-        btn.textContent = "Индикаторы на графике";
+        btn.textContent = CHART_IND_LOGIC_BTN_ON;
         btn.classList.add("ml-chart-copy-btn--ok");
-        await Promise.resolve(onRowsReady(rawRows));
-      } catch (_) {
         btn.disabled = false;
+        await Promise.resolve(onRowsReady(rawRows));
+      } catch (err) {
+        btn.disabled = false;
+        const msg = String(err?.message || "");
+        if (msg.includes("chart-ind-no-calc")) btn.textContent = "Сначала «Рассчитать»";
+        else if (msg.includes("timeout")) btn.textContent = "Таймаут индикаторов";
+        else btn.textContent = "Ошибка загрузки";
+        btn.classList.add("ml-chart-copy-btn--err");
+        setTimeout(() => {
+          btn.textContent = prev;
+          btn.classList.remove("ml-chart-copy-btn--err");
+        }, 2800);
+        setCalcStatus(`График ${sec}: не удалось загрузить индикаторы`);
+      } finally {
+        clearTimeout(stuckTimer);
+      }
+    });
+  }
+
+  function wireChartClearIndicatorsButton(btn, sec, rawRows, onRowsReady) {
+    if (!btn || !rawRows?.length) return;
+    btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      clearAllChartIndicatorsForSec(sec, rawRows);
+      btn.disabled = true;
+      const prev = btn.textContent;
+      btn.textContent = "Удаление…";
+      try {
+        await Promise.resolve(onRowsReady(rawRows, []));
+        btn.textContent = CHART_IND_REMOVE_BTN;
+      } catch (_) {
         btn.textContent = prev;
+      } finally {
+        btn.disabled = false;
       }
     });
   }
@@ -7227,11 +8329,37 @@
   function createChartIndicatorButton(sec, rawRows, onRowsReady) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "ml-chart-copy-btn";
-    btn.textContent = "Показать индикаторы";
-    btn.title = "Загрузить линии выбранных индикаторов и легенду только для этого графика";
+    btn.className = "ml-chart-copy-btn ml-chart-logic-ind-btn";
+    btn.textContent = CHART_IND_LOGIC_BTN;
+    btn.title = "Показать линии индикаторов выбранных логик на этом графике";
     wireChartIndicatorButton(btn, sec, rawRows, onRowsReady);
     return btn;
+  }
+
+  function createChartClearIndicatorsButton(sec, rawRows, onRowsReady) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ml-chart-copy-btn";
+    btn.textContent = CHART_IND_REMOVE_BTN;
+    btn.title = "Снять все линии индикаторов: из логик и добавленные вручную";
+    wireChartClearIndicatorsButton(btn, sec, rawRows, onRowsReady);
+    return btn;
+  }
+
+  function resetChartIndicatorButtonsInHeader(header) {
+    if (!header) return;
+    const logicBtn = header.querySelector(".ml-chart-logic-ind-btn");
+    if (logicBtn) {
+      logicBtn.disabled = false;
+      logicBtn.textContent = CHART_IND_LOGIC_BTN;
+      logicBtn.classList.remove("ml-chart-copy-btn--ok", "ml-chart-copy-btn--err");
+    }
+    const addBtn = header.querySelector(".ml-chart-add-ind-btn");
+    if (addBtn) {
+      addBtn.disabled = false;
+      addBtn.textContent = "Добавить индикатор";
+      addBtn.classList.remove("ml-chart-copy-btn--ok");
+    }
   }
 
   /** Диагностика графика по инструменту (raw vs enriched rows). */
@@ -7256,16 +8384,18 @@
   }
 
   /** Построение структуры данных: `buildChartSvg`. */
-  function buildChartSvg(rows, finresp, title, compact, vLines, chartDecor) {
+  function buildChartSvg(rows, finresp, title, compact, vLines, chartDecor, extraIndLines) {
     if (!rows?.length) return "";
     const decor = chartDecor || { vLines: vLines || [], modeRegions: [] };
     const stopLines = decor.vLines?.length ? decor.vLines : (vLines || []);
+    const extra = extraIndLines || [];
+    const extraKeys = extra.map((s) => s.key);
     const w = 820;
     const h = compact ? 210 : 340;
     const left = 68, right = 28, top = compact ? 24 : 28, bottom = 58;
     const plotW = w - left - right;
     const plotH = h - top - bottom;
-    const priceKeys = ["close", "sma", "smaUpper", "smaLower", "linregUp", "linregDn", "linregMid", "bollingerUp", "bollingerDn", "bollingerMid", "vwap"];
+    const priceKeys = ["close", "sma", "smaUpper", "smaLower", "cma", "linregUp", "linregDn", "linregMid", "bollingerUp", "bollingerDn", "bollingerMid", "vwap", ...extraKeys];
     let vals = rows.flatMap((r) => priceKeys.map((k) => r?.[k]).filter((v) => v != null));
     if (!vals.length) vals = rows.map((r) => r?.close).filter((v) => v != null);
     if (!vals.length) return "";
@@ -7302,7 +8432,11 @@
       rows[0]?.bollingerMid != null ? `<polyline fill="none" stroke="#0891b2" stroke-width=".9" opacity=".65" points="${line("bollingerMid")}"/>` : "",
       rows[0]?.bollingerUp != null ? `<polyline fill="none" stroke="#67e8f9" stroke-width=".8" stroke-dasharray="2 3" opacity=".7" points="${line("bollingerUp")}"/>` : "",
       rows[0]?.bollingerDn != null ? `<polyline fill="none" stroke="#67e8f9" stroke-width=".8" stroke-dasharray="2 3" opacity=".7" points="${line("bollingerDn")}"/>` : "",
-      rows[0]?.vwap != null ? `<polyline fill="none" stroke="#16a34a" stroke-width="1" stroke-dasharray="7 3" opacity=".7" points="${line("vwap")}"/>` : ""
+      rows[0]?.vwap != null ? `<polyline fill="none" stroke="#16a34a" stroke-width="1" stroke-dasharray="7 3" opacity=".7" points="${line("vwap")}"/>` : "",
+      ...extra.filter((spec) => rows[0]?.[spec.key] != null).map((spec) => {
+        const dash = spec.dash ? ` stroke-dasharray="${spec.dash}"` : "";
+        return `<polyline fill="none" stroke="${spec.stroke}" stroke-width="${spec.width}"${dash} opacity="${spec.opacity}" points="${line(spec.key)}"/>`;
+      })
     ].join("");
     const markers = rows.map((r, i) => {
       if (!r || r.close == null) return "";
@@ -8639,14 +9773,64 @@ ${referenceBlock}
       const displayFin = liveSession ? liveDisplayFinresp(p.sec, p.finresp) : p.finresp;
       const rawRows = rows.length ? rows : p.rows;
       const chartRows = await enrichChartRowsForDisplay(rawRows, p.sec);
+      if (!liveSession) await reapplyStoredCustomChartIndicators(chartRows, p.sec);
       chartDiags.push(analyzeChartInstrument(p.sec, rawRows, chartRows));
       const stopV = chartStopLines(chartRows, portfolioEvents);
       const orderV = liveSession ? orderMarkersForChart(p.sec, chartRows) : [];
       const vLines = [...stopV, ...orderV];
       const decor = chartDecorFromRows(chartRows, vLines);
-      const indicatorLoader = (!liveSession && typeof MLInstrumentChart !== "undefined")
-        ? () => applyChartIndicatorsInPlace(chartRows, p.sec)
+      const rowsReady = chartRowsReadyForIndicators(chartRows);
+      const indicatorLoader = (!liveSession && rowsReady && typeof MLInstrumentChart !== "undefined")
+        ? () => withChartIndicatorTimeout(applyChartIndicatorsForButton(chartRows, p.sec), p.sec)
         : null;
+      const onChartIndicatorPhase = (phase) => setChartIndDiag({ phase, sec: p.sec }, chartIndDiagOpts(p.sec));
+      const onChartIndicatorClickStart = cancelChartIndicatorPrewarm;
+      const onChartIndicatorStuck = () => markChartIndUiStuck(p.sec);
+      const extraIndSpecs = customChartIndicatorLineSpecs(p.sec);
+
+      const refreshLegacyChart = async (enriched, lineSpecs) => {
+        const body = mini.querySelector(".chart-mini-body");
+        if (!body) return;
+        const specs = lineSpecs || customChartIndicatorLineSpecs(p.sec);
+        const stopV2 = chartStopLines(enriched, portfolioEvents);
+        const orderV2 = liveSession ? orderMarkersForChart(p.sec, enriched) : [];
+        const decor2 = chartDecorFromRows(enriched, [...stopV2, ...orderV2]);
+        await yieldToUi();
+        const svg = buildChartSvg(enriched, displayFin, `График ${p.sec}`, compact, [...stopV2, ...orderV2], decor2, specs);
+        body.innerHTML = svg || `<p class="chart-fail-msg">Нет данных для графика в выбранном окне.</p>`;
+        if (typeof MLInstrumentChart !== "undefined" && MLInstrumentChart.buildIndicatorLegend) {
+          const legendHtml = MLInstrumentChart.buildIndicatorLegend(enriched, specs);
+          let legendEl = body.querySelector(".ml-chart-ind-legend-wrap");
+          if (legendHtml) {
+            if (!legendEl) {
+              body.insertAdjacentHTML("beforeend", `<div class="ml-chart-ind-legend-wrap">${legendHtml}</div>`);
+            } else {
+              legendEl.innerHTML = legendHtml;
+            }
+          } else if (legendEl) {
+            legendEl.remove();
+          }
+        }
+      };
+
+      const clearIndicatorsHandler = (!liveSession && rowsReady)
+        ? async () => {
+          clearAllChartIndicatorsForSec(p.sec, chartRows);
+          return { refresh: true, lineSpecs: [] };
+        }
+        : null;
+
+      const openAddIndicatorDialog = (!liveSession && E.parseChartIndicatorEditorLines)
+        ? () => openChartAddIndicatorDialog(p.sec)
+        : null;
+      const applyAddIndicatorText = (!liveSession && E.parseChartIndicatorEditorLines)
+        ? async (text) => {
+          const result = await applyChartAddIndicatorText(chartRows, p.sec, text);
+          showChartAddIndicatorMessages(p.sec, result.messages);
+          return result;
+        }
+        : null;
+      const onChartAddIndicatorMessage = (messages) => showChartAddIndicatorMessages(p.sec, messages);
 
       const mini = document.createElement("div");
       mini.className = "chart-mini";
@@ -8671,7 +9855,18 @@ ${referenceBlock}
           compact,
           decor,
           format: chartFormat,
-          indicatorLoader
+          indicatorLoader,
+          onChartIndicatorClickStart,
+          onChartIndicatorPhase,
+          onChartIndicatorStuck,
+          openAddIndicatorDialog,
+          applyAddIndicatorText,
+          onChartAddIndicatorMessage,
+          clearIndicatorsHandler,
+          logicIndBtnLabel: CHART_IND_LOGIC_BTN,
+          logicIndBtnOnLabel: CHART_IND_LOGIC_BTN_ON,
+          removeIndBtnLabel: CHART_IND_REMOVE_BTN,
+          extraIndLines: extraIndSpecs
         });
       } else {
         const header = document.createElement("div");
@@ -8684,31 +9879,30 @@ ${referenceBlock}
         actions.className = "chart-mini-header-actions";
         if (indicatorLoader) {
           actions.appendChild(createChartIndicatorButton(p.sec, chartRows, async (enriched) => {
-            const body = mini.querySelector(".chart-mini-body");
-            if (!body) return;
-            const stopV2 = chartStopLines(enriched, portfolioEvents);
-            const orderV2 = liveSession ? orderMarkersForChart(p.sec, enriched) : [];
-            const decor2 = chartDecorFromRows(enriched, [...stopV2, ...orderV2]);
-            await yieldToUi();
-            const svg = buildChartSvg(enriched, displayFin, `График ${p.sec}`, compact, [...stopV2, ...orderV2], decor2);
-            body.innerHTML = svg || `<p class="chart-fail-msg">Нет данных для графика в выбранном окне.</p>`;
-            const legendEl = body.querySelector(".ml-chart-ind-legend-wrap");
-            if (legendEl && typeof MLInstrumentChart !== "undefined" && MLInstrumentChart.buildIndicatorLegend) {
-              legendEl.innerHTML = MLInstrumentChart.buildIndicatorLegend(enriched);
-            }
+            await refreshLegacyChart(enriched);
+          }));
+          actions.appendChild(createChartAddIndicatorButton(p.sec, chartRows, async (enriched, lineSpecs) => {
+            await refreshLegacyChart(enriched, lineSpecs);
+          }));
+          actions.appendChild(createChartClearIndicatorsButton(p.sec, chartRows, async (enriched) => {
+            resetChartIndicatorButtonsInHeader(mini.querySelector(".chart-mini-header"));
+            await refreshLegacyChart(enriched, []);
           }));
         }
         header.appendChild(actions);
         mini.appendChild(header);
         const body = document.createElement("div");
         body.className = "chart-mini-body";
-        const svg = buildChartSvg(chartRows, displayFin, `График ${p.sec}`, compact, vLines, decor);
+        const svg = buildChartSvg(chartRows, displayFin, `График ${p.sec}`, compact, vLines, decor, extraIndSpecs);
         if (!svg) {
           body.innerHTML = `<p class="chart-fail-msg">Нет данных для графика в выбранном окне.</p>`;
         } else {
           body.innerHTML = svg;
           if (typeof MLInstrumentChart !== "undefined" && MLInstrumentChart.buildIndicatorLegend) {
-            body.insertAdjacentHTML("beforeend", `<div class="ml-chart-ind-legend-wrap">${MLInstrumentChart.buildIndicatorLegend(chartRows)}</div>`);
+            const legendHtml = MLInstrumentChart.buildIndicatorLegend(chartRows, extraIndSpecs);
+            if (legendHtml) {
+              body.insertAdjacentHTML("beforeend", `<div class="ml-chart-ind-legend-wrap">${legendHtml}</div>`);
+            }
           }
         }
         mini.appendChild(body);
@@ -9814,10 +11008,22 @@ ${referenceBlock}
     liveInitCompleted = true;
     window.__mlFinresp.deferBrokerConnect = false;
     syncBrokerProviderFromDom?.();
+    bootDiag.liveInitAt = new Date().toISOString();
+    setBootPhase("live-init");
+
+    if (!isLiveMode()) {
+      setBootPhase("paper-ready");
+      clearBootStatus();
+      bootDiag.liveInitDoneAt = new Date().toISOString();
+      updateTechInfo("init-ok");
+      return;
+    }
+
     const sandboxLive = isLiveMode() && !!$("live-sandbox-mode")?.checked;
     const background = [];
 
     if (isTbankBackedMode()) {
+      setBootPhase("live-init", "broker");
       background.push(
         bootstrapBrokerOnPageInit().catch((err) => {
           noteTechError(`broker-bootstrap: ${err?.message || err}`);
@@ -9827,14 +11033,16 @@ ${referenceBlock}
 
     if (sandboxLive) {
       setBootStatus("Песочница live…");
+      setBootPhase("live-init", "sandbox");
       await yieldToUi();
       await enableLiveSandbox().catch((err) => {
         noteLiveTech("live-sandbox-init", err.message);
       });
       syncLiveTradingUi();
     } else if (isLiveMode()) {
+      setBootPhase("live-init", "broker-live");
       background.push(
-        connectTbankForLive().catch((err) => {
+        connectTbankForLiveBackground("page-init").catch((err) => {
           noteLiveTech("live-init-for-live", err.message);
         })
       );
@@ -9855,6 +11063,7 @@ ${referenceBlock}
     } else {
       clearBootStatus();
     }
+    bootDiag.liveInitDoneAt = new Date().toISOString();
     updateTechInfo("init-ok");
   }
 
@@ -9899,6 +11108,8 @@ ${referenceBlock}
   function syncRestoredFormUiAfterSnapshot() {
     syncAccountModeUi();
     bootstrapLiveTradingPanelVisibility();
+    bootDiag.formReadyAt = new Date().toISOString();
+    setBootPhase("form-ready");
     setBootStatus("Инициализация формы…");
     bridgeApi()?.onBootReady?.();
   }

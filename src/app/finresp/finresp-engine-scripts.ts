@@ -16,6 +16,7 @@ export const FINRESP_ENGINE_SCRIPTS = [
   'indicators/cci.js',
   'indicators/macd.js',
   'indicators/rand.js',
+  'poly/poly-indicator.js',
   'logics/parser.js',
   'logics/registry.js',
   'bond-tbru-data.js',

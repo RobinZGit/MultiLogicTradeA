@@ -46,3 +46,15 @@ render();
 4. Для smoke perf — `npm run test:finresp:perf:smoke` при изменении engine/boot циклов.
 
 Не оставлять perf-фикс без теста, если воспроизведение описуемо (размер окна, N инструментов, клик по кнопке).
+
+## Кнопка «Показать индикаторы» (обязательный чеклист)
+
+При правках `boot.js` / `charts.js` / engine chart-overlay:
+
+1. **До тяжёлой работы** — двойной `requestAnimationFrame`, текст «Загрузка…», `cancelChartIndicatorPrewarm()`.
+2. **Колонки** — `buildChartDisplayIndicatorColumnsFast` / `buildChartDisplayIndicatorColumnsAsync`, не цикл `collectChartIndicatorsForDisplay` по каждому бару без yield.
+3. **Warm** — `warmChartDisplayIndicatorSeriesAsync` с `yieldToUi` до и после; только ценовые линии (SMA/CMA/LinReg/Boll/VWAP).
+4. **Один массив** — `applyChartIndicatorsInPlace(chartRows, sec)` in-place, не отдельный `rawRows`.
+5. **Дедуп расчёта** — `chartIndicatorColumnsPending[sec]` (не два параллельных build на один тикер).
+6. **Свечи** — `rowsToCandlePack(rows)` (только окно графика), не `packForSec` / полный MOEX-пакет.
+7. **Таймаут** — `withChartIndicatorTimeout` (~45 с), кнопка не залипает на «Загрузка…».

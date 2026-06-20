@@ -90,7 +90,7 @@ echo.
 
 start "MultiLogicTradeA-techlog" /MIN cmd /c "cd /d ""%~dp0"" && node scripts\finresp-tech-log-server.mjs"
 
-start "MultiLogicTradeA-serve" /MIN cmd /c "npx --yes serve -s ""%DIST_DIR%"" -l 5173"
+start "MultiLogicTradeA-serve" /MIN cmd /c "npx --yes serve -s ""%DIST_DIR%"" -l 5173 -c ""%~dp0scripts\serve.prod.json"""
 
 powershell -NoProfile -Command "$ok=$false; 1..90 | ForEach-Object { if ((Test-NetConnection 127.0.0.1 -Port 5173 -WarningAction SilentlyContinue).TcpTestSucceeded) { $ok=$true; break }; Start-Sleep 1 }; if (-not $ok) { exit 1 }"
 if errorlevel 1 (
