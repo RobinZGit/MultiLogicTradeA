@@ -850,4 +850,12 @@ body.calc-running .live-trading-actions .live-trading-btn{
   opacity:.55;cursor:not-allowed;
 }
 body.calc-running .calc-progress-banner{pointer-events:auto;}
+body.page-booting .help-main{position:relative;}
+body.page-booting .help-main::after{
+  content:"";pointer-events:none;position:fixed;inset:0;z-index:1500;
+  background:repeating-linear-gradient(-45deg,transparent,transparent 12px,rgba(251,191,36,.04) 12px,rgba(251,191,36,.04) 24px);
+  animation:boot-shimmer 3s linear infinite;
+}
+@keyframes boot-shimmer{0%{opacity:.35}50%{opacity:.65}100%{opacity:.35}}
+.calc-boot-banner strong{font-weight:800;letter-spacing:.02em;}
 body.calc-running .help-ftr{opacity:.75;}

@@ -810,7 +810,12 @@
     if (!hasPass) {
       const hint = `Брокер ${brokerLabel()}: введите пароль в блоке настроек и нажмите «Расшифровать и подключить».`;
       setBrokerConnectionStatus(hint, true);
-      openBrokerPassphraseUi(hint, { focus: isPageInit ? false : true });
+      if (isPageInit) {
+        setCalcStatus(`${hint} Подключение продолжится в фоне после ввода пароля.`);
+        noteBrokerTechDeduped("unlock-needed", source || "no-passphrase");
+        return Promise.resolve();
+      }
+      openBrokerPassphraseUi(hint, { focus: true });
       noteBrokerTechDeduped("unlock-needed", source || "no-passphrase");
       return scheduleBrokerUnlockPrompt(source, connectGen);
     }
@@ -819,9 +824,9 @@
         await yieldToUi();
         if (isStaleBrokerOps(connectGen) || readBrokerIdFromUi() !== brokerAtStart) return;
         await connectTbankAndLoadDeposit({
-          interactive: true,
+          interactive: false,
           openUi: false,
-          useModal: IS_FILE_PROTOCOL || isPageInit
+          useModal: false
         });
       })(),
       brokerLabel()
@@ -831,7 +836,7 @@
     });
   }
 
-  /** При входе на страницу: расшифровка сохранённого токена и загрузка депозита активного брокера. */
+  /** При входе на страницу: расшифровка сохранённого токена и загрузка депозита активного брокера (фон). */
   async function bootstrapBrokerOnPageInit() {
     if (!isTbankBackedMode()) return;
     const cred = activeBrokerState();
@@ -840,6 +845,7 @@
       if (!isLiveSandbox()) applyProvisionalDeposit();
     }
     if (!safeStorageGet(brokerTokenStoreKey())) return;
+    window.__mlFinresp?.setBootStatus?.("Подключение к брокеру…");
     noteBrokerTechDeduped("bootstrap-start", readBrokerIdFromUi());
     try {
       await scheduleBrokerConnectIfReady("page-init");

@@ -6,8 +6,22 @@
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <style>
+    #calc-boot-banner{position:sticky;top:0;z-index:1999;background:linear-gradient(90deg,#92400e,#d97706,#b45309);color:#fff;padding:.55rem 1rem;font:500 .9rem/1.35 system-ui,sans-serif;box-shadow:0 2px 10px rgba(180,83,9,.35)}
+    #calc-boot-banner[hidden]{display:none!important}
+    .calc-boot-banner-inner{display:flex;flex-wrap:wrap;align-items:center;gap:.45rem .7rem}
+    .calc-boot-spinner{display:inline-block;width:.95rem;height:.95rem;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:ml-boot-spin .75s linear infinite}
+    @keyframes ml-boot-spin{to{transform:rotate(360deg)}}
+  </style>
 </head>
-<body>
+<body class="page-booting">
+  <div id="calc-boot-banner" class="calc-boot-banner" role="status" aria-live="polite" aria-busy="true">
+    <div class="calc-boot-banner-inner">
+      <span class="calc-boot-spinner" aria-hidden="true"></span>
+      <strong>Загрузка</strong>
+      <span id="calc-boot-text">Открытие калькулятора FINRESP…</span>
+    </div>
+  </div>
   <app-root></app-root>
 </body>
 </html>

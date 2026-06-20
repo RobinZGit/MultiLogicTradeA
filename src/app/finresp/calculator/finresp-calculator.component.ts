@@ -33,14 +33,27 @@ export class FinrespCalculatorComponent implements OnInit {
   }
 
   private async bootstrap(): Promise<void> {
+    const allScripts = [...FINRESP_ENGINE_SCRIPTS, ...FINRESP_BOOTSTRAP_SCRIPTS];
+    const total = allScripts.length;
+    let done = 0;
+    const boot = (text: string) => {
+      window.__mlFinresp?.setBootStatus?.(text);
+    };
+    boot('Загрузка модулей FINRESP…');
     try {
       for (const rel of FINRESP_ENGINE_SCRIPTS) {
         await this.scripts.loadScript(rel);
+        done += 1;
+        boot(`Загрузка модулей FINRESP (${done}/${total})…`);
       }
       for (const rel of FINRESP_BOOTSTRAP_SCRIPTS) {
         await this.scripts.loadScript(rel);
+        done += 1;
+        boot(`Загрузка модулей FINRESP (${done}/${total})…`);
       }
+      boot('Инициализация калькулятора…');
     } catch (err) {
+      window.__mlFinresp?.clearBootStatus?.();
       console.error('FINRESP bootstrap failed', err);
       const pre = window.__mlFinresp?.preboot;
       if (pre?.setTechPre && err instanceof Error) {

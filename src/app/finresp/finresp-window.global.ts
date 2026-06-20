@@ -11,6 +11,9 @@ export interface MlFinrespGlobal {
   bootPhase?: string;
   lastBootError?: string | null;
   deferBrokerConnect?: boolean;
+  setBootStatus?: (text: string, opts?: { status?: string }) => void;
+  clearBootStatus?: () => void;
+  trackBootBackground?: (promise: Promise<unknown>) => Promise<unknown>;
   saveConfig?: () => void;
   unstickUi?: (reason?: string) => void;
   applyMonthSelectionFromValue?: (month: string) => {

@@ -37,6 +37,17 @@
     syncLivePanelFromMode();
   }
   window.__mlFinresp.preboot = { setTechPre, syncLivePanelFromMode };
+  /** Баннер загрузки страницы (до boot.js). */
+  function setBootPre(text) {
+    var el = document.getElementById("calc-boot-text");
+    var banner = document.getElementById("calc-boot-banner");
+    if (el && text != null) el.textContent = String(text);
+    if (banner) {
+      banner.hidden = false;
+      document.body.classList.add("page-booting");
+    }
+  }
+  window.__mlFinresp.setBootStatus = setBootPre;
   setTechPre(
     "preboot ok · protocol=" + location.protocol + "\n"
     + "ожидание MultiLogic_FinrespCalculator.engine.js и live.js…\n"

@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-19-broom-keep-stack-v33";
+  const CALC_PAGE_VERSION = "2026-06-19-page-boot-status-v34";
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
   const ML_CONFIG_KEY = "multilogic.finresp.config.v1";
   const CALC_PROGRESS = {
@@ -125,6 +125,41 @@
   function getCalcStatus() {
     return lastCalcStatusText || ($("calc-status")?.textContent ?? "");
   }
+
+  let bootBannerPending = 0;
+  /** Баннер «идёт загрузка страницы» — не блокирует форму. */
+  function setBootStatus(text, opts) {
+    const o = opts || {};
+    const el = $("calc-boot-text");
+    const banner = $("calc-boot-banner");
+    if (el && text != null) el.textContent = String(text);
+    if (banner) {
+      banner.hidden = false;
+      banner.setAttribute("aria-busy", "true");
+      document.body.classList.add("page-booting");
+    }
+    if (o.status) setCalcStatus(o.status);
+  }
+  function clearBootStatus() {
+    if (bootBannerPending > 0) return;
+    const banner = $("calc-boot-banner");
+    if (banner) {
+      banner.hidden = true;
+      banner.setAttribute("aria-busy", "false");
+    }
+    document.body.classList.remove("page-booting");
+  }
+  function trackBootBackground(promise) {
+    bootBannerPending += 1;
+    return Promise.resolve(promise).finally(() => {
+      bootBannerPending = Math.max(0, bootBannerPending - 1);
+      if (bootBannerPending === 0) clearBootStatus();
+    });
+  }
+  window.__mlFinresp.setBootStatus = setBootStatus;
+  window.__mlFinresp.clearBootStatus = clearBootStatus;
+  window.__mlFinresp.trackBootBackground = trackBootBackground;
+
   function appendCalcStatus(suffix) {
     setCalcStatus(getCalcStatus() + suffix);
   }
@@ -9768,25 +9803,45 @@ ${referenceBlock}
     window.__mlFinresp.deferBrokerConnect = false;
     syncBrokerProviderFromDom?.();
     const sandboxLive = isLiveMode() && !!$("live-sandbox-mode")?.checked;
+    const background = [];
+
     if (isTbankBackedMode()) {
-      await bootstrapBrokerOnPageInit();
-      if (isLiveMode() && !isLiveSandbox() && safeStorageGet(brokerTokenStoreKey()) && !activeBrokerState().token) {
-        scheduleBrokerUnlockPrompt("page-restore");
-      }
+      background.push(
+        bootstrapBrokerOnPageInit().catch((err) => {
+          noteTechError(`broker-bootstrap: ${err?.message || err}`);
+        })
+      );
     }
+
     if (sandboxLive) {
+      setBootStatus("Песочница live…");
       await yieldToUi();
       await enableLiveSandbox().catch((err) => {
         noteLiveTech("live-sandbox-init", err.message);
       });
       syncLiveTradingUi();
     } else if (isLiveMode()) {
-      void connectTbankForLive().catch((err) => {
-        noteLiveTech("live-init-for-live", err.message);
-      });
+      background.push(
+        connectTbankForLive().catch((err) => {
+          noteLiveTech("live-init-for-live", err.message);
+        })
+      );
     }
+
     if (isLiveMode()) {
       void refreshLiveManualLimitPrice({ force: true }).catch(() => {});
+    }
+
+    if (background.length) {
+      const stored = isTbankBackedMode() && safeStorageGet(brokerTokenStoreKey());
+      setBootStatus(
+        stored
+          ? "Подключение к брокеру в фоне — форму можно менять"
+          : "Фоновая инициализация…"
+      );
+      void trackBootBackground(Promise.all(background));
+    } else {
+      clearBootStatus();
     }
     updateTechInfo("init-ok");
   }
@@ -9832,6 +9887,7 @@ ${referenceBlock}
   function syncRestoredFormUiAfterSnapshot() {
     syncAccountModeUi();
     bootstrapLiveTradingPanelVisibility();
+    setBootStatus("Инициализация формы…");
     bridgeApi()?.onBootReady?.();
   }
 
@@ -9908,6 +9964,7 @@ ${referenceBlock}
     }
     bootstrapLiveTradingPanelVisibility();
     updateTechInfo("init-fail");
+    clearBootStatus();
     window.__mlFinresp.bootPhase = "partial";
   }
   window.__mlSyncAccountMode = () => syncAccountModeUi();
