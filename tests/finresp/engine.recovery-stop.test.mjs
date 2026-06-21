@@ -102,3 +102,76 @@ describe("applyPauseOnDrawdownPerLogic (@@PauseOnDrawdownPerLogic)", () => {
     assert.ok(recoveryStop.events.some((e) => e.logicKey === "L5" && e.kind === "pause"));
   });
 });
+
+describe("applyPauseOnDrawdownPerInstrument (@@PauseOnDrawdownPerInstrument)", () => {
+  it("emits per-instrument pause with sec when instrument equity drawdown hits", () => {
+    const times = [1, 2, 3, 4, 5];
+    const perSec = [{
+      sec: "TST",
+      pos: 0,
+      rows: [
+        row(1, 100, 0, null),
+        row(2, 105, 1, "UT"),
+        row(3, 110, 1, "UT"),
+        row(4, 98, 1, "UT"),
+        row(5, 112, 1, "UT"),
+      ],
+    }];
+    const { recoveryStop, perSec: out } = E.applyPauseOnDrawdownPerInstrument(
+      perSec,
+      times,
+      vol,
+      { enabled: true, perInstrument: true, drawdownPct: 5, instrumentKeys: ["TST"] },
+    );
+    assert.equal(recoveryStop.perInstrument, true);
+    assert.equal(recoveryStop.events.length, 2);
+    assert.equal(recoveryStop.events[0].kind, "pause");
+    assert.equal(recoveryStop.events[0].sec, "TST");
+    assert.equal(recoveryStop.events[0].time, 4);
+    assert.equal(recoveryStop.events[1].kind, "resume");
+    assert.equal(recoveryStop.events[1].sec, "TST");
+    const flatRow = out[0].rows.find((r) => r.time === 4);
+    assert.equal(flatRow?.pos, 0);
+    assert.ok(Number.isFinite(recoveryStop.instrumentModelEquity?.TST));
+  });
+
+  it("routes applyPauseOnDrawdown to per-instrument when cfg.perInstrument", () => {
+    const times = [1, 2, 3];
+    const perSec = [{
+      sec: "AAA",
+      rows: [row(1, 100, 0, null), row(2, 90, 1, "UT"), row(3, 95, 1, "UT")],
+    }];
+    const { recoveryStop } = E.applyPauseOnDrawdown(
+      perSec,
+      times,
+      vol,
+      { enabled: true, perInstrument: true, drawdownPct: 1, instrumentKeys: ["AAA"] },
+    );
+    assert.equal(recoveryStop.perInstrument, true);
+    assert.ok(recoveryStop.events.some((e) => e.sec === "AAA" && e.kind === "pause"));
+  });
+
+  it("mutual exclusion: perInstrument takes priority over perLogic in applyPauseOnDrawdown", () => {
+    const times = [1, 2, 3];
+    const perSec = [{
+      sec: "TST",
+      rows: [row(1, 100, 0, null), row(2, 90, 1, "UT"), row(3, 95, 1, "UT")],
+    }];
+    const { recoveryStop } = E.applyPauseOnDrawdown(
+      perSec,
+      times,
+      vol,
+      {
+        enabled: true,
+        perInstrument: true,
+        perLogic: true,
+        drawdownPct: 1,
+        instrumentKeys: ["TST"],
+        logicKeys: ["UT"],
+      },
+    );
+    assert.equal(recoveryStop.perInstrument, true);
+    assert.ok(recoveryStop.events.some((e) => e.sec === "TST"));
+    assert.ok(!recoveryStop.events.some((e) => e.logicKey));
+  });
+});

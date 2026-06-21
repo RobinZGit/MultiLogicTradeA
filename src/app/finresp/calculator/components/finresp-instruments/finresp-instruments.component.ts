@@ -73,6 +73,20 @@ export class FinrespInstrumentsComponent implements OnInit, OnDestroy {
     return this.formService.form.controls.instrumentIds.value;
   }
 
+  isInstrumentDrawdownDisabled(id: string): boolean {
+    return (this.catalog.instrumentDrawdownDisabledIds || []).includes(id);
+  }
+
+  instrumentOptionLabel(id: string): string {
+    return this.isInstrumentDrawdownDisabled(id) ? `${id} · пауза` : id;
+  }
+
+  instrumentOptionTitle(id: string): string {
+    return this.isInstrumentDrawdownDisabled(id)
+      ? `${id} — отключён (@@PauseOnDrawdownPerInstrument)`
+      : '';
+  }
+
   trackInstrumentOption(_index: number, opt: FinrespInstrumentOption): string {
     return opt.id;
   }

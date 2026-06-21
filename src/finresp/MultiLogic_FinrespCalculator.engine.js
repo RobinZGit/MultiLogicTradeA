@@ -36,7 +36,13 @@
     slMult: 2,
     tpMult: 10,
     atrLen: 14,
-    refEquity: 0
+    refEquity: 0,
+    autoLeverage: {
+      enabled: false,
+      mode: "tp_up_sl_down",
+      leverageMin: 0.5,
+      leverageMax: 8
+    }
   };
   const DEFAULT_VOLUME = {
     volumeType: "Deposit percent",
@@ -4360,6 +4366,107 @@
     return sum / length;
   }
 
+  /** Плечо = @@MaxPos × Volume% / 100. */
+  function leverageFromVolConfig(volConfig) {
+    const maxPos = Math.max(0, Number(volConfig?.maxPositions) || 0);
+    const volume = Math.max(0, Number(volConfig?.volume) || 0);
+    return maxPos * volume / 100;
+  }
+
+  function roundLeverageVolume(vol) {
+    const v = Number(vol);
+    if (!Number.isFinite(v)) return 0;
+    if (v >= 1) return Math.round(v * 10000) / 10000;
+    return Math.round(v * 1000000) / 1000000;
+  }
+
+  /** Целевое плечо после портфельного SL/TP (процент = @@SL или @@TP). */
+  function computeAutoLeverageTarget(currentLever, kind, stopperCfg) {
+    const auto = { ...DEFAULT_STOPPER.autoLeverage, ...(stopperCfg?.autoLeverage || {}) };
+    if (!auto.enabled) return null;
+    const cur = Number(currentLever);
+    if (!Number.isFinite(cur) || cur <= 0) return null;
+    const mode = auto.mode === "tp_down_sl_up" ? "tp_down_sl_up" : "tp_up_sl_down";
+    const slPct = Math.max(0, Number(stopperCfg?.slMult) || 0);
+    const tpPct = Math.max(0, Number(stopperCfg?.tpMult) || 0);
+    let factor = 1;
+    if (kind === "tp" && tpPct > 0) {
+      factor = mode === "tp_up_sl_down" ? 1 + tpPct / 100 : 1 - tpPct / 100;
+    } else if (kind === "sl" && slPct > 0) {
+      factor = mode === "tp_up_sl_down" ? 1 - slPct / 100 : 1 + slPct / 100;
+    } else {
+      return null;
+    }
+    const minL = Math.max(0.0001, Number(auto.leverageMin) || DEFAULT_STOPPER.autoLeverage.leverageMin);
+    const maxL = Math.max(minL, Number(auto.leverageMax) || DEFAULT_STOPPER.autoLeverage.leverageMax);
+    return Math.min(maxL, Math.max(minL, cur * factor));
+  }
+
+  /**
+   * Подбор @@MaxPos и Volume% под целевое плечо.
+   * При депозите &lt; 5000 ₽ допускается одна позиция; иначе предпочитается ≥2.
+   */
+  function splitLeverageToMaxPosVolume(targetLever, deposit, autoCfg) {
+    const VOL_MIN = DEFAULT_VOLUME.volume;
+    const VOL_MAX = 50;
+    const MAX_POS_LIMIT = 200;
+    const minL = Math.max(0.0001, Number(autoCfg?.leverageMin) || DEFAULT_STOPPER.autoLeverage.leverageMin);
+    const maxL = Math.max(minL, Number(autoCfg?.leverageMax) || DEFAULT_STOPPER.autoLeverage.leverageMax);
+    let L = Number(targetLever);
+    if (!Number.isFinite(L)) L = minL;
+    L = Math.min(maxL, Math.max(minL, L));
+    const dep = Number(deposit);
+    const minPosPrefer = Number.isFinite(dep) && dep > 0 && dep < 5000 ? 1 : 2;
+
+    let best = null;
+    let bestScore = -1e12;
+    for (let maxPos = 1; maxPos <= MAX_POS_LIMIT; maxPos++) {
+      const vol = L * 100 / maxPos;
+      if (vol < VOL_MIN - 1e-12 || vol > VOL_MAX + 1e-12) continue;
+      let score = maxPos * 6;
+      if (minPosPrefer >= 2) {
+        if (maxPos >= 2) score += 45;
+        if (maxPos === 1) score -= 30;
+      }
+      if (vol >= VOL_MIN && vol <= 25) score += 28;
+      else score -= Math.abs(vol - VOL_MIN) * 1.5;
+      if (maxPos > 40) score -= (maxPos - 40) * 0.5;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { maxPositions: maxPos, volume: roundLeverageVolume(vol) };
+      }
+    }
+    if (!best) {
+      let maxPos = Math.max(1, Math.min(MAX_POS_LIMIT, Math.round(L * 100 / VOL_MIN)));
+      let vol = roundLeverageVolume(L * 100 / maxPos);
+      if (vol < VOL_MIN) {
+        vol = VOL_MIN;
+        maxPos = Math.max(1, Math.min(MAX_POS_LIMIT, Math.round(L * 100 / vol)));
+      }
+      best = { maxPositions: maxPos, volume: Math.max(VOL_MIN, vol) };
+    }
+    return best;
+  }
+
+  /** Мутирует volConfig: новое плечо после портфельного SL/TP. */
+  function adjustVolConfigLeverage(volConfig, kind, stopperCfg) {
+    const auto = { ...DEFAULT_STOPPER.autoLeverage, ...(stopperCfg?.autoLeverage || {}) };
+    if (!auto.enabled || (kind !== "sl" && kind !== "tp")) return null;
+    const before = leverageFromVolConfig(volConfig);
+    const target = computeAutoLeverageTarget(before, kind, stopperCfg);
+    if (target == null) return null;
+    const split = splitLeverageToMaxPosVolume(target, volConfig?.deposit, auto);
+    volConfig.maxPositions = split.maxPositions;
+    volConfig.volume = Math.max(DEFAULT_VOLUME.volume, split.volume);
+    return {
+      before,
+      after: leverageFromVolConfig(volConfig),
+      target,
+      maxPositions: split.maxPositions,
+      volume: split.volume
+    };
+  }
+
   /** Live / мониторинг: срабатывание портфельного SL/TP на последней точке equityHistory. */
   function checkPortfolioStopperTrigger(equityHistory, cfg, referenceEquity) {
     const stopper = { ...DEFAULT_STOPPER, ...cfg };
@@ -4579,6 +4686,296 @@
         executedPerSec[s].rows[idx] = { ...sh };
       }
     }
+  }
+
+  function flattenExecutedForSecAtBar(executedPerSec, shadowRowIdx, t, secIndex, volConfig) {
+    const idx = shadowRowIdx[secIndex][t];
+    if (idx < 0) return;
+    const row = executedPerSec[secIndex].rows[idx];
+    if (row?.pos) {
+      executedPerSec[secIndex].rows[idx] = flattenRowAtIdx(executedPerSec[secIndex], idx, volConfig);
+    }
+  }
+
+  function syncExecutedFromShadowAtBarPerInstrument(executedPerSec, shadowPerSec, shadowRowIdx, t, pausedSecIndices) {
+    for (let s = 0; s < executedPerSec.length; s++) {
+      const idx = shadowRowIdx[s][t];
+      if (idx < 0) continue;
+      const sh = shadowPerSec[s].rows[idx];
+      if (pausedSecIndices.has(s)) {
+        const item = executedPerSec[s];
+        const prev = idx > 0 ? item.rows[idx - 1] : item.rows[idx];
+        const cash = prev?.eq ?? prev?.cash ?? 0;
+        const close = sh.close ?? prev?.close ?? 0;
+        const base = item.rows[idx] || sh;
+        item.rows[idx] = {
+          ...base,
+          time: sh.time,
+          pos: 0,
+          cash,
+          eq: cash,
+          buy: 0,
+          sell: 0,
+          open: close,
+          high: close,
+          low: close,
+          close,
+          drawdownPaused: true
+        };
+      } else {
+        executedPerSec[s].rows[idx] = { ...sh, drawdownPaused: false };
+      }
+    }
+  }
+
+  /** Equity каждого инструмента на times[] (тень = полная симуляция) для @@PauseOnDrawdownPerInstrument. */
+  function buildIsoEqBySec(shadowPerSec, times) {
+    const map = {};
+    for (const p of shadowPerSec || []) {
+      const sec = p.sec;
+      if (!sec) continue;
+      map[sec] = buildPerSecEquitySeries(p.rows, times);
+    }
+    return map;
+  }
+
+  function modelEquityFromIsoEqBySec(isoEqBySec, keys) {
+    const out = {};
+    for (const key of keys || []) {
+      const series = isoEqBySec[key];
+      if (!series?.length) continue;
+      for (let i = series.length - 1; i >= 0; i--) {
+        if (Number.isFinite(series[i])) {
+          out[key] = series[i];
+          break;
+        }
+      }
+    }
+    return out;
+  }
+
+  function runPauseOnDrawdownPerInstrumentCore(
+    executedPerSec,
+    shadowPerSec,
+    shadowRowIdx,
+    times,
+    isoEqBySec,
+    instrumentKeys,
+    volConfig,
+    pct
+  ) {
+    const secToIndex = new Map();
+    for (let s = 0; s < shadowPerSec.length; s++) {
+      const sec = shadowPerSec[s].sec;
+      if (sec) secToIndex.set(sec, s);
+    }
+    const events = [];
+    const fsm = {};
+    const pausedIndices = new Set();
+    for (const key of instrumentKeys || []) {
+      fsm[key] = { peak: null, paused: false, resumeAt: null };
+    }
+
+    const syncAtBar = (t) => {
+      if (!pausedIndices.size) {
+        syncExecutedFromShadowAtBar(executedPerSec, shadowPerSec, shadowRowIdx, t);
+      } else {
+        syncExecutedFromShadowAtBarPerInstrument(executedPerSec, shadowPerSec, shadowRowIdx, t, pausedIndices);
+      }
+    };
+
+    for (let t = 0; t < times.length; t++) {
+      const time = times[t];
+      syncAtBar(t);
+
+      for (const key of instrumentKeys || []) {
+        const st = fsm[key];
+        if (!st) continue;
+        const eq = isoEqBySec[key]?.[t];
+        if (!st.paused) {
+          if (!Number.isFinite(eq)) continue;
+          if (!Number.isFinite(st.peak)) st.peak = eq;
+          st.peak = Math.max(st.peak, eq);
+          const dd = st.peak > 0 ? ((st.peak - eq) / st.peak) * 100 : 0;
+          if (dd >= pct) {
+            const secIdx = secToIndex.get(key);
+            if (secIdx != null) {
+              flattenExecutedForSecAtBar(executedPerSec, shadowRowIdx, t, secIdx, volConfig);
+              pausedIndices.add(secIdx);
+            }
+            st.paused = true;
+            st.resumeAt = st.peak;
+            events.push({
+              kind: "pause",
+              sec: key,
+              time,
+              equity: eq,
+              peak: st.peak,
+              resumeAt: st.resumeAt,
+              drawdownPct: dd
+            });
+          }
+        } else if (Number.isFinite(eq) && Number.isFinite(st.resumeAt) && eq >= st.resumeAt) {
+          st.paused = false;
+          const secIdx = secToIndex.get(key);
+          if (secIdx != null) pausedIndices.delete(secIdx);
+          st.peak = eq;
+          events.push({
+            kind: "resume",
+            sec: key,
+            time,
+            equity: eq,
+            resumeAt: st.resumeAt
+          });
+          syncAtBar(t);
+        }
+      }
+    }
+    return events;
+  }
+
+  /** @@PauseOnDrawdownPerInstrument: пауза по equity каждого выбранного инструмента. */
+  function applyPauseOnDrawdownPerInstrument(perSec, times, volConfig, cfg, recoveryCtx) {
+    const events = [];
+    if (!cfg?.enabled || !cfg?.perInstrument || !perSec?.length || !times?.length) {
+      return { perSec, recoveryStop: { events } };
+    }
+    const instrumentKeys = (cfg.instrumentKeys || []).filter(Boolean);
+    if (!instrumentKeys.length) return { perSec, recoveryStop: { events } };
+
+    const pct = Math.max(0.01, Math.min(99, +cfg.drawdownPct || 1));
+    const shadowPerSec = perSec;
+    const executedPerSec = clonePerSecRows(perSec);
+    const shadowRowIdx = buildPerSecRowIdxAtTimes(shadowPerSec, times);
+    const isoEqBySec = recoveryCtx?.isoEqBySec || buildIsoEqBySec(shadowPerSec, times);
+    const pauseEvents = runPauseOnDrawdownPerInstrumentCore(
+      executedPerSec,
+      shadowPerSec,
+      shadowRowIdx,
+      times,
+      isoEqBySec,
+      instrumentKeys,
+      volConfig,
+      pct
+    );
+
+    for (const p of executedPerSec) recomputePerSecTotals(p);
+    return {
+      perSec: executedPerSec,
+      recoveryStop: {
+        events: pauseEvents,
+        perInstrument: true,
+        instrumentModelEquity: modelEquityFromIsoEqBySec(isoEqBySec, instrumentKeys)
+      }
+    };
+  }
+
+  async function applyPauseOnDrawdownPerInstrumentAsync(perSec, times, volConfig, cfg, recoveryCtx, progressOpts) {
+    const opts = progressOpts || {};
+    const events = [];
+    if (!cfg?.enabled || !cfg?.perInstrument || !perSec?.length || !times?.length) {
+      return { perSec, recoveryStop: { events } };
+    }
+    const instrumentKeys = (cfg.instrumentKeys || []).filter(Boolean);
+    if (!instrumentKeys.length) return { perSec, recoveryStop: { events } };
+
+    const yieldUi = !!opts.yieldUi;
+    const tick = () => (yieldUi ? delay(0) : Promise.resolve());
+    const onProgress = opts.onProgress;
+    const pct = Math.max(0.01, Math.min(99, +cfg.drawdownPct || 1));
+    const shadowPerSec = perSec;
+    const executedPerSec = clonePerSecRows(perSec);
+    const shadowRowIdx = buildPerSecRowIdxAtTimes(shadowPerSec, times);
+    const isoEqBySec = recoveryCtx?.isoEqBySec || buildIsoEqBySec(shadowPerSec, times);
+
+    const secToIndex = new Map();
+    for (let s = 0; s < shadowPerSec.length; s++) {
+      const sec = shadowPerSec[s].sec;
+      if (sec) secToIndex.set(sec, s);
+    }
+    const fsm = {};
+    const pausedIndices = new Set();
+    for (const key of instrumentKeys) fsm[key] = { peak: null, paused: false, resumeAt: null };
+
+    const syncAtBar = (t) => {
+      if (!pausedIndices.size) {
+        syncExecutedFromShadowAtBar(executedPerSec, shadowPerSec, shadowRowIdx, t);
+      } else {
+        syncExecutedFromShadowAtBarPerInstrument(executedPerSec, shadowPerSec, shadowRowIdx, t, pausedIndices);
+      }
+    };
+
+    const total = times.length;
+    for (let t = 0; t < total; t++) {
+      if (typeof opts.shouldCancel === "function" && opts.shouldCancel()) {
+        return {
+          perSec: executedPerSec,
+          recoveryStop: {
+            events,
+            perInstrument: true,
+            instrumentModelEquity: modelEquityFromIsoEqBySec(isoEqBySec, instrumentKeys)
+          },
+          cancelled: true
+        };
+      }
+      const time = times[t];
+      syncAtBar(t);
+
+      for (const key of instrumentKeys) {
+        const st = fsm[key];
+        if (!st) continue;
+        const eq = isoEqBySec[key]?.[t];
+        if (!st.paused) {
+          if (!Number.isFinite(eq)) continue;
+          if (!Number.isFinite(st.peak)) st.peak = eq;
+          st.peak = Math.max(st.peak, eq);
+          const dd = st.peak > 0 ? ((st.peak - eq) / st.peak) * 100 : 0;
+          if (dd >= pct) {
+            const secIdx = secToIndex.get(key);
+            if (secIdx != null) {
+              flattenExecutedForSecAtBar(executedPerSec, shadowRowIdx, t, secIdx, volConfig);
+              pausedIndices.add(secIdx);
+            }
+            st.paused = true;
+            st.resumeAt = st.peak;
+            events.push({
+              kind: "pause",
+              sec: key,
+              time,
+              equity: eq,
+              peak: st.peak,
+              resumeAt: st.resumeAt,
+              drawdownPct: dd
+            });
+          }
+        } else if (Number.isFinite(eq) && Number.isFinite(st.resumeAt) && eq >= st.resumeAt) {
+          st.paused = false;
+          const secIdx = secToIndex.get(key);
+          if (secIdx != null) pausedIndices.delete(secIdx);
+          st.peak = eq;
+          events.push({
+            kind: "resume",
+            sec: key,
+            time,
+            equity: eq,
+            resumeAt: st.resumeAt
+          });
+          syncAtBar(t);
+        }
+      }
+      if (onProgress) onProgress(t + 1, total, time);
+      if (yieldUi && t % 32 === 0) await tick();
+    }
+
+    for (const p of executedPerSec) recomputePerSecTotals(p);
+    return {
+      perSec: executedPerSec,
+      recoveryStop: {
+        events,
+        perInstrument: true,
+        instrumentModelEquity: modelEquityFromIsoEqBySec(isoEqBySec, instrumentKeys)
+      }
+    };
   }
 
   /** Isolated equity (как графики equity по логикам) для @@PauseOnDrawdownPerLogic. */
@@ -4928,6 +5325,9 @@
 
   /** @@PauseOnDrawdown: пауза исполнения при % просадке от пика, тень = полная симуляция. */
   function applyPauseOnDrawdown(perSec, times, volConfig, cfg, recoveryCtx) {
+    if (cfg?.enabled && cfg?.perInstrument) {
+      return applyPauseOnDrawdownPerInstrument(perSec, times, volConfig, cfg, recoveryCtx);
+    }
     if (cfg?.enabled && cfg?.perLogic) {
       return applyPauseOnDrawdownPerLogic(perSec, times, volConfig, cfg, recoveryCtx);
     }
@@ -4956,6 +5356,9 @@
 
   /** Асинхронный @@PauseOnDrawdown (yield между барами — не блокирует форму). */
   async function applyPauseOnDrawdownAsync(perSec, times, volConfig, cfg, progressOpts, recoveryCtx) {
+    if (cfg?.enabled && cfg?.perInstrument) {
+      return applyPauseOnDrawdownPerInstrumentAsync(perSec, times, volConfig, cfg, recoveryCtx, progressOpts);
+    }
     if (cfg?.enabled && cfg?.perLogic) {
       return applyPauseOnDrawdownPerLogicAsync(perSec, times, volConfig, cfg, recoveryCtx, progressOpts);
     }
@@ -5115,6 +5518,7 @@
         if (!kind) continue;
 
         const refAtTrigger = referenceEquity;
+        const leverageAdjust = adjustVolConfigLeverage(volConfig, kind, stopper);
         const affected = resimInstrumentsAtStopper(
           perSec, packs, spec, time, endTime, params, volConfig, signalPacks, stopPacks,
           progressOpts, stopperStep, stopperTotal
@@ -5125,7 +5529,8 @@
           equity: totalEq,
           referenceEquity: refAtTrigger,
           atr,
-          triggerLevel
+          triggerLevel,
+          ...(leverageAdjust ? { leverageAdjust } : {})
         });
         portfolioEq = refreshPortfolioEquityAfterStopper(portfolioEq, perSec, times, t, affected);
         referenceEquity = portfolioEq.total[t] ?? totalEq;
@@ -5205,6 +5610,7 @@
         }
 
         const refAtTrigger = referenceEquity;
+        const leverageAdjust = adjustVolConfigLeverage(volConfig, kind, stopper);
         const affected = resimInstrumentsAtStopper(
           perSec, packs, spec, time, endTime, params, volConfig, signalPacks, stopPacks,
           progressOpts, stopperStep, stopperTotal
@@ -5216,7 +5622,8 @@
           equity: totalEq,
           referenceEquity: refAtTrigger,
           atr,
-          triggerLevel
+          triggerLevel,
+          ...(leverageAdjust ? { leverageAdjust } : {})
         });
         portfolioEq = refreshPortfolioEquityAfterStopper(portfolioEq, perSec, times, t, affected);
         referenceEquity = portfolioEq.total[t] ?? totalEq;
@@ -6743,6 +7150,9 @@
     applyPauseOnDrawdownAsync,
     applyPauseOnDrawdownPerLogic,
     applyPauseOnDrawdownPerLogicAsync,
+    applyPauseOnDrawdownPerInstrument,
+    applyPauseOnDrawdownPerInstrumentAsync,
+    buildIsoEqBySec,
     buildIsolatedLogicEquityMap,
     buildIsolatedLogicEquityMapAsync,
     isoEqByLogicFromEquityRuns,
@@ -6751,6 +7161,10 @@
     buildPortfolioEquityRows,
     portfolioEquityAtr,
     checkPortfolioStopperTrigger,
+    leverageFromVolConfig,
+    computeAutoLeverageTarget,
+    splitLeverageToMaxPosVolume,
+    adjustVolConfigLeverage,
     loadMany,
     loadManyBatched,
     loadManyDetailed,

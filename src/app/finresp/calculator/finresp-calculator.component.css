@@ -38,6 +38,7 @@ h2:first-child{margin-top:0;}
 .calc-sec-select-all{font-size:.82rem;color:var(--muted);display:inline-flex;align-items:center;gap:.3rem;cursor:pointer;line-height:1.25;flex:0 0 auto;}
 .calc-sec-select-all input{margin:0;flex-shrink:0;}
 .calc-sec-hint{font-size:.8rem;color:var(--muted);}
+#calc-sec-visible option.calc-sec-opt--drawdown-disabled{color:#94a3b8;font-style:italic;}
 .calc-field-wide{grid-column:1/-1;}
 .useful-indicators-card{
   margin:.7rem 0 1rem;padding:.8rem .9rem;
@@ -164,6 +165,8 @@ h2:first-child{margin-top:0;}
 .chart-equity-avg-price-hint{margin:-.15rem 0 .45rem;font-size:.82rem;color:#0f766e;font-weight:600;line-height:1.4;}
 .chart-equity-logic-scroll{max-height:58vh;overflow-y:auto;overflow-x:auto;padding-right:.15rem;}
 .chart-equity-logic-scroll .chart-stack{max-height:none;overflow:visible;}
+.chart-equity-instruments-wrap{margin-top:1rem;padding-top:.85rem;border-top:1px solid var(--border);}
+.chart-equity-instruments-title{margin:0 0 .55rem;font-size:.92rem;font-weight:700;color:#9f1239;}
 .chart-logic-badge{font-size:.72rem;font-weight:700;padding:.12rem .45rem;border-radius:999px;margin-left:.35rem;vertical-align:middle;}
 .chart-logic-badge--active{background:#dbeafe;color:#1d4ed8;}
 .chart-logic-badge:not(.chart-logic-badge--active){background:#f3f4f6;color:#6b7280;}
@@ -422,7 +425,13 @@ body.calc-running .live-trading-panel--active .live-trading-toolbar{
 }
 .live-recovery-stop-banner strong{color:#78350f;}
 .live-recovery-stop-row{align-items:center;}
-.calc-recovery-stop-grid{margin-bottom:.35rem;}
+.calc-recovery-stop-grid{margin-bottom:.35rem;grid-template-columns:1fr;}
+.calc-recovery-stop-grid .calc-field--full{grid-column:1/-1;}
+.calc-recovery-stop-body{display:flex;flex-wrap:wrap;align-items:flex-end;gap:.5rem .85rem;margin-top:.25rem;}
+.calc-recovery-modes-row{flex:1 1 auto;min-width:0;flex-wrap:wrap;gap:.35rem .75rem;}
+.calc-recovery-stop-grid .calc-field--drawdown-pct{flex:0 0 auto;margin:0;}
+.calc-recovery-stop-grid .calc-field--drawdown-pct label{white-space:nowrap;}
+.calc-recovery-stop-grid .calc-field--drawdown-pct input{width:4.5rem;max-width:100%;}
 .live-candle-source-hint{font-size:.74rem;font-weight:600;color:#b45309;margin-left:.15rem;}
 .live-trading-panel--sandbox .live-ob-trend-panel-toggle{background:#f0fdf4;border-color:#86efac;}
 .live-trading-panel--sandbox .live-reverse-panel-toggle:not(.live-reverse-panel-toggle--on){background:#f0fdf4;border-color:#86efac;}

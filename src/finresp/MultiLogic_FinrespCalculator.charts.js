@@ -245,13 +245,25 @@
   function buildModeBands(rows, modeRegions, x, top, bottom) {
     if (!modeRegions?.length) return "";
     return modeRegions.map(({ fromIdx, toIdx, mode }) => {
+      if (mode === "instrument_active") return "";
       const x0 = x(fromIdx);
       const x1 = x(toIdx);
-      const fill = mode === "sandbox" ? "#ecfdf5" : "#fef2f2";
-      const stroke = mode === "sandbox" ? "#bbf7d0" : "#fecaca";
+      let fill = "#fef2f2";
+      let stroke = "#fecaca";
+      let title = "Реальная торговля";
+      let opacity = "0.88";
+      if (mode === "sandbox") {
+        fill = "#ecfdf5";
+        stroke = "#bbf7d0";
+        title = "Песочница (фейк)";
+      } else if (mode === "instrument_pause") {
+        fill = "#fff1f2";
+        stroke = "#fecdd3";
+        title = "Инструмент отключён (@@PauseOnDrawdownPerInstrument)";
+        opacity = "0.52";
+      }
       const w = Math.max(2, x1 - x0 + (toIdx === rows.length - 1 ? 4 : 0));
-      const title = mode === "sandbox" ? "Песочница (фейк)" : "Реальная торговля";
-      return `<g opacity="0.88"><rect x="${x0.toFixed(1)}" y="${top}" width="${w.toFixed(1)}" height="${bottom - top}" fill="${fill}" stroke="${stroke}" stroke-width="0.6"/><title>${title}</title></g>`;
+      return `<g opacity="${opacity}"><rect x="${x0.toFixed(1)}" y="${top}" width="${w.toFixed(1)}" height="${bottom - top}" fill="${fill}" stroke="${stroke}" stroke-width="0.6"/><title>${title}</title></g>`;
     }).join("");
   }
 
@@ -270,6 +282,10 @@
       if (kind === "bond-coupon") {
         const tip = esc(label || "Купон");
         return `<g opacity="0.85"><line x1="${xi}" y1="${top}" x2="${xi}" y2="${bottom}" stroke="#ca8a04" stroke-width="1.4" stroke-dasharray="5 5"/><title>${tip}</title></g>`;
+      }
+      if (kind === "instrument-pause-start" || kind === "instrument-pause-end") {
+        const tip = esc(label || (kind === "instrument-pause-start" ? "инструмент отключён" : "инструмент включён"));
+        return `<g opacity="0.9"><line x1="${xi}" y1="${top}" x2="${xi}" y2="${bottom}" stroke="#e11d48" stroke-width="1.5" stroke-dasharray="5 4"/><title>${tip}</title></g>`;
       }
       const stroke = kind === "tp" ? "#16a34a" : "#dc2626";
       const dash = scope === "portfolio" ? "7 4" : "4 3";
@@ -290,7 +306,8 @@
     };
   }
 
-  function tradeMarkerSvg(r, i, x, y, plotTop, plotBottom, triH, triW, candleW, compact) {
+  function tradeMarkerSvg(r, i, x, y, plotTop, plotBottom, triH, triW, candleW, compact, pausedByRow) {
+    if (r?.drawdownPaused || pausedByRow?.[i]) return "";
     const parts = [];
     const cx = x(i);
     const yMin = plotTop + 4;
@@ -476,11 +493,31 @@
     }
 
     const plotBottom = h - bottom;
-    const markers = slice.map((r, j) => tradeMarkerSvg(r, v0 + j, x, y, top, plotBottom, triH, triW, candleW, compact)).join("");
+    const markers = slice.map((r, j) =>
+      tradeMarkerSvg(r, v0 + j, x, y, top, plotBottom, triH, triW, candleW, compact, decor.pausedByRow)).join("");
 
     const stopLines = decor.vLines?.length ? decor.vLines : [];
     const stopLinesSvg = buildStopVLines(stopLines, x, top, h - bottom);
     const modeBands = buildModeBands(rows, decor.modeRegions, x, top, h - bottom);
+    let instrPauseLevelSvg = "";
+    if (showEq && yEq && decor.instrumentPauseOverlays?.length) {
+      instrPauseLevelSvg = decor.instrumentPauseOverlays.map(({ fromIdx, toIdx, eq }) => {
+        if (!Number.isFinite(eq)) return "";
+        let rel = eq;
+        if (chartEq.everHeld) {
+          let baseEq = 0;
+          for (let i = 0; i <= fromIdx && i < rows.length; i++) {
+            if (rows[i]?.tradeIn || rows[i]?.tradeOut) {
+              baseEq = rows[i]?.eq ?? 0;
+              break;
+            }
+          }
+          rel = eq - baseEq;
+        }
+        const yEqVal = yEq(rel).toFixed(1);
+        return `<line x1="${x(fromIdx).toFixed(1)}" y1="${yEqVal}" x2="${x(toIdx).toFixed(1)}" y2="${yEqVal}" stroke="#f43f5e" stroke-width="1.2" stroke-dasharray="6 4" opacity="0.75"><title>Инструмент отключён · equity на момент паузы</title></line>`;
+      }).join("");
+    }
 
     const gridH = yTicks.map((v) =>
       `<line x1="${left}" y1="${y(v).toFixed(1)}" x2="${w - right}" y2="${y(v).toFixed(1)}" stroke="#e8edf4" stroke-width="1"/>`).join("");
@@ -496,7 +533,10 @@
       `<text x="${x(i).toFixed(1)}" y="${h - 10}" text-anchor="middle" font-size="9" fill="#64748b" font-family="Consolas,monospace">${axisTime(rows[i]?.time)}</text>`).join("");
 
     const stopLegend = stopLines.length ? " · SL/TP поз. — тонкая · портф. — жирная" : "";
-    const modeLegend = decor.modeRegions?.length
+    const instrPauseLegend = decor.hasInstrumentPause || (decor.modeRegions || []).some((r) => r.mode === "instrument_pause")
+      ? " · бледно-красная зона — инструмент отключён"
+      : "";
+    const modeLegend = (decor.modeRegions || []).some((r) => r.mode === "sandbox" || r.mode === "real")
       ? " · зелёная область — песочница · розовая — реальная торговля"
       : "";
     const zoomHint = visN < rows.length
@@ -528,6 +568,7 @@ ${modeBands}
 ${gridH}${gridV}
 ${eqZeroLine}
 ${stopLinesSvg}
+${instrPauseLevelSvg}
 <line x1="${left}" y1="${top}" x2="${left}" y2="${h - bottom}" stroke="#94a3b8" stroke-width="1.2"/>
 <line x1="${left}" y1="${h - bottom}" x2="${w - right}" y2="${h - bottom}" stroke="#94a3b8" stroke-width="1.2"/>
 ${rightAxis}
@@ -539,7 +580,7 @@ ${indLines}
 ${candles}
 ${eqLine}
 ${markers}
-<text x="${left + 4}" y="${legendY}" font-size="9" fill="#64748b">△↓ вход · ▲ выход · −/+ масштаб · ←/→ сдвиг · колёсико/pinch · drag/свайп · dblclick/2×tap — сброс${stopLegend}${modeLegend}${zoomHint}</text>
+<text x="${left + 4}" y="${legendY}" font-size="9" fill="#64748b">△↓ вход · ▲ выход · −/+ масштаб · ←/→ сдвиг · колёсико/pinch · drag/свайп · dblclick/2×tap — сброс${stopLegend}${instrPauseLegend}${modeLegend}${zoomHint}</text>
 ${finBadgeSvg}
 </svg>`;
   }

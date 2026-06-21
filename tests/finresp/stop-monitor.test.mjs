@@ -67,6 +67,28 @@ describe("MultiLogicFinrespStopMonitor", () => {
     assert.equal(hits[0].kind, SM.STOP_KIND.POSITION_SL);
   });
 
+  it("evaluatePollStopTick: per-instrument recovery loop", () => {
+    const out = SM.evaluatePollStopTick({
+      source: "test",
+      recoveryEnabled: true,
+      recoveryPerInstrument: true,
+      instrumentKeys: ["SBER"],
+      instrumentRecovery: { SBER: { disabled: false, peakEquity: 1000, resumeAt: null } },
+      instrumentModelEquity: { SBER: 900 },
+      drawdownPct: 5,
+      tradingActive: true,
+      equity: 1000,
+      stopperConfig: { useSl: false, useTp: false },
+      time: "t0",
+      portfolioWatch: {},
+      perSec: [],
+      includePositionStops: false
+    });
+    assert.equal(out.recoveryInstruments.length, 1);
+    assert.equal(out.recoveryInstruments[0].sec, "SBER");
+    assert.equal(out.recoveryInstruments[0].action, "pause");
+  });
+
   it("evaluatePollStopTick: объединяет recovery и portfolio", () => {
     const out = SM.evaluatePollStopTick({
       source: "test",

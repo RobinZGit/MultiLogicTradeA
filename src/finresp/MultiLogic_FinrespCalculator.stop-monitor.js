@@ -142,9 +142,32 @@
   /** Live / sandbox poll-тик: единая оценка всех стопов. */
   function evaluatePollStopTick(ctx) {
     const recoveryLogics = [];
+    const recoveryInstruments = [];
     let recovery = { action: null };
 
-    if (ctx.recoveryPerLogic && Array.isArray(ctx.logicKeys) && ctx.logicKeys.length) {
+    if (ctx.recoveryPerInstrument && Array.isArray(ctx.instrumentKeys) && ctx.instrumentKeys.length) {
+      for (const sec of ctx.instrumentKeys) {
+        const ent = ctx.instrumentRecovery?.[sec] || {};
+        const modelEq = ctx.instrumentModelEquity?.[sec];
+        const peak = ent.peakEquity;
+        const resumeAt = ent.resumeAt;
+        const r = evalRecoveryDrawdown({
+          enabled: ctx.recoveryEnabled,
+          paused: !!ent.disabled,
+          tradingActive: ctx.tradingActive,
+          equity: modelEq,
+          peakEquity: peak,
+          drawdownPct: ctx.drawdownPct,
+          resumeAt,
+          modelEquity: modelEq
+        });
+        if (r.action && r.action !== "track_peak") {
+          recoveryInstruments.push({ sec, ...r });
+        } else if (r.action === "track_peak" && Number.isFinite(r.nextPeakEquity)) {
+          recoveryInstruments.push({ sec, action: "track_peak", nextPeakEquity: r.nextPeakEquity });
+        }
+      }
+    } else if (ctx.recoveryPerLogic && Array.isArray(ctx.logicKeys) && ctx.logicKeys.length) {
       for (const logicKey of ctx.logicKeys) {
         const ent = ctx.logicRecovery?.[logicKey] || {};
         const modelEq = ctx.logicModelEquity?.[logicKey];
@@ -195,6 +218,7 @@
       source: ctx.source || "poll",
       recovery,
       recoveryLogics,
+      recoveryInstruments,
       portfolio,
       positions
     };
@@ -202,7 +226,7 @@
 
   /** Bar driver — расширение для фазы 4 (intrabar / унификация с engine). */
   function evaluateBarStopTick(_ctx) {
-    return { rhythm: RHYTHM.BAR, source: "bar", recovery: null, recoveryLogics: [], portfolio: null, positions: [] };
+    return { rhythm: RHYTHM.BAR, source: "bar", recovery: null, recoveryLogics: [], recoveryInstruments: [], portfolio: null, positions: [] };
   }
 
   root.MultiLogicFinrespStopMonitor = {

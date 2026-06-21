@@ -145,6 +145,8 @@ export interface FinrespFormCatalogViewModel {
   logicSelectionCleared: boolean;
   /** id логик, отключённых просадкой (@@PauseOnDrawdown). */
   logicDrawdownDisabledIds: string[];
+  /** id инструментов, отключённых просадкой (@@PauseOnDrawdownPerInstrument). */
+  instrumentDrawdownDisabledIds: string[];
   instrumentsDisabled: boolean;
 }
 
@@ -156,6 +158,7 @@ export const EMPTY_FINRESP_FORM_CATALOG: FinrespFormCatalogViewModel = {
   logicChips: [],
   logicSelectionCleared: false,
   logicDrawdownDisabledIds: [],
+  instrumentDrawdownDisabledIds: [],
   instrumentsDisabled: true,
 };
 

@@ -22,7 +22,7 @@
     saveConfig();
   };
   window.__mlFinresp.saveConfig = () => saveConfig();
-  const CALC_PAGE_VERSION = "2026-06-20-indicator-constructor-v59";
+  const CALC_PAGE_VERSION = "2026-06-20-indicator-constructor-v61";
   const BOOT_BACKGROUND_TIMEOUT_MS = 60000;
   const BOOT_BANNER_WATCHDOG_MS = 20000;
   const AVG_PRICE_CHART_TITLE = "Средневзвешенная цена выбранных инструментов (Close)";
@@ -1373,17 +1373,19 @@
         userIntent: false,
         pauseCount: 0,
         lastNotifyKey: null
-      },
-      logicRecovery: {},
-      portfolioDrawdown: {
-        disabled: false,
-        peakEquity: null,
-        resumeAt: null,
-        pausedAt: null,
-        pauseCount: 0
-      },
-      logicModelEquity: {}
+      }
     },
+    logicRecovery: {},
+    instrumentRecovery: {},
+    portfolioDrawdown: {
+      disabled: false,
+      peakEquity: null,
+      resumeAt: null,
+      pausedAt: null,
+      pauseCount: 0
+    },
+    logicModelEquity: {},
+    instrumentModelEquity: {},
     optim: {
       active: null,
       bestFinresp: -Infinity,
@@ -1649,6 +1651,7 @@
         autoStep: $("param-auto-reverses-step")?.value || "",
         pauseOnDrawdown: !!$("param-pause-on-drawdown")?.checked,
         pauseOnDrawdownPerLogic: !!$("param-pause-on-drawdown-per-logic")?.checked,
+        pauseOnDrawdownPerInstrument: !!$("param-pause-on-drawdown-per-instrument")?.checked,
         drawdownPct: $("param-drawdown-pct")?.value || "",
         sandboxMatchMode: $("live-sandbox-match-mode")?.value || "fifo"
       },
@@ -1656,7 +1659,11 @@
         slMult: $("stopper-sl-mult")?.value || "",
         tpMult: $("stopper-tp-mult")?.value || "",
         atrLen: $("stopper-atr-len")?.value || "",
-        ref: $("stopper-ref")?.value || ""
+        ref: $("stopper-ref")?.value || "",
+        autoLeverage: !!$("stopper-auto-leverage")?.checked,
+        autoLeverageMode: $("stopper-auto-leverage-mode")?.value || "tp_up_sl_down",
+        leverageMin: $("stopper-leverage-min")?.value || "",
+        leverageMax: $("stopper-leverage-max")?.value || ""
       },
       prefixes: {
         stocks: $("prefix-stocks")?.value || "",
@@ -1698,6 +1705,21 @@
         };
       }
     }
+    const ir = {};
+    for (const sec of recoveryStopConfig().instrumentKeys) {
+      const ent = instrumentRecoveryEntry(sec);
+      if (!ent) continue;
+      if (ent.disabled || ent.resumeAt != null || ent.peakEquity != null) {
+        ir[sec] = {
+          disabled: !!ent.disabled,
+          paused: !!ent.paused,
+          peakEquity: ent.peakEquity,
+          resumeAt: ent.resumeAt,
+          pausedAt: ent.pausedAt,
+          pauseCount: ent.pauseCount || 0
+        };
+      }
+    }
     const pd = ensurePortfolioDrawdownState();
     return {
       portfolioDrawdown: {
@@ -1708,7 +1730,9 @@
         pauseCount: pd.pauseCount || 0
       },
       logicRecovery: lr,
-      logicModelEquity: { ...(state.logicModelEquity || {}) }
+      instrumentRecovery: ir,
+      logicModelEquity: { ...(state.logicModelEquity || {}) },
+      instrumentModelEquity: { ...(state.instrumentModelEquity || {}) }
     };
   }
 
@@ -1724,10 +1748,21 @@
         Object.assign(e, ent);
       }
     }
+    if (snap.instrumentRecovery && typeof snap.instrumentRecovery === "object") {
+      for (const [sec, ent] of Object.entries(snap.instrumentRecovery)) {
+        const e = instrumentRecoveryEntry(sec);
+        if (!e || !ent || typeof ent !== "object") continue;
+        Object.assign(e, ent);
+      }
+    }
     if (snap.logicModelEquity && typeof snap.logicModelEquity === "object") {
       state.logicModelEquity = { ...snap.logicModelEquity };
     }
+    if (snap.instrumentModelEquity && typeof snap.instrumentModelEquity === "object") {
+      state.instrumentModelEquity = { ...snap.instrumentModelEquity };
+    }
     syncLogicChipDrawdownState();
+    syncInstrumentDrawdownState();
   }
 
   /** Сохранение: `saveConfig`. */
@@ -1968,6 +2003,12 @@
           cfg.params?.pauseOnDrawdownPerLogic ?? cfg.params?.PauseOnDrawdownPerLogic
         );
       }
+      if ($("param-pause-on-drawdown-per-instrument")) {
+        $("param-pause-on-drawdown-per-instrument").checked = !!(
+          cfg.params?.pauseOnDrawdownPerInstrument ?? cfg.params?.PauseOnDrawdownPerInstrument
+        );
+      }
+      syncPauseOnDrawdownUi();
       setValueIfExists("param-drawdown-pct", cfg.params?.drawdownPct ?? cfg.params?.DrawdownPct);
       if ($("param-reverse")) {
         $("param-reverse").checked = !!(cfg.params?.reverseSides ?? cfg.params?.ReverseSides ?? cfg.params?.reverse ?? cfg.params?.Reverse);
@@ -1979,6 +2020,19 @@
       setValueIfExists("stopper-tp-mult", cfg.stopper?.tpMult);
       setValueIfExists("stopper-atr-len", cfg.stopper?.atrLen);
       setValueIfExists("stopper-ref", cfg.stopper?.ref);
+      if ($("stopper-auto-leverage")) {
+        $("stopper-auto-leverage").checked = !!cfg.stopper?.autoLeverage;
+      }
+      if (cfg.stopper?.autoLeverageMode) {
+        setValueIfExists("stopper-auto-leverage-mode", cfg.stopper.autoLeverageMode);
+      }
+      if (cfg.stopper?.leverageMin != null && cfg.stopper.leverageMin !== "") {
+        setValueIfExists("stopper-leverage-min", cfg.stopper.leverageMin);
+      }
+      if (cfg.stopper?.leverageMax != null && cfg.stopper.leverageMax !== "") {
+        setValueIfExists("stopper-leverage-max", cfg.stopper.leverageMax);
+      }
+      syncStopperAutoLeverageUi();
       if ($("random-price-shift")) {
         $("random-price-shift").checked = !!cfg.randomPriceShift;
       }
@@ -2361,6 +2415,17 @@
     return deposit * mult;
   }
 
+  /** Вкл/выкл полей автоплеча при @@SL/@@TP. */
+  function syncStopperAutoLeverageUi() {
+    const on = !!$("stopper-auto-leverage")?.checked;
+    const modeEl = $("stopper-auto-leverage-mode");
+    const minEl = $("stopper-leverage-min");
+    const maxEl = $("stopper-leverage-max");
+    if (modeEl) modeEl.disabled = !on;
+    if (minEl) minEl.disabled = !on;
+    if (maxEl) maxEl.disabled = !on;
+  }
+
   /** Синхронизация UI/state: `syncLeverageDisplay`. */
   function syncLeverageDisplay() {
     const mult = calcLeverageAmount();
@@ -2549,6 +2614,7 @@
       AutoStep: Math.max(1, Math.round(+$("param-auto-reverses-step")?.value || 30)),
       PauseOnDrawdown: !!$("param-pause-on-drawdown")?.checked,
       PauseOnDrawdownPerLogic: !!$("param-pause-on-drawdown-per-logic")?.checked,
+      PauseOnDrawdownPerInstrument: !!$("param-pause-on-drawdown-per-instrument")?.checked,
       DrawdownPct: Math.max(0.01, Math.min(99, +($("param-drawdown-pct")?.value || 1) || 1))
     };
   }
@@ -2595,6 +2661,13 @@
     get effectiveLogicIds() { return effectiveLogicIds; },
     get logicRecoveryState() { return ensureLogicRecoveryState; },
     get drawdownDisabledLogicIds() { return drawdownDisabledLogicIds; },
+    get drawdownDisabledInstrumentSecs() { return drawdownDisabledInstrumentSecs; },
+    get effectiveInstrumentSecs() { return effectiveInstrumentSecs; },
+    get instrumentRecoveryState() { return ensureInstrumentRecoveryState; },
+    get syncInstrumentDrawdownState() { return syncInstrumentDrawdownState; },
+    get instrumentModelEquityRub() { return instrumentModelEquityRub; },
+    get disableInstrumentForDrawdown() { return disableInstrumentForDrawdown; },
+    get enableInstrumentAfterDrawdown() { return enableInstrumentAfterDrawdown; },
     get syncLogicChipDrawdownState() { return syncLogicChipDrawdownState; },
     get restoreDrawdownRecoveryFromSnapshot() { return restoreDrawdownRecoveryFromSnapshot; },
     get snapshotDrawdownRecoveryForPersist() { return snapshotDrawdownRecoveryForPersist; },
@@ -2630,6 +2703,7 @@
     get invalidateFinrespResult() { return invalidateFinrespResult; },
     get invalidateFormChange() { return invalidateFormChange; },
     get syncLeverageDisplay() { return syncLeverageDisplay; },
+    get applyAutoLeverageAfterPortfolioStop() { return applyAutoLeverageAfterPortfolioStop; },
     INDICATOR_OPTIONS, MIN_WARMUP_BARS, MOEX_MINUTES_PER_SESSION,
     get applyEditorParams() { return applyEditorParams; },
     get indicatorSelection() { return indicatorSelection; },
@@ -2781,15 +2855,19 @@
     return opts;
   }
 
-  /** @@PauseOnDrawdown / @@PauseOnDrawdownPerLogic / @@DrawdownPct. */
+  /** @@PauseOnDrawdown / @@PauseOnDrawdownPerLogic / @@PauseOnDrawdownPerInstrument / @@DrawdownPct. */
   function recoveryStopConfig() {
-    const perLogic = !!$("param-pause-on-drawdown-per-logic")?.checked;
-    const enabled = !!$("param-pause-on-drawdown")?.checked || perLogic;
+    const perInstrument = !!$("param-pause-on-drawdown-per-instrument")?.checked;
+    const perLogic = !perInstrument && !!$("param-pause-on-drawdown-per-logic")?.checked;
+    const portfolioMaster = !perInstrument && !!$("param-pause-on-drawdown")?.checked;
+    const enabled = perInstrument || perLogic || portfolioMaster;
     return {
       enabled,
       perLogic,
+      perInstrument,
       drawdownPct: Math.max(0.01, Math.min(99, +($("param-drawdown-pct")?.value || 1) || 1)),
-      logicKeys: selectedLogicIds().slice()
+      logicKeys: selectedLogicIds().slice(),
+      instrumentKeys: selectedSecs().slice()
     };
   }
 
@@ -2811,6 +2889,103 @@
       state.logicRecovery = {};
     }
     return state.logicRecovery;
+  }
+
+  function ensureInstrumentRecoveryState() {
+    if (!state.instrumentRecovery || typeof state.instrumentRecovery !== "object") {
+      state.instrumentRecovery = {};
+    }
+    return state.instrumentRecovery;
+  }
+
+  function instrumentRecoveryEntry(sec) {
+    const ir = ensureInstrumentRecoveryState();
+    const key = String(sec || "");
+    if (!key) return null;
+    if (!ir[key]) {
+      ir[key] = {
+        disabled: false,
+        paused: false,
+        peakEquity: null,
+        resumeAt: null,
+        pausedAt: null,
+        pauseCount: 0
+      };
+    }
+    return ir[key];
+  }
+
+  function isInstrumentDisabledByDrawdown(sec) {
+    const cfg = recoveryStopConfig();
+    if (!cfg.enabled || !cfg.perInstrument) return false;
+    return !!instrumentRecoveryEntry(sec)?.disabled;
+  }
+
+  function drawdownDisabledInstrumentSecs() {
+    const cfg = recoveryStopConfig();
+    if (!cfg.enabled || !cfg.perInstrument) return [];
+    return cfg.instrumentKeys.filter((sec) => !!instrumentRecoveryEntry(sec)?.disabled);
+  }
+
+  /** Выбранные инструменты, допущенные к торговле (не отключены просадкой). */
+  function effectiveInstrumentSecs() {
+    const secs = selectedSecs();
+    const cfg = recoveryStopConfig();
+    if (!cfg.enabled || !cfg.perInstrument) return secs.slice();
+    const ir = ensureInstrumentRecoveryState();
+    return secs.filter((sec) => !ir[sec]?.disabled);
+  }
+
+  function disableInstrumentForDrawdown(sec, meta, opts) {
+    const ent = instrumentRecoveryEntry(sec);
+    if (!ent) return;
+    const wasDisabled = !!ent.disabled;
+    ent.disabled = true;
+    ent.paused = true;
+    ent.peakEquity = meta?.peak ?? meta?.peakEquity ?? null;
+    ent.resumeAt = meta?.resumeAt ?? ent.peakEquity;
+    ent.pausedAt = meta?.time || meta?.pausedAt || new Date().toISOString();
+    ent.pauseCount = (ent.pauseCount || 0) + 1;
+    syncInstrumentDrawdownState();
+    if (!opts?.skipSessionEvent && !wasDisabled) {
+      logicSessionEventSink.record({
+        action: "disable",
+        scope: "instrument",
+        sec,
+        reason: "drawdown",
+        meta: {
+          drawdownPct: meta?.drawdownPct,
+          peakEquity: ent.peakEquity,
+          resumeAt: ent.resumeAt,
+          pausedAt: ent.pausedAt
+        }
+      });
+    }
+    if (!opts?.skipSave) saveConfig();
+  }
+
+  function enableInstrumentAfterDrawdown(sec, meta, opts) {
+    const ent = instrumentRecoveryEntry(sec);
+    if (!ent) return;
+    const wasDisabled = !!ent.disabled;
+    ent.disabled = false;
+    ent.paused = false;
+    ent.peakEquity = meta?.equity ?? ent.peakEquity;
+    ent.resumeAt = null;
+    ent.pausedAt = null;
+    syncInstrumentDrawdownState();
+    if (!opts?.skipSessionEvent && wasDisabled) {
+      logicSessionEventSink.record({
+        action: "enable",
+        scope: "instrument",
+        sec,
+        reason: "recovery",
+        meta: {
+          equity: meta?.equity ?? ent.peakEquity
+        }
+      });
+    }
+    if (!opts?.skipSave) saveConfig();
   }
 
   function logicRecoveryEntry(logicKey) {
@@ -2849,7 +3024,7 @@
   }
 
   function isDrawdownRecoveryActive() {
-    return drawdownDisabledLogicIds().length > 0;
+    return drawdownDisabledLogicIds().length > 0 || drawdownDisabledInstrumentSecs().length > 0;
   }
 
   /** Выбранные логики, допущенные к торговле (не отключены просадкой). */
@@ -2968,6 +3143,7 @@
 
   function clearDrawdownRecoveryState() {
     state.logicRecovery = {};
+    state.instrumentRecovery = {};
     state.portfolioDrawdown = {
       disabled: false,
       peakEquity: null,
@@ -2976,13 +3152,16 @@
       pauseCount: 0
     };
     for (const key of selectedLogicIds()) logicRecoveryEntry(key);
+    for (const sec of selectedSecs()) instrumentRecoveryEntry(sec);
     syncLogicChipDrawdownState();
+    syncInstrumentDrawdownState();
     saveConfig();
   }
 
   function resetLogicRecovery(keys) {
     clearDrawdownRecoveryState();
     for (const key of keys || selectedLogicIds()) logicRecoveryEntry(key);
+    for (const sec of selectedSecs()) instrumentRecoveryEntry(sec);
   }
 
   /**
@@ -2998,6 +3177,7 @@
     state.equityRunsCache = null;
     state.lastEquityChartCtx = null;
     state.logicModelEquity = {};
+    state.instrumentModelEquity = {};
     clearDrawdownRecoveryState();
     if (hadDisabled && stack.length) {
       logicSessionEventSink.record({
@@ -3018,20 +3198,77 @@
     const replayOpts = { skipSave: true, skipSessionEvent: true };
     for (const ev of events) {
       if (ev.kind === "pause") {
-        if (cfg.perLogic && ev.logicKey) {
+        if (cfg.perInstrument && ev.sec) {
+          disableInstrumentForDrawdown(ev.sec, ev, replayOpts);
+        } else if (cfg.perLogic && ev.logicKey) {
           disableLogicForDrawdown(ev.logicKey, ev, replayOpts);
-        } else if (!cfg.perLogic) {
+        } else if (!cfg.perLogic && !cfg.perInstrument) {
           disableAllLogicsForDrawdown(ev, replayOpts);
         }
       } else if (ev.kind === "resume") {
-        if (cfg.perLogic && ev.logicKey) {
+        if (cfg.perInstrument && ev.sec) {
+          enableInstrumentAfterDrawdown(ev.sec, ev, replayOpts);
+        } else if (cfg.perLogic && ev.logicKey) {
           enableLogicAfterDrawdown(ev.logicKey, ev, replayOpts);
-        } else if (!cfg.perLogic) {
+        } else if (!cfg.perLogic && !cfg.perInstrument) {
           enableAllLogicsAfterDrawdown(ev, replayOpts);
         }
       }
     }
     syncLogicChipDrawdownState();
+    syncInstrumentDrawdownState();
+  }
+
+  function syncInstrumentModelEquityFromResult(result) {
+    if (!state.instrumentModelEquity || typeof state.instrumentModelEquity !== "object") {
+      state.instrumentModelEquity = {};
+    }
+    const model = result?.recoveryStop?.instrumentModelEquity;
+    if (model && typeof model === "object") {
+      for (const [sec, eq] of Object.entries(model)) {
+        if (Number.isFinite(eq)) state.instrumentModelEquity[sec] = eq;
+      }
+      return;
+    }
+    const cfg = recoveryStopConfig();
+    if (!cfg.perInstrument || !result?.perSec?.length) return;
+    for (const p of result.perSec) {
+      const eq = p.rows?.at(-1)?.eq;
+      if (p.sec && Number.isFinite(eq)) state.instrumentModelEquity[p.sec] = eq;
+    }
+  }
+
+  function instrumentModelEquityRub(sec) {
+    const key = String(sec || "");
+    if (!key) return NaN;
+    const cached = state.instrumentModelEquity?.[key];
+    if (Number.isFinite(cached)) return cached;
+    const perSec = state.lastResult?.perSec;
+    if (!perSec?.length) return NaN;
+    const item = perSec.find((p) => p.sec === key);
+    const eq = item?.rows?.at(-1)?.eq;
+    return Number.isFinite(eq) ? eq : NaN;
+  }
+
+  /** Обновить признак «отключён просадкой» в списке инструментов. */
+  function syncInstrumentDrawdownState() {
+    bridgeSetFormCatalog({ instrumentDrawdownDisabledIds: drawdownDisabledInstrumentSecs() });
+    const api = bridgeApi();
+    if (api?.refreshInstrumentDrawdown) {
+      api.refreshInstrumentDrawdown();
+      return;
+    }
+    const sel = $("calc-sec-visible");
+    if (!sel) return;
+    const disabled = new Set(drawdownDisabledInstrumentSecs());
+    for (const opt of sel.options) {
+      const off = disabled.has(opt.value);
+      opt.classList.toggle("calc-sec-opt--drawdown-disabled", off);
+      const base = opt.dataset.baseLabel || opt.textContent.replace(/ · пауза$/, "");
+      if (!opt.dataset.baseLabel) opt.dataset.baseLabel = base;
+      opt.textContent = off ? `${base} · пауза` : base;
+      opt.title = off ? `${base} — отключён (@@PauseOnDrawdownPerInstrument)` : "";
+    }
   }
 
   function syncLogicModelEquityFromCache() {
@@ -3059,6 +3296,11 @@
   function formatLogicRecoveryStatus(events) {
     const cfg = recoveryStopConfig();
     if (!cfg.enabled || !events?.length) return "";
+    if (cfg.perInstrument) {
+      const paused = [...new Set(events.filter((e) => e.kind === "pause").map((e) => e.sec))];
+      if (!paused.length) return "";
+      return paused.join(", ");
+    }
     if (!cfg.perLogic) {
       const hasPause = events.some((e) => e.kind === "pause");
       return hasPause ? "портфель" : "";
@@ -3069,9 +3311,13 @@
   }
 
   function formatDrawdownDisabledStatus() {
+    const cfg = recoveryStopConfig();
+    if (cfg.perInstrument) {
+      const secs = drawdownDisabledInstrumentSecs();
+      return secs.length ? secs.join(", ") : "";
+    }
     const ids = drawdownDisabledLogicIds();
     if (!ids.length) return "";
-    const cfg = recoveryStopConfig();
     if (!cfg.perLogic) return "портфель";
     return ids.map((k) => logicDisplayName(k)).join(", ");
   }
@@ -3112,14 +3358,48 @@
     const atrLen = Number.isFinite(atrRaw) && atrRaw >= 2
       ? Math.round(atrRaw)
       : E.DEFAULT_STOPPER.atrLen;
+    const levMinRaw = +$("stopper-leverage-min")?.value;
+    const levMaxRaw = +$("stopper-leverage-max")?.value;
+    const defAuto = E.DEFAULT_STOPPER.autoLeverage || {};
+    const leverageMin = Number.isFinite(levMinRaw) && levMinRaw > 0
+      ? levMinRaw
+      : (defAuto.leverageMin ?? 0.5);
+    const leverageMax = Number.isFinite(levMaxRaw) && levMaxRaw > 0
+      ? Math.max(leverageMin, levMaxRaw)
+      : Math.max(leverageMin, defAuto.leverageMax ?? 8);
+    const modeRaw = $("stopper-auto-leverage-mode")?.value;
     return {
       useSl: slMult > 0,
       useTp: tpMult > 0,
       slMult,
       tpMult,
       atrLen,
-      refEquity: Math.max(0, +$("stopper-ref").value || 0)
+      refEquity: Math.max(0, +$("stopper-ref").value || 0),
+      autoLeverage: {
+        enabled: !!$("stopper-auto-leverage")?.checked,
+        mode: modeRaw === "tp_down_sl_up" ? "tp_down_sl_up" : "tp_up_sl_down",
+        leverageMin,
+        leverageMax
+      }
     };
+  }
+
+  /** После портфельного @@SL/@@TP — подстроить @@MaxPos и Volume% (live и отображение). */
+  function applyAutoLeverageAfterPortfolioStop(hit) {
+    if (!hit?.kind) return null;
+    const sc = stopperConfig();
+    if (!sc.autoLeverage?.enabled) return null;
+    const vc = volConfig();
+    const adj = typeof E.adjustVolConfigLeverage === "function"
+      ? E.adjustVolConfigLeverage(vc, hit.kind, sc)
+      : null;
+    if (!adj) return null;
+    setValueIfExists("vol-maxpos", adj.maxPositions);
+    setValueIfExists("vol-value", Math.max(E.DEFAULT_VOLUME.volume, adj.volume));
+    syncLeverageDisplay();
+    renderFromParams();
+    saveConfig();
+    return adj;
   }
 
   /** Выбранные элементы UI: `selectedIndicatorKeys`. */
@@ -5239,6 +5519,11 @@
         p.PauseOnDrawdownPerLogic ?? p.pauseOnDrawdownPerLogic
       );
     }
+    if ($("param-pause-on-drawdown-per-instrument")) {
+      $("param-pause-on-drawdown-per-instrument").checked = !!(
+        p.PauseOnDrawdownPerInstrument ?? p.pauseOnDrawdownPerInstrument
+      );
+    }
     setValueIfExists("param-pause-drawdown-pct", p.DrawdownPct ?? p.drawdownPct);
     const sc = proto.stopper || {};
     if ($("stopper-use-sl")) $("stopper-use-sl").checked = sc.useSl !== false;
@@ -5247,6 +5532,19 @@
     setValueIfExists("stopper-tp-mult", sc.tpMult);
     setValueIfExists("stopper-atr-len", sc.atrLen);
     setValueIfExists("stopper-ref", sc.refEquity);
+    if (sc.autoLeverage != null && $("stopper-auto-leverage")) {
+      $("stopper-auto-leverage").checked = !!sc.autoLeverage.enabled;
+    }
+    if (sc.autoLeverage?.mode) {
+      setValueIfExists("stopper-auto-leverage-mode", sc.autoLeverage.mode);
+    }
+    if (sc.autoLeverage?.leverageMin != null) {
+      setValueIfExists("stopper-leverage-min", sc.autoLeverage.leverageMin);
+    }
+    if (sc.autoLeverage?.leverageMax != null) {
+      setValueIfExists("stopper-leverage-max", sc.autoLeverage.leverageMax);
+    }
+    syncStopperAutoLeverageUi();
     const vol = proto.volume || {};
     setValueIfExists("vol-type", vol.volumeType ?? vol.type);
     setValueIfExists("vol-value", vol.volume ?? vol.value);
@@ -5618,6 +5916,11 @@
     setValueIfExists("stopper-tp-mult", s.tpMult);
     setValueIfExists("stopper-atr-len", s.atrLen);
     setValueIfExists("stopper-ref", s.refEquity);
+    if ($("stopper-auto-leverage")) $("stopper-auto-leverage").checked = false;
+    setValueIfExists("stopper-auto-leverage-mode", "tp_up_sl_down");
+    setValueIfExists("stopper-leverage-min", s.autoLeverage?.leverageMin ?? 0.5);
+    setValueIfExists("stopper-leverage-max", s.autoLeverage?.leverageMax ?? 8);
+    syncStopperAutoLeverageUi();
     setValueIfExists("vol-type", v.volumeType);
     setValueIfExists("vol-value", v.volume);
     setValueIfExists("vol-deposit", v.deposit);
@@ -6743,8 +7046,9 @@
 
   /** Галочка @@AutoReverses в блоке «Реальная торговля» (окно/шаг только в доп. параметрах). */
   function syncPauseOnDrawdownUi(skipSource) {
-    const perLogic = !!$("param-pause-on-drawdown-per-logic")?.checked;
-    const on = !!$("param-pause-on-drawdown")?.checked || perLogic;
+    const perInstrument = !!$("param-pause-on-drawdown-per-instrument")?.checked;
+    const perLogic = !perInstrument && !!$("param-pause-on-drawdown-per-logic")?.checked;
+    const on = !perInstrument && (!!$("param-pause-on-drawdown")?.checked || perLogic);
     const panel = $("live-pause-on-drawdown-panel");
     if (panel && skipSource !== "live-pause-on-drawdown-panel" && panel.checked !== on) {
       panel.checked = on;
@@ -6757,6 +7061,12 @@
     }
     const perWrap = $("live-pause-on-drawdown-per-logic-panel-wrap");
     if (perWrap) perWrap.classList.toggle("live-reverse-panel-toggle--on", perLogic);
+    const perInstPanel = $("live-pause-on-drawdown-per-instrument-panel");
+    if (perInstPanel && skipSource !== "live-pause-on-drawdown-per-instrument-panel" && perInstPanel.checked !== perInstrument) {
+      perInstPanel.checked = perInstrument;
+    }
+    const perInstWrap = $("live-pause-on-drawdown-per-instrument-panel-wrap");
+    if (perInstWrap) perInstWrap.classList.toggle("live-reverse-panel-toggle--on", perInstrument);
   }
 
   function bindLivePauseOnDrawdownPanelUi() {
@@ -6766,7 +7076,10 @@
     panel.addEventListener("change", () => {
       const main = $("param-pause-on-drawdown");
       if (main) main.checked = panel.checked;
-      if (!panel.checked) {
+      if (panel.checked) {
+        const perInst = $("param-pause-on-drawdown-per-instrument");
+        if (perInst) perInst.checked = false;
+      } else {
         const per = $("param-pause-on-drawdown-per-logic");
         if (per) per.checked = false;
       }
@@ -6775,7 +7088,10 @@
       saveConfig();
     });
     $("param-pause-on-drawdown")?.addEventListener("change", () => {
-      if (!$("param-pause-on-drawdown")?.checked) {
+      if ($("param-pause-on-drawdown")?.checked) {
+        const perInst = $("param-pause-on-drawdown-per-instrument");
+        if (perInst) perInst.checked = false;
+      } else {
         const per = $("param-pause-on-drawdown-per-logic");
         if (per) per.checked = false;
       }
@@ -6787,6 +7103,19 @@
       if ($("param-pause-on-drawdown-per-logic")?.checked) {
         const main = $("param-pause-on-drawdown");
         if (main) main.checked = true;
+        const perInst = $("param-pause-on-drawdown-per-instrument");
+        if (perInst) perInst.checked = false;
+      }
+      syncPauseOnDrawdownUi();
+      renderFromParams();
+      saveConfig();
+    });
+    $("param-pause-on-drawdown-per-instrument")?.addEventListener("change", () => {
+      if ($("param-pause-on-drawdown-per-instrument")?.checked) {
+        const main = $("param-pause-on-drawdown");
+        const per = $("param-pause-on-drawdown-per-logic");
+        if (main) main.checked = false;
+        if (per) per.checked = false;
       }
       syncPauseOnDrawdownUi();
       renderFromParams();
@@ -6806,8 +7135,30 @@
       if (panel.checked) {
         const master = $("param-pause-on-drawdown");
         if (master) master.checked = true;
+        const perInst = $("param-pause-on-drawdown-per-instrument");
+        if (perInst) perInst.checked = false;
       }
       syncPauseOnDrawdownUi("live-pause-on-drawdown-per-logic-panel");
+      renderFromParams();
+      saveConfig();
+    });
+    syncPauseOnDrawdownUi();
+  }
+
+  function bindLivePauseOnDrawdownPerInstrumentPanelUi() {
+    const panel = $("live-pause-on-drawdown-per-instrument-panel");
+    if (!panel || panel.dataset.pauseOnDrawdownPerInstrumentBound) return;
+    panel.dataset.pauseOnDrawdownPerInstrumentBound = "1";
+    panel.addEventListener("change", () => {
+      const main = $("param-pause-on-drawdown-per-instrument");
+      if (main) main.checked = panel.checked;
+      if (panel.checked) {
+        const portfolio = $("param-pause-on-drawdown");
+        const perLogic = $("param-pause-on-drawdown-per-logic");
+        if (portfolio) portfolio.checked = false;
+        if (perLogic) perLogic.checked = false;
+      }
+      syncPauseOnDrawdownUi("live-pause-on-drawdown-per-instrument-panel");
       renderFromParams();
       saveConfig();
     });
@@ -7555,6 +7906,217 @@
     };
   }
 
+  function instrumentPauseTimelineEvents(sec) {
+    const out = [];
+    const cfg = recoveryStopConfig();
+    if (!cfg.enabled || !cfg.perInstrument) return out;
+    const key = String(sec || "");
+    if (!key || !selectedSecs().includes(key)) return out;
+    const liveSession = isLiveTradingSession();
+    if (!liveSession) {
+      for (const ev of state.lastResult?.recoveryStop?.events || []) {
+        if (ev.kind === "pause" && ev.sec === key) {
+          out.push({ edge: "start", time: ev.time, ms: parseMoexTime(ev.time)?.getTime() });
+        } else if (ev.kind === "resume" && ev.sec === key) {
+          out.push({ edge: "end", time: ev.time, ms: parseMoexTime(ev.time)?.getTime() });
+        }
+      }
+    }
+    if (isLiveMode()) {
+      for (const se of state.live.sessionEvents || []) {
+        if (se.scope !== "instrument" || se.sec !== key) continue;
+        const ms = parseMoexTime(se.when)?.getTime();
+        if (!Number.isFinite(ms)) continue;
+        if (se.action === "disable") out.push({ edge: "start", time: se.when, ms });
+        else if (se.action === "enable") out.push({ edge: "end", time: se.when, ms });
+      }
+      const ent = instrumentRecoveryEntry(key);
+      if (isInstrumentDisabledByDrawdown(key) && ent?.pausedAt) {
+        const starts = out.filter((e) => e.edge === "start").length;
+        const ends = out.filter((e) => e.edge === "end").length;
+        if (starts <= ends) {
+          const ms = parseMoexTime(ent.pausedAt)?.getTime();
+          if (Number.isFinite(ms)) out.push({ edge: "start", time: ent.pausedAt, ms });
+        }
+      }
+    }
+    out.sort((a, b) => (a.ms || 0) - (b.ms || 0));
+    const merged = [];
+    for (const e of out) {
+      const last = merged[merged.length - 1];
+      if (last && last.edge === e.edge && last.ms === e.ms) continue;
+      merged.push(e);
+    }
+    return merged;
+  }
+
+  /** Состояние паузы по барам графика: все события с ms ≤ времени бара применяются до отметки бара. */
+  function instrumentPauseStateByRow(rows, events) {
+    const state = new Array(rows?.length || 0).fill(false);
+    if (!rows?.length || !events?.length) return state;
+    let paused = false;
+    let evI = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const rowMs = parseMoexTime(rows[i]?.time)?.getTime();
+      if (Number.isFinite(rowMs)) {
+        while (evI < events.length) {
+          const ev = events[evI];
+          const evMs = Number.isFinite(ev.ms) ? ev.ms : parseMoexTime(ev.time)?.getTime();
+          if (!Number.isFinite(evMs) || evMs > rowMs) break;
+          paused = ev.edge === "start";
+          evI++;
+        }
+      }
+      state[i] = paused;
+    }
+    return state;
+  }
+
+  function instrumentRowHasTradeActivity(r) {
+    if (!r) return false;
+    if (r.tradeIn || r.tradeOut) return true;
+    if (r.buy || r.sell) return true;
+    return r.pos !== 0 && r.pos != null;
+  }
+
+  /** Замороженный бар при @@PauseOnDrawdownPerInstrument: pos=0, плоская свеча, eq не меняется. */
+  function instrumentRowIsFrozenHoldBar(r, prev) {
+    if (!r || !prev) return false;
+    if (instrumentRowHasTradeActivity(r)) return false;
+    if (r.pos !== 0) return false;
+    const c = r.close ?? r.open;
+    if (c == null) return false;
+    if (r.open !== r.high || r.high !== r.low || r.low !== r.close) return false;
+    return Number.isFinite(r.eq) && Number.isFinite(prev.eq) && r.eq === prev.eq;
+  }
+
+  /** Пауза только по исполненным барам (drawdownPaused / фактическая остановка торговли), не по событиям isoEq. */
+  function inferInstrumentPauseStateFromExecutedRows(rows) {
+    const state = new Array(rows.length).fill(false);
+    let paused = false;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (r?.drawdownPaused === true) {
+        paused = true;
+        state[i] = true;
+        continue;
+      }
+      if (instrumentRowHasTradeActivity(r)) {
+        paused = false;
+        state[i] = false;
+        continue;
+      }
+      if (paused && instrumentRowIsFrozenHoldBar(r, rows[i - 1])) {
+        state[i] = true;
+        continue;
+      }
+      if (r?.drawdownPaused === false) {
+        paused = false;
+      }
+      state[i] = paused;
+    }
+    return state;
+  }
+
+  function instrumentPauseStateFromExecutedRows(rows) {
+    if (!rows?.length) return null;
+    if (rows.some((r) => r?.drawdownPaused === true)) {
+      return rows.map((r) => r?.drawdownPaused === true);
+    }
+    return inferInstrumentPauseStateFromExecutedRows(rows);
+  }
+
+  function pauseIntervalsFromState(state) {
+    const intervals = [];
+    let i = 0;
+    while (i < state.length) {
+      if (!state[i]) {
+        i++;
+        continue;
+      }
+      const fromIdx = i;
+      while (i < state.length && state[i]) i++;
+      intervals.push({ fromIdx, toIdx: i - 1 });
+    }
+    return intervals;
+  }
+
+  /** Склеить розовые зоны, между которыми ≤ maxEnabledGap белых баров (мигание модели). */
+  function coalesceInstrumentPauseIntervals(intervals, maxEnabledGap) {
+    if (!intervals?.length) return intervals || [];
+    const gapLimit = Number.isFinite(maxEnabledGap) ? maxEnabledGap : 3;
+    const out = [{ ...intervals[0] }];
+    for (let k = 1; k < intervals.length; k++) {
+      const prev = out[out.length - 1];
+      const cur = intervals[k];
+      const enabledBars = cur.fromIdx - prev.toIdx - 1;
+      if (enabledBars <= gapLimit) {
+        prev.toIdx = Math.max(prev.toIdx, cur.toIdx);
+      } else {
+        out.push({ ...cur });
+      }
+    }
+    return out;
+  }
+
+  function instrumentPauseDecorFromIntervals(rows, sec, intervals) {
+    const pauseIntervals = intervals || [];
+    const vLines = [];
+    const instrumentPauseOverlays = [];
+    for (const { fromIdx, toIdx } of pauseIntervals) {
+      vLines.push({ idx: fromIdx, kind: "instrument-pause-start", label: `${sec}: инструмент отключён` });
+      if (toIdx < rows.length - 1) {
+        vLines.push({ idx: toIdx + 1, kind: "instrument-pause-end", label: `${sec}: инструмент включён` });
+      }
+      const openEq = rows[fromIdx]?.eq;
+      if (Number.isFinite(openEq)) {
+        instrumentPauseOverlays.push({ fromIdx, toIdx, eq: openEq });
+      }
+    }
+    const modeRegions = pauseIntervals.map(({ fromIdx, toIdx }) => ({
+      fromIdx,
+      toIdx,
+      mode: "instrument_pause"
+    }));
+    return {
+      modeRegions,
+      vLines,
+      instrumentPauseOverlays,
+      hasInstrumentPause: pauseIntervals.length > 0
+    };
+  }
+
+  /** Бледно-красные зоны и линии на графике инструмента: периоды отключения (@@PauseOnDrawdownPerInstrument). */
+  function instrumentPauseDecorForRows(rows, sec) {
+    const empty = {
+      modeRegions: [],
+      vLines: [],
+      instrumentPauseOverlays: [],
+      hasInstrumentPause: false
+    };
+    const cfg = recoveryStopConfig();
+    if (!rows?.length || !sec || !cfg.enabled || !cfg.perInstrument) return empty;
+    const pausedByRow = instrumentPauseStateFromExecutedRows(rows);
+    if (!pausedByRow) return empty;
+    const intervals = pauseIntervalsFromState(pausedByRow);
+    const decor = instrumentPauseDecorFromIntervals(rows, sec, intervals);
+    decor.pausedByRow = pausedByRow;
+    return decor;
+  }
+
+  function mergeInstrumentPauseChartDecor(rows, sec, baseDecor, vLines) {
+    const cfg = recoveryStopConfig();
+    if (!cfg.enabled || !cfg.perInstrument) return baseDecor;
+    const pauseDecor = instrumentPauseDecorForRows(rows, sec);
+    return {
+      ...baseDecor,
+      modeRegions: [...(baseDecor.modeRegions || []), ...(pauseDecor.modeRegions || [])],
+      vLines: [...(vLines || baseDecor.vLines || []), ...(pauseDecor.vLines || [])],
+      instrumentPauseOverlays: pauseDecor.instrumentPauseOverlays || [],
+      hasInstrumentPause: pauseDecor.hasInstrumentPause
+    };
+  }
+
   /** Подпрограмма `chartStopLines`. */
   function chartStopLines(rows, portfolioEvents) {
     const lines = [];
@@ -7596,6 +8158,11 @@
         const tip = String(label || (kind === "logic-pause-start" ? "логика отключена" : "логика включена"))
           .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
         return `<g opacity="0.9"><line x1="${xi}" y1="${top}" x2="${xi}" y2="${bottom}" stroke="#64748b" stroke-width="1.6" stroke-dasharray="5 4"/><title>${tip}</title></g>`;
+      }
+      if (kind === "instrument-pause-start" || kind === "instrument-pause-end") {
+        const tip = String(label || (kind === "instrument-pause-start" ? "инструмент отключён" : "инструмент включён"))
+          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+        return `<g opacity="0.9"><line x1="${xi}" y1="${top}" x2="${xi}" y2="${bottom}" stroke="#e11d48" stroke-width="1.5" stroke-dasharray="5 4"/><title>${tip}</title></g>`;
       }
       const stroke = kind === "tp" ? "#16a34a" : "#dc2626";
       const dash = scope === "portfolio" ? "7 4" : "4 3";
@@ -8455,18 +9022,27 @@
     const packFull = packForSec(sec);
     if (!packFull?.length || !rows?.length) return rows;
     const { pack, timeToIdx } = packWindowForRows(packFull, rows);
+    let pauseMask = null;
+    const rdCfg = recoveryStopConfig();
+    if (rdCfg.enabled && rdCfg.perInstrument && rdCfg.instrumentKeys.includes(sec)) {
+      pauseMask = instrumentPauseStateFromExecutedRows(rows);
+    }
     let prevPos = 0;
-    const withOhlc = (r, idx) => {
+    const withOhlc = (r, idx, ri) => {
       const posAfter = r?.pos ?? 0;
-      const inferred = E.tradeMarkersFromBar
-        ? E.tradeMarkersFromBar(prevPos, posAfter, r?.posStop ?? null)
-        : {};
+      const pausedBar = !!r?.drawdownPaused || !!(pauseMask && pauseMask[ri]);
+      let markerFields = {};
+      if (pausedBar) {
+        markerFields = { tradeIn: null, tradeOut: null, tradeOutSide: null };
+      } else if (!r?.tradeIn && !r?.tradeOut && E.tradeMarkersFromBar) {
+        markerFields = E.tradeMarkersFromBar(prevPos, posAfter, r?.posStop ?? null);
+      }
       prevPos = posAfter;
-      if (idx == null) return { ...r, ...inferred };
+      if (idx == null) return { ...r, ...markerFields };
       const candle = pack[idx];
       return {
         ...r,
-        ...inferred,
+        ...markerFields,
         close: r.close ?? candle?.close,
         open: r.open ?? candle?.open ?? r.close ?? candle?.close,
         high: r.high ?? candle?.high ?? r.close ?? candle?.close,
@@ -8476,7 +9052,7 @@
     if (enrichOpts?.withIndicators !== true) {
       const out = new Array(rows.length);
       for (let ri = 0; ri < rows.length; ri++) {
-        out[ri] = withOhlc(rows[ri], timeToIdx.get(chartTimeKey(rows[ri].time)));
+        out[ri] = withOhlc(rows[ri], timeToIdx.get(chartTimeKey(rows[ri].time)), ri);
       }
       return out;
     }
@@ -9291,8 +9867,16 @@ ${rects}
       const yEq = y(eq).toFixed(1);
       return `<line x1="${x(fromIdx).toFixed(1)}" y1="${yEq}" x2="${x(toIdx).toFixed(1)}" y2="${yEq}" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.95"><title>Логика отключена · equity заморожен</title></line>`;
     }).join("");
+    const instrPauseLevelLines = (decor.instrumentPauseOverlays || []).map(({ fromIdx, toIdx, eq }) => {
+      if (!Number.isFinite(eq)) return "";
+      const yEq = y(eq).toFixed(1);
+      return `<line x1="${x(fromIdx).toFixed(1)}" y1="${yEq}" x2="${x(toIdx).toFixed(1)}" y2="${yEq}" stroke="#f43f5e" stroke-width="1.2" stroke-dasharray="6 4" opacity="0.8"><title>Инструмент отключён · equity на момент паузы</title></line>`;
+    }).join("");
     const configLegend = (decor.vLines || []).some((l) => l.kind === "config")
       ? " · фиолетовая — смена логик/комиссии/индикаторов"
+      : "";
+    const instrPauseLegend = decor.hasInstrumentPause || (decor.modeRegions || []).some((r) => r.mode === "instrument_pause")
+      ? " · бледно-красная зона — инструмент отключён (@@PauseOnDrawdownPerInstrument)"
       : "";
     const pauseLegend = decor.hasLogicPause || (decor.modeRegions || []).some((r) => r.mode === "logic_pause")
       ? " · зелёная область — логика включена · белая полоса — отключена (просадка)"
@@ -9304,7 +9888,7 @@ ${rects}
       : "";
     const caption = decor.caption ?? (faded
       ? "Справочный equity (логика не участвует в торговле / сумме)"
-      : `Equity по выбранным логикам${configLegend}${pauseLegend}${modeLegend}`);
+      : `Equity по выбранным логикам${configLegend}${pauseLegend}${instrPauseLegend}${modeLegend}`);
     const titleFont = compact ? 12 : 14;
     const titleColor = faded ? "#6b7280" : "#111827";
     const titleStartY = 16;
@@ -9325,7 +9909,7 @@ ${rects}
     return `<svg viewBox="0 0 ${w} ${h}" class="chart-equity-main-svg" role="img" aria-label="${escSvgText(title)}">
 <rect width="${w}" height="${h}" fill="#fff"/>
 ${modeBands}
-${gridH}${gridV}${zeroLine}${configLines}${pauseLevelLines}
+${gridH}${gridV}${zeroLine}${configLines}${pauseLevelLines}${instrPauseLevelLines}
 <line x1="${left}" y1="${top}" x2="${left}" y2="${h - bottom}" stroke="#94a3b8" stroke-width="1.2"/>
 <line x1="${left}" y1="${h - bottom}" x2="${w - right}" y2="${h - bottom}" stroke="#94a3b8" stroke-width="1.2"/>
 ${yLabels}${xLabels}
@@ -9663,6 +10247,54 @@ ${svg}
     };
   }
 
+  /** HTML mini-графика equity одного инструмента (режим @@PauseOnDrawdownPerInstrument). */
+  function buildEquityInstrumentBlockHtml(sec, rows, finresp) {
+    if (!rows?.length) return "";
+    const pauseDecor = instrumentPauseDecorForRows(rows, sec);
+    const baseDecor = chartDecorFromRows(rows, configMarkersForRows(rows));
+    const decor = {
+      ...baseDecor,
+      ...pauseDecor,
+      modeRegions: [...(baseDecor.modeRegions || []), ...(pauseDecor.modeRegions || [])],
+      vLines: [...(baseDecor.vLines || []), ...(pauseDecor.vLines || [])],
+      caption: pauseDecor.hasInstrumentPause
+        ? "Белый фон — инструмент включён · бледно-красная зона — отключён; пунктир — equity на момент отключения"
+        : "Инструмент включён на всём окне"
+    };
+    const fin = rows.at(-1)?.eq ?? finresp;
+    const color = Number.isFinite(fin) && fin < 0 ? "#b91c1c" : "#047857";
+    const svg = appendEquityIncrementPanel(
+      buildEquityChartSvg(rows, fin ?? 0, `Equity ${sec}`, true, color, decor),
+      rows,
+      equityDeltaTf(),
+      true,
+      false
+    );
+    if (!svg) return "";
+    return `<div class="chart-mini" data-equity-copy-block>${equityChartCopyHeaderHtml(`<p class="chart-sec-title">${sec} · equity инструмента</p>`)}${svg}</div>`;
+  }
+
+  function buildEquityInstrumentBlocksHtml() {
+    const cfg = recoveryStopConfig();
+    if (!cfg.enabled || !cfg.perInstrument) return "";
+    const perSec = state.lastResult?.perSec;
+    if (!perSec?.length) return "";
+    const liveSession = isLiveTradingSession();
+    const blocks = [];
+    for (const p of perSec) {
+      if (!cfg.instrumentKeys.includes(p.sec)) continue;
+      let rows = p.rows || [];
+      if (liveSession) rows = sliceRowsForLiveSession(rows);
+      if (!rows.length) continue;
+      blocks.push(buildEquityInstrumentBlockHtml(p.sec, rows, p.finresp));
+    }
+    if (!blocks.length) return "";
+    return `<div class="chart-equity-instruments-wrap">
+<p class="chart-equity-instruments-title">Equity по инструментам — пауза при просадке</p>
+<div class="chart-stack">${blocks.join("")}</div>
+</div>`;
+  }
+
   /** HTML одного mini-графика equity по логике каталога. */
   function buildEquityLogicBlockHtml(key, ctx) {
     const selected = ctx.selectedSet.has(key);
@@ -9779,6 +10411,7 @@ ${totalSvg}
     const finrespBlock = buildEquityFinrespBlockHtml(ctx);
     const referenceBlock = buildEquityReferenceBlockHtml(ctx);
     const avgPriceBlock = buildEquityAvgPriceBlockHtml(ctx);
+    const instrumentBlocks = buildEquityInstrumentBlocksHtml();
     syncChartBox(box, `<div class="chart-equity-section">
 ${avgPriceBlock}
 <p class="chart-equity-section-title">${ctx.sectionTitle}</p>
@@ -9789,6 +10422,7 @@ ${ctx.liveNoteHtml}${ctx.markerNoteHtml}
 ${finrespBlock}
 ${referenceBlock}
 <div class="chart-equity-logic-scroll"><div class="chart-stack">${logicBlocks.join("")}</div></div>
+${instrumentBlocks}
 </div>`);
   }
 
@@ -9848,6 +10482,12 @@ ${referenceBlock}
       if (onProgress) onProgress(i, ctx.catalogKeys.length, key);
       const block = buildEquityLogicBlockHtml(key, ctx);
       if (block) stack.insertAdjacentHTML("beforeend", block);
+      if (onProgress) await yieldToUi();
+    }
+
+    const instrumentBlocks = buildEquityInstrumentBlocksHtml();
+    if (instrumentBlocks) {
+      section.insertAdjacentHTML("beforeend", instrumentBlocks);
       if (onProgress) await yieldToUi();
     }
 
@@ -10000,7 +10640,8 @@ ${referenceBlock}
       const stopV = chartStopLines(chartRows, portfolioEvents);
       const orderV = liveSession ? orderMarkersForChart(p.sec, chartRows) : [];
       const vLines = [...stopV, ...orderV];
-      const decor = chartDecorFromRows(chartRows, vLines);
+      let decor = chartDecorFromRows(chartRows, vLines);
+      decor = mergeInstrumentPauseChartDecor(chartRows, p.sec, decor, vLines);
       const rowsReady = chartRowsReadyForIndicators(chartRows);
       const indicatorLoader = (!liveSession && rowsReady && typeof MLInstrumentChart !== "undefined")
         ? () => withChartIndicatorTimeout(applyChartIndicatorsForButton(chartRows, p.sec), p.sec)
@@ -10016,7 +10657,12 @@ ${referenceBlock}
         const specs = lineSpecs || customChartIndicatorLineSpecs(p.sec);
         const stopV2 = chartStopLines(enriched, portfolioEvents);
         const orderV2 = liveSession ? orderMarkersForChart(p.sec, enriched) : [];
-        const decor2 = chartDecorFromRows(enriched, [...stopV2, ...orderV2]);
+        const decor2 = mergeInstrumentPauseChartDecor(
+          enriched,
+          p.sec,
+          chartDecorFromRows(enriched, [...stopV2, ...orderV2]),
+          [...stopV2, ...orderV2]
+        );
         await yieldToUi();
         const svg = buildChartSvg(enriched, displayFin, `График ${p.sec}`, compact, [...stopV2, ...orderV2], decor2, specs);
         body.innerHTML = svg || `<p class="chart-fail-msg">Нет данных для графика в выбранном окне.</p>`;
@@ -10160,6 +10806,26 @@ ${referenceBlock}
     return result.agg;
   }
 
+  /** После бэктеста — применить последнюю автонастройку плеча из событий Stopper к полям формы. */
+  function applyStopperLeverageAdjustmentsToUi(stopper) {
+    const events = stopper?.events;
+    if (!Array.isArray(events) || !events.length) return null;
+    let last = null;
+    for (let i = events.length - 1; i >= 0; i--) {
+      const adj = events[i]?.leverageAdjust;
+      if (adj?.maxPositions != null && adj?.volume != null) {
+        last = adj;
+        break;
+      }
+    }
+    if (!last) return null;
+    setValueIfExists("vol-maxpos", last.maxPositions);
+    setValueIfExists("vol-value", Math.max(E.DEFAULT_VOLUME.volume, last.volume));
+    syncLeverageDisplay();
+    saveConfig();
+    return last;
+  }
+
   /** Применение настроек/результата: `applyResult`. */
   function applyResult(result, options) {
     const opts = options || {};
@@ -10281,6 +10947,12 @@ ${referenceBlock}
     }
     if (stopper?.events?.length) status += ` | Stopper: ${stopper.events.length} сраб.`;
     else if (stopperConfig().useSl || stopperConfig().useTp) status += " | Stopper вкл.";
+    const levUi = !liveSession && !opts.optimTrial
+      ? applyStopperLeverageAdjustmentsToUi(stopper)
+      : null;
+    if (levUi) {
+      status += ` | плечо ${fmt(levUi.before, 2)}→${fmt(levUi.after, 2)}`;
+    }
     const rdEv = result.recoveryStop?.events;
     if (rdEv?.length) {
       const perLogicEv = formatLogicRecoveryStatus(rdEv);
@@ -10296,6 +10968,7 @@ ${referenceBlock}
           applyLogicRecoveryFromEvents(rdEv);
         }
         syncLogicModelEquityFromCache();
+        syncInstrumentModelEquityFromResult(result);
         if (rdCfg.perLogic && Number.isFinite(a) && Number.isFinite(b)) {
           scheduleDrawdownLogicModelEquityRefresh(a, b);
         }
@@ -10303,7 +10976,10 @@ ${referenceBlock}
     }
     const disabledLabel = formatDrawdownDisabledStatus();
     if (disabledLabel && recoveryStopConfig().enabled) {
-      status += ` | логики отключены: ${disabledLabel}`;
+      const cfg = recoveryStopConfig();
+      status += cfg.perInstrument
+        ? ` | инстр. отключены: ${disabledLabel}`
+        : ` | логики отключены: ${disabledLabel}`;
     }
     if (randomPriceShiftEnabled()) status += " | сдвиг индикаторов ±0,1%";
     if (params().ReverseSides) status += " | Реверс сторон вкл.";
@@ -11199,10 +11875,16 @@ ${referenceBlock}
   bindEquityChartCopyUi();
   bindEquityDeltaPeriodUi();
   bindLogicPickerUi();
-  ["vol-value", "vol-deposit", "vol-maxpos", "commission-pct", "param-sl", "param-tp", "param-atr-sl", "param-lr", "param-lin-k", "param-sma-corridor", "param-cma-len", "param-cma-pow", "param-strict", "stopper-sl-mult", "stopper-tp-mult", "stopper-atr-len", "stopper-ref"].forEach((id) => {
+  ["vol-value", "vol-deposit", "vol-maxpos", "commission-pct", "param-sl", "param-tp", "param-atr-sl", "param-lr", "param-lin-k", "param-sma-corridor", "param-cma-len", "param-cma-pow", "param-strict", "stopper-sl-mult", "stopper-tp-mult", "stopper-atr-len", "stopper-ref", "stopper-leverage-min", "stopper-leverage-max", "stopper-auto-leverage-mode"].forEach((id) => {
     $(id).addEventListener("change", () => { syncLeverageDisplay(); renderFromParams(); saveConfig(); });
     $(id).addEventListener("input", () => { syncLeverageDisplay(); renderFromParams(); });
   });
+  $("stopper-auto-leverage")?.addEventListener("change", () => {
+    syncStopperAutoLeverageUi();
+    renderFromParams();
+    saveConfig();
+  });
+  syncStopperAutoLeverageUi();
   OPT_BUTTONS.forEach(({ inputId }) => {
     if (!inputId) return;
     $(inputId).addEventListener("change", renderFromParams);
@@ -11217,6 +11899,7 @@ ${referenceBlock}
   bindLiveReverseSignalsPanelUi();
   bindLivePauseOnDrawdownPanelUi();
   bindLivePauseOnDrawdownPerLogicPanelUi();
+  bindLivePauseOnDrawdownPerInstrumentPanelUi();
   bindLiveAutoReversesPanelUi();
   $("calc-tf").addEventListener("change", () => {
     syncStopTfToCalcTf();

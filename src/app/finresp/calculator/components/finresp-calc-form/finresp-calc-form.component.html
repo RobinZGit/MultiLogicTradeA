@@ -42,12 +42,15 @@
 <input type="checkbox" id="param-reverse-signals" hidden>
 <div class="calc-grid calc-recovery-stop-grid">
 <div class="calc-field calc-field--full"><label for="param-pause-on-drawdown"><span class="at-token-global">@@PauseOnDrawdown</span> — стоп-лосс с восстановлением</label>
-<div class="calc-field-opt-row">
-<label class="calc-sec-select-all" style="margin:0"><input id="param-pause-on-drawdown" type="checkbox" title="Портфель: при просадке отключить все выбранные логики (live-сессия не останавливается)"> Портфель (все логики)</label>
-<label class="calc-sec-select-all" style="margin:0 0 0 .85rem"><input id="param-pause-on-drawdown-per-logic" type="checkbox" title="По логикам: отключать каждую выбранную логику отдельно"> Раздельно по логикам</label>
-</div></div>
-<div class="calc-field"><label for="param-drawdown-pct"><span class="at-token-global">@@DrawdownPct</span> — просадка, %</label>
+<div class="calc-recovery-stop-body">
+<div class="calc-field-opt-row calc-recovery-modes-row">
+<label class="calc-sec-select-all" style="margin:0"><input id="param-pause-on-drawdown" type="checkbox" title="Портфель: при просадке отключить все выбранные логики (live-сессия не останавливается)"> Портфель</label>
+<label class="calc-sec-select-all" style="margin:0"><input id="param-pause-on-drawdown-per-logic" type="checkbox" title="По логикам: отключать каждую выбранную логику отдельно"> По логикам</label>
+<label class="calc-sec-select-all" style="margin:0"><input id="param-pause-on-drawdown-per-instrument" type="checkbox" title="По инструментам: отключать каждый выбранный тикер отдельно (остаётся в списке выбора)"> По инстр.</label>
+</div>
+<div class="calc-field calc-field--drawdown-pct"><label for="param-drawdown-pct"><span class="at-token-global">@@DrawdownPct</span>, %</label>
 <input id="param-drawdown-pct" type="number" value="1" min="0.01" max="99" step="0.01" title="При просадке портфеля от пика на этот % — закрыть все позиции и ждать восстановления модели"></div>
+</div></div>
 </div>
 <div class="calc-reverse-bar">
 <button type="button" id="param-reverse-toggle" class="calc-reverse-toggle-btn" aria-pressed="false">
@@ -178,7 +181,7 @@
 <option value="Contract currency">Contract currency — сумма в валюте контракта</option>
 </select></div>
 <div class="calc-field"><label for="vol-value" id="vol-value-label">Volume, % депозита</label>
-<input id="vol-value" type="number" value="10" min="0.0001" max="50" step="0.0001"></div>
+<input id="vol-value" type="number" value="10" min="10" max="50" step="0.0001"></div>
 <div class="calc-field" id="vol-deposit-wrap"><label for="vol-deposit">Депозит (Prime), ₽</label>
 <input id="vol-deposit" type="number" value="1000000" min="1" step="1000"></div>
 <div class="calc-field"><label for="commission-pct">Commission, %</label>
@@ -186,6 +189,26 @@
 </div>
 <p class="note">Deposit percent: лот = (депозит × Volume / 100) / цена. Contracts: фиксированный лот. Contract currency: Volume / цена. <strong>Максимальное количество позиций</strong> (<code>@@MaxPos</code>) — в блоке «Параметры управления» выше.</p>
 <p class="note">Комиссия: <strong>Commission, %</strong> от суммы каждой сделки (|цена × объём|); удерживается при покупке и продаже. FINRESP и % годовых в блоке выше уже <strong>с учётом комиссии</strong>.</p>
+
+<p class="extra-section">Автоплечо при портфельном Stopper (<span class="at-token-global">@@SL</span> / <span class="at-token-global">@@TP</span>)</p>
+<div class="calc-grid">
+<div class="calc-field calc-field--wide">
+<label class="indicator-toggle" for="stopper-auto-leverage" style="margin:0">
+<input type="checkbox" id="stopper-auto-leverage">
+<span>Автоматически настраивать плечо при SL/TP</span>
+</label>
+</div>
+<div class="calc-field"><label for="stopper-auto-leverage-mode">Режим</label>
+<select id="stopper-auto-leverage-mode" title="Как менять плечо при срабатывании портфельного stop-loss / take-profit">
+<option value="tp_up_sl_down" selected>TP ↑ · SL ↓</option>
+<option value="tp_down_sl_up">TP ↓ · SL ↑</option>
+</select></div>
+<div class="calc-field"><label for="stopper-leverage-max">Макс. плечо</label>
+<input id="stopper-leverage-max" type="number" value="8" min="0.1" max="100" step="0.1" title="Верхняя граница @@MaxPos × Volume% / 100"></div>
+<div class="calc-field"><label for="stopper-leverage-min">Мин. плечо</label>
+<input id="stopper-leverage-min" type="number" value="0.5" min="0.1" max="100" step="0.1" title="Нижняя граница плеча"></div>
+</div>
+<p class="note">По умолчанию выкл. При вкл.: после портфельного SL/TP плечо меняется на <strong>процент @@SL или @@TP</strong> (как в полях «Параметры управления»): в режиме <em>TP ↑ · SL ↓</em> — тейк увеличивает, стоп уменьшает; в <em>TP ↓ · SL ↑</em> — наоборот. Новое плечо ограничивается мин/макс; <code>@@MaxPos</code> и <code>Volume%</code> подбираются так, чтобы их произведение / 100 равнялось плечу; <strong>Volume% не ниже 10</strong> (как у поля «Volume, % депозита»). При депозите ≥ 5000 ₽ — по возможности ≥ 2 позиции. Работает в «Рассчитать» и в live при срабатывании @@SL/@@TP.</p>
 
 <p class="extra-section">Учёт открытых лотов (песочница)</p>
 <div class="calc-grid">
