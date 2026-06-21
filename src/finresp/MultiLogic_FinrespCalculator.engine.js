@@ -4273,6 +4273,73 @@
     return out;
   }
 
+  /** Equity на сетке rhythmTimes: cash/pos с основного ТФ, цена — close свечи ТФ стопов (MTM). */
+  function buildPerSecEquitySeriesMtm(rows, times, stopCandles) {
+    if (!times?.length) return [];
+    if (!rows?.length) return times.map(() => 0);
+    if (!stopCandles?.length) return buildPerSecEquitySeries(rows, times);
+    const out = new Array(times.length);
+    let rowIdx = -1;
+    let stopIdx = -1;
+    let lastCash = 0;
+    let lastPos = 0;
+    for (let t = 0; t < times.length; t++) {
+      const time = times[t];
+      while (rowIdx + 1 < rows.length && rows[rowIdx + 1].time <= time) {
+        rowIdx += 1;
+        lastCash = rows[rowIdx].cash ?? 0;
+        lastPos = rows[rowIdx].pos ?? 0;
+      }
+      while (stopIdx + 1 < stopCandles.length && stopCandles[stopIdx + 1].time <= time) {
+        stopIdx += 1;
+      }
+      if (rowIdx < 0) {
+        out[t] = 0;
+        continue;
+      }
+      const price = stopIdx >= 0
+        ? (stopCandles[stopIdx].close ?? 0)
+        : (rows[rowIdx].close ?? 0);
+      out[t] = lastCash + lastPos * (price || 0);
+    }
+    return out;
+  }
+
+  function perSecEquityAtRhythm(rows, times, stopCandles) {
+    return stopCandles?.length
+      ? buildPerSecEquitySeriesMtm(rows, times, stopCandles)
+      : buildPerSecEquitySeries(rows, times);
+  }
+
+  /** Сетка времён ТФ стопов в окне расчёта (longest stop pack). */
+  function buildRhythmTimesFromStopPacks(stopPacks, tStart, tEnd) {
+    const ref = longestPack(stopPacks);
+    if (!ref.length || tStart == null || tEnd == null) return [];
+    const range = indicesForTimeRange(ref, tStart, tEnd);
+    if (!range) return [];
+    const times = [];
+    for (let i = range.a; i <= range.b; i++) {
+      const t = ref[i]?.time;
+      if (t) times.push(t);
+    }
+    return times;
+  }
+
+  /** Ритм проверки стопов/пауз: отдельный ТФ или основной расчётный. */
+  function resolveStopRhythm(opts, plan, activeStopPacks) {
+    const calcTimes = plan.times || [];
+    const calcTf = String(opts?.calcTf || "60");
+    const slTpTf = String(opts?.slTpTf || calcTf);
+    if (!activeStopPacks?.length || slTpTf === calcTf) {
+      return { rhythmTimes: calcTimes, rhythmStopPacks: null, calcTimes };
+    }
+    const rhythmTimes = buildRhythmTimesFromStopPacks(activeStopPacks, plan.tStart, plan.tEnd);
+    if (!rhythmTimes.length) {
+      return { rhythmTimes: calcTimes, rhythmStopPacks: null, calcTimes };
+    }
+    return { rhythmTimes, rhythmStopPacks: activeStopPacks, calcTimes };
+  }
+
   /** Суммарная equity портфеля и ряды по инструментам — для быстрого сканирования stopper. */
   function buildPortfolioEquitySeries(perSec, times) {
     if (!perSec?.length || !times?.length) {
@@ -4287,11 +4354,39 @@
     return { total, perInstrument };
   }
 
+  /** Портфельная equity на сетке rhythmTimes (MTM по stopPacks, если заданы). */
+  function buildPortfolioEquitySeriesRhythm(perSec, times, rhythmStopPacks) {
+    if (!perSec?.length || !times?.length) {
+      return { total: [], perInstrument: [] };
+    }
+    const perInstrument = perSec.map((p, s) => perSecEquityAtRhythm(
+      p.rows,
+      times,
+      rhythmStopPacks?.[s]
+    ));
+    const total = times.map((_, t) => {
+      let sum = 0;
+      for (let s = 0; s < perInstrument.length; s++) sum += perInstrument[s][t] || 0;
+      return sum;
+    });
+    return { total, perInstrument };
+  }
+
+  function portfolioEquitySeriesForRhythm(perSec, times, rhythmStopPacks) {
+    return rhythmStopPacks?.length
+      ? buildPortfolioEquitySeriesRhythm(perSec, times, rhythmStopPacks)
+      : buildPortfolioEquitySeries(perSec, times);
+  }
+
   /** Частичное обновление equity после stopper: только затронутые инструменты с bar t. */
-  function patchPortfolioEquitySeries(portfolioEq, perSec, times, fromTimeIndex, affectedIndices) {
+  function patchPortfolioEquitySeries(portfolioEq, perSec, times, fromTimeIndex, affectedIndices, rhythmStopPacks) {
     if (!portfolioEq?.perInstrument?.length || !affectedIndices?.length || !times?.length) return;
     for (const s of affectedIndices) {
-      portfolioEq.perInstrument[s] = buildPerSecEquitySeries(perSec[s].rows, times);
+      portfolioEq.perInstrument[s] = perSecEquityAtRhythm(
+        perSec[s].rows,
+        times,
+        rhythmStopPacks?.[s]
+      );
     }
     const from = Math.max(0, fromTimeIndex);
     for (let ti = from; ti < times.length; ti++) {
@@ -4337,12 +4432,12 @@
     return affected;
   }
 
-  function refreshPortfolioEquityAfterStopper(portfolioEq, perSec, times, triggerTimeIndex, affected) {
+  function refreshPortfolioEquityAfterStopper(portfolioEq, perSec, times, triggerTimeIndex, affected, rhythmStopPacks) {
     if (!affected?.length) return portfolioEq;
     if (affected.length === perSec.length) {
-      return buildPortfolioEquitySeries(perSec, times);
+      return portfolioEquitySeriesForRhythm(perSec, times, rhythmStopPacks);
     }
-    patchPortfolioEquitySeries(portfolioEq, perSec, times, triggerTimeIndex, affected);
+    patchPortfolioEquitySeries(portfolioEq, perSec, times, triggerTimeIndex, affected, rhythmStopPacks);
     return portfolioEq;
   }
 
@@ -4739,6 +4834,25 @@
     return map;
   }
 
+  function buildIsoEqBySecRhythm(shadowPerSec, times, rhythmStopPacks) {
+    const map = {};
+    for (let s = 0; s < (shadowPerSec || []).length; s++) {
+      const p = shadowPerSec[s];
+      const sec = p.sec;
+      if (!sec) continue;
+      map[sec] = perSecEquityAtRhythm(p.rows, times, rhythmStopPacks?.[s]);
+    }
+    return map;
+  }
+
+  function resolveIsoEqBySec(recoveryCtx, shadowPerSec, times) {
+    if (recoveryCtx?.isoEqBySec) return recoveryCtx.isoEqBySec;
+    if (recoveryCtx?.rhythmStopPacks?.length) {
+      return buildIsoEqBySecRhythm(shadowPerSec, times, recoveryCtx.rhythmStopPacks);
+    }
+    return buildIsoEqBySec(shadowPerSec, times);
+  }
+
   function modelEquityFromIsoEqBySec(isoEqBySec, keys) {
     const out = {};
     for (const key of keys || []) {
@@ -4847,7 +4961,7 @@
     const shadowPerSec = perSec;
     const executedPerSec = clonePerSecRows(perSec);
     const shadowRowIdx = buildPerSecRowIdxAtTimes(shadowPerSec, times);
-    const isoEqBySec = recoveryCtx?.isoEqBySec || buildIsoEqBySec(shadowPerSec, times);
+    const isoEqBySec = resolveIsoEqBySec(recoveryCtx, shadowPerSec, times);
     const pauseEvents = runPauseOnDrawdownPerInstrumentCore(
       executedPerSec,
       shadowPerSec,
@@ -4886,7 +5000,7 @@
     const shadowPerSec = perSec;
     const executedPerSec = clonePerSecRows(perSec);
     const shadowRowIdx = buildPerSecRowIdxAtTimes(shadowPerSec, times);
-    const isoEqBySec = recoveryCtx?.isoEqBySec || buildIsoEqBySec(shadowPerSec, times);
+    const isoEqBySec = resolveIsoEqBySec(recoveryCtx, shadowPerSec, times);
 
     const secToIndex = new Map();
     for (let s = 0; s < shadowPerSec.length; s++) {
@@ -4986,7 +5100,7 @@
       const key = spec?.logicId;
       if (!key || spec.disabled) continue;
       const { perSec } = runMulti(packs, spec, startIdx, endIdx, params, volConfig, null, baseOpts);
-      map[key] = buildPortfolioEquitySeries(perSec, times).total;
+      map[key] = portfolioEquitySeriesForRhythm(perSec, times, options?.stopPacks).total;
     }
     return map;
   }
@@ -5034,7 +5148,7 @@
       const { perSec } = yieldUi
         ? await runMultiAsync(packs, spec, startIdx, endIdx, params, volConfig, null, { ...baseOpts, yieldUi: true })
         : runMulti(packs, spec, startIdx, endIdx, params, volConfig, null, baseOpts);
-      map[key] = buildPortfolioEquitySeries(perSec, times).total;
+      map[key] = portfolioEquitySeriesForRhythm(perSec, times, options?.stopPacks).total;
       if (typeof opts.onIsoProgress === "function") opts.onIsoProgress(i + 1, total, key);
       if (yieldUi) await tick();
     }
@@ -5112,6 +5226,38 @@
     return events;
   }
 
+  function isoEqSeriesFitsTimes(isoEqByLogic, keys, times) {
+    if (!isoEqByLogic || !times?.length || !keys?.length) return false;
+    for (const key of keys) {
+      const series = isoEqByLogic[key];
+      if (!series || series.length !== times.length) return false;
+    }
+    return true;
+  }
+
+  function resolveIsoEqByLogicSync(recoveryCtx, logicKeys, times, volConfig) {
+    if (isoEqSeriesFitsTimes(recoveryCtx?.isoEqByLogic, logicKeys, times)) {
+      return recoveryCtx.isoEqByLogic;
+    }
+    if (recoveryCtx?.packs && recoveryCtx.isoLogicSpecs) {
+      const runOpts = {
+        ...(recoveryCtx.runOpts || {}),
+        ...(recoveryCtx.rhythmStopPacks?.length ? { stopPacks: recoveryCtx.rhythmStopPacks } : {})
+      };
+      return buildIsolatedLogicEquityMap(
+        recoveryCtx.packs,
+        recoveryCtx.isoLogicSpecs,
+        recoveryCtx.aRef ?? 0,
+        recoveryCtx.bRef ?? 0,
+        recoveryCtx.params,
+        volConfig,
+        times,
+        runOpts
+      );
+    }
+    return {};
+  }
+
   /** @@PauseOnDrawdownPerLogic: пауза по isolated equity каждой выбранной логики. */
   function applyPauseOnDrawdownPerLogic(perSec, times, volConfig, cfg, recoveryCtx) {
     const events = [];
@@ -5125,19 +5271,7 @@
     const shadowPerSec = perSec;
     const executedPerSec = clonePerSecRows(perSec);
     const shadowRowIdx = buildPerSecRowIdxAtTimes(shadowPerSec, times);
-    const isoEqByLogic = recoveryCtx?.isoEqByLogic
-      || (recoveryCtx?.packs && recoveryCtx.isoLogicSpecs
-        ? buildIsolatedLogicEquityMap(
-          recoveryCtx.packs,
-          recoveryCtx.isoLogicSpecs,
-          recoveryCtx.aRef ?? 0,
-          recoveryCtx.bRef ?? 0,
-          recoveryCtx.params,
-          volConfig,
-          times,
-          recoveryCtx.runOpts
-        )
-        : {});
+    const isoEqByLogic = resolveIsoEqByLogicSync(recoveryCtx, logicKeys, times, volConfig);
 
     const pauseEvents = runPauseOnDrawdownPerLogicCore(
       executedPerSec,
@@ -5171,9 +5305,10 @@
     const executedPerSec = clonePerSecRows(perSec);
     const shadowRowIdx = buildPerSecRowIdxAtTimes(shadowPerSec, times);
     let isoEqByLogic = recoveryCtx?.isoEqByLogic;
-    if (!isoEqByLogic && recoveryCtx?.packs && recoveryCtx.isoLogicSpecs) {
+    if (!isoEqSeriesFitsTimes(isoEqByLogic, logicKeys, times) && recoveryCtx?.packs && recoveryCtx.isoLogicSpecs) {
       const isoOpts = {
         ...recoveryCtx.runOpts,
+        ...(recoveryCtx.rhythmStopPacks?.length ? { stopPacks: recoveryCtx.rhythmStopPacks } : {}),
         yieldUi,
         shouldCancel: opts.shouldCancel,
         onIsoProgress: (done, total, key) => {
@@ -5260,24 +5395,30 @@
     return { perSec: executedPerSec, recoveryStop: { events, perLogic: true } };
   }
 
-  function buildRecoveryStopCtx(opts, packs, activePacks, activeSignalPacks, aRef, bRef, params) {
-    if (!opts?.recoveryStopConfig?.perLogic) return null;
-    return {
+  function buildRecoveryStopCtx(opts, packs, activePacks, activeSignalPacks, aRef, bRef, params, rhythm) {
+    const base = {
       packs: activePacks?.length ? activePacks : packs,
       aRef,
       bRef,
       params,
-      isoLogicSpecs: opts.isoLogicSpecs,
-      isoEqByLogic: opts.isoEqByLogic || null,
+      rhythmStopPacks: rhythm?.rhythmStopPacks || null,
+      calcTimes: rhythm?.calcTimes || null,
       runOpts: {
         signalPacks: activeSignalPacks?.length ? activeSignalPacks : opts.signalPacks,
         ctgSpotPacks: opts.ctgSpotPacks,
         tradingPeriods: opts.tradingPeriods,
         calcTf: opts.calcTf,
+        slTpTf: opts.slTpTf,
         reverseSignals: opts.reverseSignals,
         reverse: opts.reverse,
         shouldCancel: opts.shouldCancel
       }
+    };
+    if (!opts?.recoveryStopConfig?.perLogic) return base;
+    return {
+      ...base,
+      isoLogicSpecs: opts.isoLogicSpecs,
+      isoEqByLogic: opts.isoEqByLogic || null
     };
   }
 
@@ -5339,7 +5480,11 @@
     const shadowPerSec = perSec;
     const executedPerSec = clonePerSecRows(perSec);
     const shadowRowIdx = buildPerSecRowIdxAtTimes(shadowPerSec, times);
-    const shadowEq = buildPortfolioEquitySeries(shadowPerSec, times).total;
+    const shadowEq = portfolioEquitySeriesForRhythm(
+      shadowPerSec,
+      times,
+      recoveryCtx?.rhythmStopPacks
+    ).total;
     const pauseEvents = runPauseOnDrawdownCore(
       executedPerSec,
       shadowPerSec,
@@ -5374,7 +5519,11 @@
     const shadowPerSec = perSec;
     const executedPerSec = clonePerSecRows(perSec);
     const shadowRowIdx = buildPerSecRowIdxAtTimes(shadowPerSec, times);
-    const shadowEq = buildPortfolioEquitySeries(shadowPerSec, times).total;
+    const shadowEq = portfolioEquitySeriesForRhythm(
+      shadowPerSec,
+      times,
+      recoveryCtx?.rhythmStopPacks
+    ).total;
     let peak = Number.isFinite(shadowEq[0]) ? shadowEq[0] : null;
     let paused = false;
     let resumeAt = null;
@@ -5471,6 +5620,7 @@
     const stopper = { ...DEFAULT_STOPPER, ...cfg };
     const events = [];
     const onProgress = progressOpts?.onProgress;
+    const rhythmStopPacks = progressOpts?.rhythmStopPacks || null;
     const stopperTotal = Math.max(1, times?.length || 1);
     if ((!stopper.useSl && !stopper.useTp) || !perSec.length || !packs.length) {
       return { perSec, stopper: { events } };
@@ -5483,7 +5633,7 @@
     const equityHistory = [];
     let stopperStep = 0;
     // Предрасчёт equity по всем инструментам; после триггера пересобираем (rows меняются).
-    let portfolioEq = buildPortfolioEquitySeries(perSec, times);
+    let portfolioEq = portfolioEquitySeriesForRhythm(perSec, times, rhythmStopPacks);
 
     while (scanFrom < times.length) {
       let triggered = false;
@@ -5532,7 +5682,7 @@
           triggerLevel,
           ...(leverageAdjust ? { leverageAdjust } : {})
         });
-        portfolioEq = refreshPortfolioEquityAfterStopper(portfolioEq, perSec, times, t, affected);
+        portfolioEq = refreshPortfolioEquityAfterStopper(portfolioEq, perSec, times, t, affected, rhythmStopPacks);
         referenceEquity = portfolioEq.total[t] ?? totalEq;
         scanFrom = t + 1;
         triggered = true;
@@ -5552,6 +5702,7 @@
     const tick = () => (yieldUi ? delay(0) : Promise.resolve());
     const stopper = { ...DEFAULT_STOPPER, ...cfg };
     const events = [];
+    const rhythmStopPacks = opts.rhythmStopPacks || null;
     const stopperTotal = Math.max(1, times?.length || 1);
     if ((!stopper.useSl && !stopper.useTp) || !perSec.length || !packs.length) {
       return { perSec, stopper: { events } };
@@ -5565,7 +5716,7 @@
 
     if (onProgress) onProgress(0, stopperTotal, times[0], { building: true });
     await tick();
-    let portfolioEq = buildPortfolioEquitySeries(perSec, times);
+    let portfolioEq = portfolioEquitySeriesForRhythm(perSec, times, rhythmStopPacks);
     await tick();
 
     while (scanFrom < times.length) {
@@ -5625,7 +5776,7 @@
           triggerLevel,
           ...(leverageAdjust ? { leverageAdjust } : {})
         });
-        portfolioEq = refreshPortfolioEquityAfterStopper(portfolioEq, perSec, times, t, affected);
+        portfolioEq = refreshPortfolioEquityAfterStopper(portfolioEq, perSec, times, t, affected, rhythmStopPacks);
         referenceEquity = portfolioEq.total[t] ?? totalEq;
         scanFrom = t + 1;
         triggered = true;
@@ -5786,6 +5937,8 @@
   }
 
   /** Разрешение id/метаданных: `resolveFuturesMoexSec`. */
+  const futuresMoexSecCache = new Map();
+
   async function resolveFuturesMoexSec(secOrPrefix, period) {
     const key = String(parseTickerPrefixes(secOrPrefix)[0] || "").trim();
     if (!key) return null;
@@ -5794,6 +5947,8 @@
     const from = normMoexDate(period?.from) || today;
     const till = normMoexDate(period?.till) || from;
     const keyUpper = key.toUpperCase();
+    const cacheKey = `${keyUpper}|${from}|${till}`;
+    if (futuresMoexSecCache.has(cacheKey)) return futuresMoexSecCache.get(cacheKey);
     let exact = null;
     let front = null;
     let start = 0;
@@ -5819,7 +5974,9 @@
       start += chunk.length;
       if (start > 20000) break;
     }
-    return exact?.SECID || front?.SECID || null;
+    const resolved = exact?.SECID || front?.SECID || null;
+    futuresMoexSecCache.set(cacheKey, resolved);
+    return resolved;
   }
 
   const futuresAssetCodeCache = new Map();
@@ -6074,6 +6231,28 @@
     return String(value).slice(0, 10);
   }
 
+  /** till в форме — календарный день; последний бар может быть на день раньше (сессия). */
+  function periodTillSatisfied(lastDay, tillDay) {
+    const last = cacheNormDay(lastDay);
+    const t = cacheNormDay(tillDay);
+    if (!last || !t) return false;
+    if (last >= t) return true;
+    const lastMs = Date.parse(`${last}T12:00:00`);
+    const tillMs = Date.parse(`${t}T12:00:00`);
+    if (!Number.isFinite(lastMs) || !Number.isFinite(tillMs)) return false;
+    return (tillMs - lastMs) / 86400000 <= 1;
+  }
+
+  /** Пакет свечей покрывает запрошенный период (для пропуска повторной загрузки). */
+  function packCoversPeriod(pack, from, till) {
+    if (!pack?.length) return false;
+    const first = cacheNormDay(pack[0].time);
+    const last = cacheNormDay(pack.at(-1).time);
+    const f = cacheNormDay(from);
+    if (!first || !last || !f) return false;
+    return first <= f && periodTillSatisfied(last, till);
+  }
+
   /** Слияние: `mergeCandleSeries`. */
   function mergeCandleSeries(existing, incoming) {
     const map = new Map();
@@ -6170,7 +6349,7 @@
     function entryCovers(entry, from, till) {
       const cov = entryCoverage(entry);
       if (!cov) return false;
-      return cov.from <= cacheNormDay(from) && cov.till >= cacheNormDay(till);
+      return cov.from <= cacheNormDay(from) && periodTillSatisfied(cov.till, till);
     }
 
     /** Подпрограмма `filterCandlesByRange`. */
@@ -6354,25 +6533,33 @@
   async function loadInstrumentSec(sec, from, till, interval, market, cache, options) {
     const opts = options || {};
     const requestedSec = sec;
+    const { cacheInterval } = resolveIntervalLoad(interval);
+    const tryCache = async (altSec) => {
+      if (!cache || opts.forceMoex) return null;
+      const cached = await cache.get(requestedSec, market, cacheInterval, from, till, altSec);
+      return cached?.length >= 3 ? cached : null;
+    };
     try {
+      const cachedEarly = await tryCache(null);
+      if (cachedEarly) {
+        return { ok: true, pack: cachedEarly, requestedSec, fromCache: true };
+      }
       let moexSec = sec;
       if (market === "futures") {
         moexSec = await resolveFuturesContract(sec, { from, till });
         if (!moexSec) {
           return { ok: false, error: "нет активного контракта MOEX для префикса", requestedSec };
         }
-      }
-      if (cache && !opts.forceMoex) {
-        const cached = await cache.get(requestedSec, market, interval, from, till, moexSec);
-        if (cached?.length >= 3) {
-          return { ok: true, pack: cached, requestedSec, fromCache: true };
+        const cachedResolved = await tryCache(moexSec);
+        if (cachedResolved) {
+          return { ok: true, pack: cachedResolved, requestedSec, fromCache: true };
         }
       }
       const candles = await loadMoexCandlesResolved(moexSec, from, till, interval, market);
       if (!candles.length) {
         return { ok: false, error: "нет свечей MOEX за выбранный период", requestedSec };
       }
-      if (cache) await cache.put(requestedSec, market, interval, moexSec, candles);
+      if (cache) await cache.put(requestedSec, market, cacheInterval, moexSec, candles);
       return { ok: true, pack: candles, requestedSec, fromCache: false };
     } catch (err) {
       return { ok: false, error: err?.message || String(err), requestedSec };
@@ -6662,7 +6849,6 @@
     }
     const { aRef, bRef, tStart, tEnd, times, workUnits, totalBars } = plan;
     const cfg = stopperConfig && (stopperConfig.useSl || stopperConfig.useTp) ? stopperConfig : null;
-    const stopperBars = cfg ? Math.max(1, times?.length || 1) : 0;
     const finrespEnd = cfg ? CALC_PROGRESS.FINRESP_MAX : CALC_PROGRESS.RUN_MAX;
     let doneBars = 0;
     const perSec = [];
@@ -6795,10 +6981,14 @@
       }
     }
 
+    const rhythm = resolveStopRhythm(opts, plan, stopPacks ? activeStopPacks : null);
+    const rhythmTimes = rhythm.rhythmTimes;
+    const stopperBars = cfg ? Math.max(1, rhythmTimes?.length || 1) : 0;
+
     let recoveryStop = { events: [] };
-    if (!shouldAbortRun(opts) && opts.recoveryStopConfig?.enabled && perSec.length && times?.length) {
-      const recoveryCtx = buildRecoveryStopCtx(opts, packs, activePacks, activeSignalPacks, aRef, bRef, params);
-      const rd = applyPauseOnDrawdown(perSec, times, volConfig, opts.recoveryStopConfig, recoveryCtx);
+    if (!shouldAbortRun(opts) && opts.recoveryStopConfig?.enabled && perSec.length && rhythmTimes?.length) {
+      const recoveryCtx = buildRecoveryStopCtx(opts, packs, activePacks, activeSignalPacks, aRef, bRef, params, rhythm);
+      const rd = applyPauseOnDrawdown(perSec, rhythmTimes, volConfig, opts.recoveryStopConfig, recoveryCtx);
       for (let i = 0; i < rd.perSec.length; i++) perSec[i] = rd.perSec[i];
       recoveryStop = rd.recoveryStop;
     }
@@ -6809,7 +6999,7 @@
         perSec,
         activePacks,
         spec,
-        times,
+        rhythmTimes,
         tEnd,
         params,
         volConfig,
@@ -6817,6 +7007,7 @@
         signalPacks ? activeSignalPacks : null,
         stopPacks ? activeStopPacks : null,
         {
+          rhythmStopPacks: rhythm.rhythmStopPacks,
           shouldCancel: opts.shouldCancel,
           onProgress: (doneInStopper, stopperTotal, candleTime, extra) => {
             const text = extra?.resim
@@ -6837,8 +7028,8 @@
         opts,
         stopperBars,
         stopperBars,
-        stopperProgressText(stopperBars, stopperBars, times.at(-1)),
-        times.at(-1)
+        stopperProgressText(stopperBars, stopperBars, rhythmTimes.at(-1)),
+        rhythmTimes.at(-1)
       );
     }
     if (!shouldAbortRun(opts)) {
@@ -6880,7 +7071,6 @@
     }
     const { aRef, bRef, tStart, tEnd, times, workUnits, totalBars } = plan;
     const cfg = stopperConfig && (stopperConfig.useSl || stopperConfig.useTp) ? stopperConfig : null;
-    const stopperBars = cfg ? Math.max(1, times?.length || 1) : 0;
     const finrespEnd = cfg ? CALC_PROGRESS.FINRESP_MAX : CALC_PROGRESS.RUN_MAX;
     let doneBars = 0;
     const perSec = [];
@@ -7011,10 +7201,14 @@
       }
     }
 
+    const rhythm = resolveStopRhythm(opts, plan, stopPacks ? activeStopPacks : null);
+    const rhythmTimes = rhythm.rhythmTimes;
+    const stopperBars = cfg ? Math.max(1, rhythmTimes?.length || 1) : 0;
+
     let recoveryStop = { events: [] };
-    if (!shouldAbortRun(opts) && opts.recoveryStopConfig?.enabled && perSec.length && times?.length) {
-      const recoveryCtx = buildRecoveryStopCtx(opts, packs, activePacks, activeSignalPacks, aRef, bRef, params);
-      const rd = await applyPauseOnDrawdownAsync(perSec, times, volConfig, opts.recoveryStopConfig, {
+    if (!shouldAbortRun(opts) && opts.recoveryStopConfig?.enabled && perSec.length && rhythmTimes?.length) {
+      const recoveryCtx = buildRecoveryStopCtx(opts, packs, activePacks, activeSignalPacks, aRef, bRef, params, rhythm);
+      const rd = await applyPauseOnDrawdownAsync(perSec, rhythmTimes, volConfig, opts.recoveryStopConfig, {
         yieldUi: true,
         shouldCancel: opts.shouldCancel,
         onProgress: (done, total, detail) => {
@@ -7050,7 +7244,7 @@
         perSec,
         activePacks,
         spec,
-        times,
+        rhythmTimes,
         tEnd,
         params,
         volConfig,
@@ -7058,6 +7252,7 @@
         signalPacks ? activeSignalPacks : null,
         stopPacks ? activeStopPacks : null,
         {
+          rhythmStopPacks: rhythm.rhythmStopPacks,
           yieldUi: true,
           shouldCancel: opts.shouldCancel,
           onProgress: (doneInStopper, stopperTotal, candleTime, extra) => {
@@ -7076,8 +7271,8 @@
       await emitRunProgressAsync(
         opts,
         lerpCalcProgress(CALC_PROGRESS.FINRESP_MAX, CALC_PROGRESS.RUN_MAX, 1),
-        stopperProgressText(stopperBars, stopperBars, times.at(-1)),
-        { phase: "stopper", done: stopperBars, total: stopperBars, candleTime: times.at(-1) }
+        stopperProgressText(stopperBars, stopperBars, rhythmTimes.at(-1)),
+        { phase: "stopper", done: stopperBars, total: stopperBars, candleTime: rhythmTimes.at(-1) }
       );
     }
     if (!shouldAbortRun(opts)) {
@@ -7153,6 +7348,12 @@
     applyPauseOnDrawdownPerInstrument,
     applyPauseOnDrawdownPerInstrumentAsync,
     buildIsoEqBySec,
+    buildIsoEqBySecRhythm,
+    buildRhythmTimesFromStopPacks,
+    resolveStopRhythm,
+    buildPerSecEquitySeriesMtm,
+    buildPortfolioEquitySeriesRhythm,
+    portfolioEquitySeriesForRhythm,
     buildIsolatedLogicEquityMap,
     buildIsolatedLogicEquityMapAsync,
     isoEqByLogicFromEquityRuns,
@@ -7172,6 +7373,7 @@
     loadCtgSpotPacks,
     refreshLiveMoexPacks,
     mergeCandleSeries,
+    packCoversPeriod,
     listShareTickers,
     listFuturesPrefixes,
     resolveFuturesContract,

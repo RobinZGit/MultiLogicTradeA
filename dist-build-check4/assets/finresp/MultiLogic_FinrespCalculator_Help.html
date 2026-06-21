@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MultiLogic — справка по калькулятору FINRESP</title>
+<style>
+:root{--bg:#f4f6fa;--paper:#fff;--text:#1a1d26;--muted:#5c6370;--border:#dde2eb;--accent:#2563eb;--accent-soft:#eef4ff;--warn:#991b1b;--warn-soft:#fef2f2;}
+*{box-sizing:border-box;}
+body{margin:0;font-family:Segoe UI,system-ui,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;font-size:15px;}
+.help-hdr{background:linear-gradient(180deg,#fff 0%,var(--accent-soft) 100%);border-bottom:1px solid var(--border);padding:1.5rem 1.75rem 1.25rem;}
+.help-hdr h1{margin:0 0 .4rem;font-size:1.65rem;}
+.help-sub{margin:.2rem 0;color:var(--muted);font-size:.92rem;}
+.help-layout{max-width:980px;margin:0 auto;padding:1.25rem 1rem 3rem;}
+.help-main{background:var(--paper);border:1px solid var(--border);border-radius:12px;padding:1.5rem 1.75rem 2rem;box-shadow:0 1px 4px rgba(0,0,0,.05);}
+h2{font-size:1.2rem;margin:1.6rem 0 .7rem;padding-bottom:.35rem;border-bottom:2px solid var(--accent);}
+h2:first-child{margin-top:0;}
+h3{font-size:1.02rem;margin:1.15rem 0 .45rem;color:#374151;}
+p,ul{margin:.55rem 0;}
+ul{padding-left:1.35rem;}
+li{margin:.28rem 0;}
+code{font-family:Consolas,monospace;background:#eef1f6;padding:.1em .35em;border-radius:4px;font-size:.88em;}
+.note{color:var(--muted);font-size:.93rem;}
+.warn-box{margin:1rem 0;padding:.85rem 1rem;border:2px solid var(--warn);border-radius:10px;background:var(--warn-soft);color:#7f1d1d;font-size:.92rem;}
+.btn-row{display:flex;flex-wrap:wrap;gap:.5rem;margin:1rem 0;}
+.calc-btn{display:inline-block;padding:.5rem .9rem;border-radius:8px;background:var(--accent);color:#fff;font-weight:600;text-decoration:none;}
+.calc-btn-secondary{background:#fff;color:var(--accent);border:1px solid var(--accent);}
+a{color:var(--accent);}
+.help-ftr{text-align:center;padding:1.5rem;color:var(--muted);font-size:.82rem;border-top:1px solid var(--border);}
+table{width:100%;border-collapse:collapse;margin:.65rem 0 1rem;font-size:.9rem;}
+th,td{border:1px solid var(--border);padding:.4rem .55rem;text-align:left;vertical-align:top;}
+th{background:#f8fafc;width:28%;}
+.toc{margin:.75rem 0 1.25rem;padding:.75rem 1rem;background:#f8fafc;border-radius:8px;border:1px solid var(--border);font-size:.92rem;}
+.toc a{text-decoration:none;}
+.toc a:hover{text-decoration:underline;}
+</style>
+</head>
+<body>
+<header class="help-hdr">
+<h1>Справка — калькулятор FINRESP</h1>
+<p class="help-sub">Репозиторий <code>MultiLogicTradeA</code> · все элементы формы калькулятора</p>
+<p class="help-sub"><a href="../../finresp">← Открыть калькулятор</a></p>
+</header>
+<div class="help-layout">
+<main class="help-main">
+
+<div class="btn-row">
+<a class="calc-btn" href="../../finresp">Калькулятор</a>
+<a class="calc-btn calc-btn-secondary" href="price-cache/">Папка базы цен</a>
+<a class="calc-btn calc-btn-secondary" href="../MultiLogic_LogicHelp.html">Справка по роботу</a>
+<a class="calc-btn calc-btn-secondary" href="../MultiLogic_Literature.html">Литература (breadth / basket / synthetic)</a>
+</div>
+
+<nav class="toc" aria-label="Содержание">
+<strong>Содержание:</strong>
+<a href="#progress">Индикатор расчёта</a> ·
+<a href="#start">Запуск</a> ·
+<a href="#header">Шапка</a> ·
+<a href="#instruments">Инструменты</a> ·
+<a href="#period">Период и расчёт</a> ·
+<a href="#atparams">Параметры @</a> ·
+<a href="#cache">База цен</a> ·
+<a href="#results">Результаты</a> ·
+<a href="#window">Окно</a> ·
+<a href="#extra">Доп. параметры</a> ·
+<a href="#charts">Графики</a> ·
+<a href="#tbank">T-Bank</a> ·
+<a href="#live">Реальная торговля</a> ·
+<a href="#tech">Тех. информация</a>
+</nav>
+
+<h2 id="progress">1. Индикатор расчёта</h2>
+<p>При нажатии <strong>Рассчитать</strong> вверху страницы появляется синяя полоса <strong>«Идёт расчёт»</strong>: после заголовка — <strong>полоса-ползунок</strong> (заполнение слева направо), справа — текст этапа; <strong>процент</strong> в конце строки этапа (<code>… — 45%</code>):</p>
+<ul>
+<li>подбор фьючерсов MOEX (если есть фьючерсы) — начало диапазона загрузки;</li>
+<li><strong>загрузка цен MOEX</strong> / кэш IndexedDB — <strong>0–33%</strong> по числу загруженных инструментов;</li>
+<li><strong>расчёт FINRESP</strong> — <strong>33–66%</strong> по свечам (<code>240/480 свечей</code> в тексте); без Stopper этот этап идёт до <strong>99%</strong>;</li>
+<li><strong>Stopper портфеля</strong> (если SL/TP включены) — <strong>66–99%</strong>, текст <code>Stopper портфеля · N/M свечей</code>;</li>
+<li>во время расчёта — не выше <strong>99%</strong>; <strong>100%</strong> и закрытие полосы только после полного завершения (графики и результат).</li>
+<li>справа в полосе — кнопка <strong>Остановить</strong>: прерывает загрузку MOEX и расчёт; показываются FINRESP и графики <strong>до последней досчитанной свечи</strong> (правая граница окна сдвигается). При остановке во время загрузки — по уже загруженным инструментам.</li>
+</ul>
+<p>На время расчёта тема страницы слегка меняется, все поля и кнопки формы <strong>заблокированы</strong> (кроме «Остановить»). После завершения блокировка снимается.</p>
+
+<h2 id="start">2. Запуск</h2>
+<p>Калькулятор — Angular-маршрут <code>/finresp</code> и скрипты в <code>assets/finresp/</code>:</p>
+<ul>
+<li><code>MultiLogic_FinrespCalculator.engine.js</code> — расчёт FINRESP и симуляция</li>
+<li><code>MultiLogic_FinrespCalculator.charts.js</code> — интерактивные графики по инструментам (свечи, pan/zoom)</li>
+<li><code>MultiLogic_FinrespCalculator.live.js</code> — T-Bank и блок «Реальная торговля»</li>
+</ul>
+<p>Для MOEX нужен <strong>http://</strong>, не <code>file://</code>.</p>
+<ul>
+<li><strong>Локально:</strong> <code>run-dev.bat</code> → <code>http://127.0.0.1:4200/finresp</code></li>
+<li><strong>GitHub Pages:</strong> <a href="https://robinzgit.github.io/MultiLogicTradeA/finresp">онлайн-версия</a></li>
+<li><strong>Перенос:</strong> скопируйте папку <code>FinrespCalculator</code> целиком</li>
+</ul>
+<p class="note">При открытии через <code>file://</code> появляется жёлтое предупреждение — свечи MOEX не загрузятся.</p>
+<p class="note">Настройки формы (режим кошелька, даты, объёмы, логики L1…L5, галочки, live-инструменты в «Заявка»/«Стакан», <code>@OBT</code>) сохраняются в <strong>localStorage</strong> браузера под ключом <code>multilogic.finresp.config.v1</code> и восстанавливаются при следующем открытии. Токен T-Bank — отдельно, зашифрован.</p>
+
+<h2 id="header">3. Шапка и режим кошелька</h2>
+<table>
+<tr><th>Элемент</th><th>Назначение</th></tr>
+<tr><td>Ссылки в шапке</td><td>Общая документация, эта справка, справка по роботу, многочлены</td></tr>
+<tr><td><strong>Справка</strong></td><td>Кнопка — открывает этот файл</td></tr>
+<tr><td><strong>Кошелёк</strong> (<code>account-mode</code>)</td><td>
+<strong>Фиктивный кошелёк</strong> — депозит вручную, только расчёт.<br>
+<strong>T-Bank торговый счёт</strong> — депозит с API (чтение счёта).<br>
+<strong>Реальная торговля T-Bank</strong> — заявки на бирже; появляется красный блок торговли.
+</td></tr>
+</table>
+
+<h2 id="instruments">4. Выбор инструментов</h2>
+<table>
+<tr><th>Элемент</th><th>Назначение</th></tr>
+<tr><td><strong>Акции (фьючерсы) — выбор</strong> (<code>calc-sec</code>)</td><td>Список с множественным выбором (Ctrl+клик). Акции и фьючерсы MOEX в одном списке</td></tr>
+<tr><td><strong>Выбрать все акции</strong></td><td>Отметить все акции в списке</td></tr>
+<tr><td><strong>Выбрать все фьючерсы</strong></td><td>Отметить все фьючерсы (все подходящие серии по префиксам и периоду)</td></tr>
+<tr><td>Подсказка под списком</td><td>Число выбранных инструментов и ограничение периода по ТФ</td></tr>
+</table>
+<p class="note">Список заполняется из полей «Тикеры акций» и «Префиксы фьючерсов» в доп. параметрах (кнопки «Подобрать»).</p>
+
+<h2 id="period">5. Период, логика и кнопки расчёта</h2>
+<table>
+<tr><th>Элемент</th><th>Назначение</th></tr>
+<tr><td><strong>Таймфрейм</strong> (<code>calc-tf</code>)</td><td>1, 5, 10, 15, 60 мин, 1 день. 5 и 15 мин — из минутных свечей (~7–14 дн. макс.). <strong>1 час и 1 день</strong> — любой период в календаре (<code>2020-01-01</code> — сегодня), без автосужения</td></tr>
+<tr><td><strong>Месяц целиком</strong> (<code>calc-month</code>)</td><td>Быстрый выбор календарного месяца — подставляет «Начало» и «Конец»</td></tr>
+<tr><td><strong>Начало</strong> / <strong>Конец</strong></td><td>Даты периода загрузки и расчёта. При смене ТФ или числа инструментов период может автоматически сужаться</td></tr>
+<tr><td><strong>Логика</strong> (<code>calc-logic</code>)</td><td>На всю ширину карточки, <strong>под</strong> кнопками «Рассчитать» / «Отобрать FINRESP ≥ 0». Список с <strong>множественным выбором</strong> (Ctrl+клик): L1…L5 и встроенные SMA. Высота списка растёт с числом выбранных. Строка «Выбрано N (порядок): …» показывает порядок приоритета. При нескольких логиках L1…L5 на каждой свече сначала проверяется верхняя в списке, затем следующая (как слоты MultiLogic); выход и SL/TP — у логики, открывшей позицию. «Выше/Ниже SMA» при комбинации с L1…L5 не входит в стек — оставьте одну SMA или одну L-логику</td></tr>
+<tr><td><strong>Рассчитать</strong></td><td>Загрузить/дочитать свечи MOEX (или из IndexedDB), пересчитать FINRESP. Изменение SL/TP, объёма, комиссии и ползунков — <em>без</em> повторной загрузки MOEX</td></tr>
+<tr><td><strong>Отобрать FINRESP ≥ 0</strong></td><td>После расчёта оставить в списке только инструменты с неотрицательным FINRESP в текущем окне</td></tr>
+</table>
+<p class="note" id="calc-date-hint-ref">Серая подсказка под датами — лимит дней для выбранного ТФ и числа бумаг.</p>
+
+<h2 id="atparams">5.1. Параметры @ (основной блок)</h2>
+<p>В синей карточке «Основной расчёт», сразу под выбором логики — поля подстановки в строку Op/Cl. Символ <code>@</code> — плейсхолдер; при «Рассчитать» и «Применить» числа подставляются в <code>SL[@SL]</code>, <code>LinReg(@LR;K=@K)</code>, <code>Strict(@Strict)</code> и т.д.</p>
+<table>
+<tr><th>Поле</th><th>Назначение</th></tr>
+<tr><td><strong>@SL</strong> — стоп, ×ATR</td><td>Кратность ATR для stop-loss позиции; 0 — выкл. Не абсолютная цена</td></tr>
+<tr><td><strong>@TP</strong> — тейк, ×ATR</td><td>Take-profit позиции; кратность ATR</td></tr>
+<tr><td><strong>Длина ATR, свечей</strong></td><td>Период ATR в <strong>барах (свечах)</strong> — общий для @SL/@TP, @SmaCorridor и @K</td></tr>
+<tr><td><strong>@SmaCorridor</strong> — SMA, ×ATR</td><td>Ширина коридора ±K×ATR вокруг SMA (логики SMA-эталон); не в свечах</td></tr>
+<tr><td><strong>@LR</strong> — LinReg, свечей</td><td>Длина линейной регрессии в <strong>барах (свечах)</strong>, не в ATR. Кнопка «Оптимизировать»</td></tr>
+<tr><td><strong>@K</strong> — LinReg, ×ATR</td><td>Ширина канала: по умолчанию <strong>2</strong>×ATR (не свечи, не абсолютная цена). UT/UCT: <code>LinReg(@LR;K=@K)</code>. Кнопка «Оптимизировать»</td></tr>
+<tr><td><strong>@Strict</strong> — строгость</td><td><code>Strict(@Strict)</code> в начале строки; 1…5. Кнопка «Оптимизировать»</td></tr>
+</table>
+<h3 id="atparams-global">5.2. Параметры @@ (управление портфелем)</h3>
+<p>Блок <strong>«Параметры управления»</strong> — действуют на все логики независимо от строки Op/Cl.</p>
+<table>
+<tr><th>Поле</th><th>Назначение</th></tr>
+<tr><td><strong>Реверс сторон</strong> <span class="calc-reverse-bracket">(Long ↔ Short)</span> <code>@@ReverseSides</code></td><td><strong>Своп сторон стратегии</strong>: меняются местами все сигналы Op/Cl. То есть <code>Op(Long)↔Op(Short)</code> и <code>Cl(Long)↔Cl(Short)</code> (включая условия, SL/TP и «flip-выход» через <code>Op</code> противоположной стороны). Практически: любая «лонговая» логика превращается в её шорт-эквивалент и наоборот. В live при переключении — сначала закрытие всех позиций по рынку</td></tr>
+<tr><td><strong>Реверс сигналов</strong> <span class="calc-reverse-bracket">(инверсия условий)</span> <code>@@ReverseSignals</code></td><td>Инвертирует сами условия внутри Op/Cl, не меняя «сторону блока» Long/Short. Примеры: <code>Ab↔Bl</code>, <code>AbUp↔BlLo</code>, <code>AbLinK↔BlLinK</code>, <code>AbRegK↔BlRegK</code>, а также сравнения индикаторов. Для осцилляторов 0…100 (<code>Stoch K</code>, <code>RSI</code>) инверсия делает «низ↔верх»: <code>K&lt;=20 → K&gt;=80</code>, <code>K&gt;=80 → K&lt;=20</code> (правило \(v→100-v\) + инверсия знака). Это как раз позволяет получать тренд/контртренд‑вариант из одной строки</td></tr>
+<tr><td><strong>Максимальное количество позиций</strong> <code>@@MaxPos</code></td><td>Макс. число «слотов» позиций по портфелю (по умолчанию 10). <strong>Плечо</strong> = <code>@@MaxPos × Volume% / 100</code>. Лимит gross = <code>депозит × @@MaxPos × Volume%</code></td></tr>
+<tr><td><strong>@@SL / @@TP / @@ATR</strong></td><td>Портфельный Stopper по суммарной equity</td></tr>
+</table>
+<p class="note">Сводка <code>@@ReverseSides=… @@MaxPos=… плечо=…</code> под полями @@. Volume% (10% по умолчанию) — в «Доп. параметрах» §9.1.</p>
+<p class="note"><strong>Совместное включение (XOR)</strong>: инверсия уровней (ReverseSignals) применяется, когда включён <em>ровно один</em> из двух реверсов — Signals или Sides, но не оба. Своп сторон (ReverseSides) — когда включён Sides. Порядок: сначала инверсия уровней, затем своп сторон. Таблица для TotStoch-логик из FTS:</p>
+<ul>
+<li>без реверсов → <strong>FTS</strong> (лонг, контртренд);</li>
+<li>только ReverseSignals → <strong>FTT</strong> (лонг, тренд);</li>
+<li>только ReverseSides → <strong>FTS_S</strong> (шорт, контртренд);</li>
+<li>оба реверса → <strong>FTT_S</strong> (шорт, тренд) — «обратная» логика, эквивалент нативной FTT_S.</li>
+</ul>
+
+<h2 id="cache">6. База цен MOEX (доп. параметры)</h2>
+<table>
+<tr><th>Кнопка</th><th>Назначение</th></tr>
+<tr><td><strong>Сохранить в файл</strong></td><td>JSON-резервная копия IndexedDB (удобно положить в <code>price-cache/</code>)</td></tr>
+<tr><td><strong>Загрузить из файла</strong></td><td>Восстановить базу из JSON на другом ПК</td></tr>
+<tr><td><strong>Удалить базу цен</strong></td><td>Очистить IndexedDB в браузере</td></tr>
+</table>
+<p>При «Рассчитать»: сначала кэш, если хватает периода и ТФ; иначе — запрос MOEX ISS, дополнение кэша без затирания уже сохранённых дат. Блок находится в «Дополнительных параметрах», перед MOEX-тикерами.</p>
+
+<h2 id="results">7. Блок результатов</h2>
+<p>Крупный блок FINRESP, строка статуса, доп. метрики и ползунки окна — <strong>ниже</strong> сворачиваемого блока «Дополнительные параметры» (не внутри него).</p>
+<h3>Основные показатели (крупный блок)</h3>
+<table>
+<tr><th>Поле</th><th>Назначение</th></tr>
+<tr><td><strong>FINRESP Σ (с комиссией)</strong></td><td>Суммарный финрез по портфелю выбранных инструментов в окне ползунков</td></tr>
+<tr><td><strong>Комиссии уплачено</strong></td><td>Сумма удержанных комиссий по модели (0 или −X ₽)</td></tr>
+<tr><td><strong>% годовых, простой</strong></td><td>Годовая доходность: прибыль / депозит ÷ (дни/365)</td></tr>
+<tr><td><strong>% годовых, сложный</strong></td><td>Сложный процент за тот же период</td></tr>
+</table>
+<p class="note">Подсказка под % годовых — база депозита, календарные дни окна и формула.</p>
+
+<h3>Дополнительные метрики</h3>
+<table>
+<tr><th>Поле</th><th>Назначение</th></tr>
+<tr><td><strong>Свечей в окне</strong></td><td>Длина расчётного окна (макс. по инструментам)</td></tr>
+<tr><td><strong>Позиция z</strong></td><td>Суммарная открытая позиция по портфелю на конце окна</td></tr>
+<tr><td><strong>Кэш C</strong></td><td>Свободные деньги на конце окна</td></tr>
+<tr><td><strong>По инструментам</strong></td><td>FINRESP по каждому тикеру</td></tr>
+</table>
+<p class="note">При нескольких инструментах суммарная экспозиция ограничена портфельным лимитом (§9.1.1) — FINRESP Σ может быть ниже, чем сумма «независимых» расчётов по бумагам.</p>
+
+<p><strong>Строка статуса</strong> (серый текст) — загрузка MOEX, ошибки, число инструментов, срабатывания Stopper, режим «сдвиг индикаторов ±0,1%».</p>
+
+<h2 id="window">8. Ползунки окна</h2>
+<table>
+<tr><th>Элемент</th><th>Назначение</th></tr>
+<tr><td><strong>Левая граница</strong> (<code>calc-start</code>)</td><td>Начало окна расчёта FINRESP по времени свечей</td></tr>
+<tr><td><strong>Правая граница</strong> (<code>calc-end</code>)</td><td>Конец окна</td></tr>
+</table>
+<p>Под ползунками — даты/время выбранных границ. Пересчёт мгновенный, без повторной загрузки MOEX.</p>
+
+<h2 id="extra">9. Дополнительные параметры</h2>
+<p>Блок сворачивается/разворачивается по заголовку «Дополнительные параметры». Содержит объём, Stopper, индикаторы, каталог логик, кэш цен и MOEX-тикеры. Поля @SL, @TP, @LR, @K, @Strict и др. — в основном блоке выше.</p>
+
+<h3>9.1. Объём сделки</h3>
+<table>
+<tr><th>Поле</th><th>Назначение</th></tr>
+<tr><td><strong>Плечо</strong> (справа)</td><td><code>Max positions × Volume / 100</code> — безразмерное число (не рубли)</td></tr>
+<tr><td><strong>Volume type</strong></td><td>Deposit percent / Contracts / Contract currency — как во вкладке объёма робота</td></tr>
+<tr><td><strong>Volume</strong></td><td>% депозита, число лотов или сумма в валюте контракта (подпись поля меняется от типа). По умолчанию <strong>10%</strong></td></tr>
+<tr><td><strong>Депозит (Prime)</strong></td><td>База лота и % годовых. В режиме T-Bank — только чтение, с счёта</td></tr>
+<tr><td><strong>Commission, %</strong></td><td>Процент от оборота сделки (покупка и продажа). 0 или пусто — без комиссии</td></tr>
+</table>
+<p class="note">Плечо (справа) = <code>@@MaxPos × Volume / 100</code> — <strong>@@MaxPos</strong> в блоке «Параметры управления» §5.2. При Volume 10% и MaxPos 10 плечо = 1.0.</p>
+
+<h3>9.1.1. Портфельный лимит gross (несколько инструментов и live)</h3>
+<p>При расчёте по <strong>нескольким бумагам</strong> и в <strong>live / песочнице</strong> действует общий потолок суммарной экспозиции (|лонг| + |шорт| по всем тикерам в рублях):</p>
+<p><code>лимит ₽ = депозит × Max positions × Volume%</code></p>
+<ul>
+<li><strong>Volume%</strong> — размер типичной новой позиции на одну бумагу (лот одной сделки), поле в «Доп. параметрах».</li>
+<li><strong>@@MaxPos</strong> — сколько таких «слотов» можно набрать <em>суммарно по портфелю</em> (§5.2).</li>
+<li>Если открытие на следующем инструменте превысит лимит — объём обрезается или сделка не проходит (в песочнице — сообщение «Портфельный лимит…»).</li>
+<li>Тот же лимит используется в бэктесте по нескольким инструментам и при reconcile робота по FINRESP.</li>
+</ul>
+
+<h3>9.2. Устойчивость расчёта</h3>
+<table>
+<tr><th>Элемент</th><th>Назначение</th></tr>
+<tr><td><strong>Рандомный сдвиг цен (±0,1%)</strong></td><td>По умолчанию выкл. При вкл.: OHLC для <em>индикаторов и сигналов Op/Cl</em> случайно сдвигаются в пределах 0,1%. FINRESP, комиссии и цены сделок — всегда по реальным ценам MOEX. Работает во всех режимах кошелька</td></tr>
+</table>
+
+<h3>9.3. Стакан (@OBT, только live)</h3>
+<table>
+<tr><th>Элемент</th><th>Назначение</th></tr>
+<tr><td><strong>Подтверждать тренд / анти-тренд / отсутствие тренда по стакану</strong></td><td>По умолчанию <em>выкл</em>. Сохраняется в config (<code>live.obTrendConfirm</code>). Работает <strong>только вместе</strong> с маркером <code>@OBT</code> в активной строке логики (L1…L5). В FINRESP по истории не применяется — стакана нет</td></tr>
+<tr><td><code>@OBT</code> в логике</td><td>Маркер управления (как <code>@SL</code>): добавьте в конец строки, напр. <code>… Note(trend) @OBT</code>. Парсер робота MultiLogic принимает <code>@OBT</code>; в бэктесте OsEngine по стакану не фильтрует</td></tr>
+<tr><td>Режим <strong>тренд</strong></td><td>По умолчанию (L1, L3…). Покупка: сумма лотов bid &gt; ask (топ-5, порог imbalance ~12%). Продажа — наоборот</td></tr>
+<tr><td><code>@OBT(anti)</code> / <code>Entry=FlatOnly</code></td><td><strong>Анти-тренд:</strong> покупка при перевесе ask, продажа при перевесе bid</td></tr>
+<tr><td><code>@OBT(flat)</code> / L4 (боковик)</td><td><strong>Отсутствие тренда:</strong> |imbalance| &lt; порога (~12%)</td></tr>
+<tr><td>При автоторговле</td><td>Перед выставлением заявки роботом запрашивается <code>GetOrderBook</code> T-Bank; при несовпадении — заявка <em>пропускается</em>, в тех. информации <code>@OBT: …</code> / <code>live-obt-skip</code></td></tr>
+</table>
+<p class="note">Галочка без <code>@OBT</code> в строке — без эффекта. <code>@OBT</code> без галочки — тоже без эффекта.</p>
+
+<h3>9.4. Общепортфельный Stopper</h3>
+<table>
+<tr><th>Поле</th><th>Назначение</th></tr>
+<tr><td><strong>SL / TP кратность ATR</strong> + Оптимизировать</td><td>Стопы по суммарному equity портфеля</td></tr>
+<tr><td><strong>Длина ATR портфеля</strong> + Оптимизировать</td><td>N свечей для ATR<sub>порт</sub> = mean(|Δequity|)</td></tr>
+<tr><td><strong>Предыдущая сумма (база SL/TP)</strong></td><td>0 — авто: equity на первой свече окна</td></tr>
+</table>
+<p>При срабатывании — закрытие всех позиций по всем инструментам, обновление базы.</p>
+
+<h3>9.5. Используемые индикаторы</h3>
+<p>Чекбоксы SMA, ATR, Stoch, LinReg, Bollinger, VWAP, CCI, MACD, Momentum. Отключённые удаляются из Op/Cl перед расчётом. SL/TP позиции не зависят от этого списка.</p>
+<p><strong>Оптимизировать</strong> (индикаторы) — перебор непустых комбинаций, остаётся набор с лучшим FINRESP.</p>
+
+<h3>9.6. Каталог логик — все встроенные стратегии по умолчанию</h3>
+<p>В блоке «Логики» (каталог) перечислены готовые строки Op/Cl/Regime — те же, что в роботе MultiLogic. Параметры <code>@SL</code>, <code>@TP</code>, <code>@LR</code>, <code>@K</code>, <code>@Strict</code>, <code>@SmaCorridor</code>, <code>@CmaLen</code>, <code>@CmaPow</code> подставляются из основного блока при «Рассчитать» и «Применить». Маркер <code>@OBT</code> в строку добавляется <em>вручную</em> (фильтр по стакану — только live).</p>
+
+<h4>Общие принципы</h4>
+<ul>
+<li><strong>Regime(LinReg;…)</strong> — режим рынка по наклону линейной регрессии за <code>@LR</code> свечей. <code>Entry=MatchSide</code> — вход только по стороне тренда; <code>Entry=FlatOnly</code> — только в боковике (мертвая зона наклона <code>SlopeDead</code>). <code>OnFlip=Close</code> — при смене режима закрытие по условию Cl с суффиксом <code>OnFlip(Close)</code>.</li>
+<li><strong>Op(…)</strong> — открытие позиции; <strong>Cl(…)</strong> — закрытие. <code>Long</code> / <code>Short</code> — направление.</li>
+<li><strong>Ab</strong> / <strong>Bl</strong> у индикатора — цена <em>выше</em> / <em>ниже</em> линии (close относительно SMA, полосы Bollinger, канала LinReg и т.д.).</li>
+<li><strong>LinReg</strong> — канал: центр регрессии ± <code>Dev</code> (в L1…L5) или ± <code>K×ATR</code> (в UT/UCT). Сигналы <code>AbUp</code>/<code>BlLo</code> — пробой верхней/нижней границы; <code>AbLinK</code>/<code>BlLinK</code> — цена относительно канала K×ATR; <code>AbRegK</code>/<code>BlRegK</code> — с дрейфом якоря <code>Drift=RegDrift</code>.</li>
+<li><strong>SL[@SL]</strong> / <strong>TP[@TP]</strong> — стоп и тейк позиции (доля от цены входа или ×ATR — по значению полей).</li>
+<li><strong>Strict(@Strict)</strong> — строгость совпадения всех условий в скобках (0…1).</li>
+<li>Несколько логик в списке «Логика» — <strong>стек приоритета</strong>: на баре сначала проверяется верхняя, затем следующая; выход и SL/TP — у логики, открывшей позицию. SMA-логики с непрерывным объёмом в стек с L1…L5 не смешиваются — оставьте одну SMA или одну L-логику.</li>
+</ul>
+
+<h4>RND — случайные сделки (тест)</h4>
+<p><strong>Назначение:</strong> контрольный шум — проверка расчёта FINRESP и инфраструктуры без рыночной логики.</p>
+<p><strong>Принцип:</strong> на каждом баре независимо с вероятностью 12% сигнал <code>Rand(P=12%)</code> на long и отдельно на short. Фиксированные <code>SL[1%]</code> и <code>TP[5%]</code>. Regime не используется.</p>
+
+<h4>TBC — test counter-bokovik (лонг)</h4>
+<p><strong>Назначение:</strong> контртрендовый лонг в боковике — покупка на перепроданности у нижней границы диапазона.</p>
+<p><strong>Regime:</strong> LinReg с <code>SlopeDead=0.05%</code>, <code>Entry=FlatOnly</code> — только когда рынок «без тренда».</p>
+<p><strong>Вход long:</strong> close <strong>ниже</strong> SMA(100) <em>и</em> Stoch %K ≤ 10 <em>и</em> MACD линия ниже сигнальной.</p>
+<p><strong>Выход long:</strong> close <strong>выше</strong> SMA(100) <em>и</em> Stoch %K ≥ 90 <em>и</em> MACD выше сигнальной. SL/TP — из @SL/@TP.</p>
+
+<h4>UT — Universal Trend</h4>
+<p><strong>Назначение:</strong> торговля <em>по тренду</em> в обе стороны — long на росте, short на падении, с каналом LinReg ±K×ATR.</p>
+<p><strong>Regime:</strong> LinReg без мёртвой зоны; смена режима может закрывать через <code>OnFlip(Close)</code> на Cl.</p>
+<p><strong>Long:</strong> вход — цена выше SMA(100) и пробой верхней границы канала LinReg(@LR;K=@K) (<code>AbLinK</code>). Выход — цена ниже SMA и регрессионный канал с дрейфом якоря на Open (<code>BlRegK</code>) + OnFlip.</p>
+<p><strong>Short:</strong> зеркально — вход <code>BlLinK</code> под SMA, выход <code>AbRegK</code> над SMA. Ширина канала — поле <strong>@K</strong> (×ATR), длина — <strong>@LR</strong>.</p>
+
+<h4>UCT — Universal Counter Trend</h4>
+<p><strong>Назначение:</strong> контртренд — long от нижней границы канала при общем контексте, short от верхней; те же LinReg K×ATR и RegDrift, но сигналы <em>инвертированы</em> относительно UT.</p>
+<p><strong>Long:</strong> вход под SMA + <code>BlLinK</code>; выход над SMA + <code>AbRegK</code> OnFlip.</p>
+<p><strong>Short:</strong> вход над SMA + <code>AbLinK</code>; выход под SMA + <code>BlRegK</code> OnFlip.</p>
+
+<h4>L5 — LmaxTrend (лонг + short, максимальный набор фильтров)</h4>
+<p><strong>Назначение:</strong> трендовая стратегия с полным стеком индикаторов — для сравнения «тяжёлого» варианта L1/L3.</p>
+<p><strong>Regime:</strong> трендовый (<code>Entry=MatchSide</code>).</p>
+<p><strong>Long:</strong> SMA(100) сверху + LinReg AbUp + Bollinger AbUp + VWAP Ab + ATR «рост волатильности» (GrOk) + Stoch ≥ 80 + CCI ≥ 100 + Momentum &gt; 0 + MACD &gt; сигнальная. Выход — зеркальные «медвежьи» условия (BlLo, Bl по полосам, Stoch ≤ 20, CCI ≤ −100, MOM &lt; 0, MACD &lt; sig) + OnFlip.</p>
+<p><strong>Short:</strong> симметрично для нисходящего тренда (BlLo, нижние полосы, Stoch ≤ 20, CCI ≤ −100 и т.д.).</p>
+
+<h4>L1 — лонг, тренд</h4>
+<p><strong>Regime:</strong> тренд, вход по стороне тренда.</p>
+<p><strong>Вход long:</strong> цена выше SMA(100), LinReg AbUp (±Dev=2), ATR GrOk (рост ≥ 3% за 5 баров), CCI ≥ 100, MACD &gt; сигнальная.</p>
+<p><strong>Выход:</strong> цена ниже SMA, LinReg BlLo, CCI ≤ −100, MACD &lt; сигнальная, OnFlip(Close).</p>
+
+<h4>L2 — лонг, боковик</h4>
+<p><strong>Regime:</strong> боковик (<code>SlopeDead</code>, FlatOnly).</p>
+<p><strong>Вход long:</strong> цена выше SMA, Stoch %K ≤ 10 (откат вверх от перепроданности в диапазоне), ATR GrOk, MACD &gt; sig.</p>
+<p><strong>Выход:</strong> цена ниже SMA, Stoch ≥ 90, MACD &lt; sig, OnFlip.</p>
+
+<h4>L3 — short, тренд</h4>
+<p>Зеркало L1 для short: вход под SMA + LinReg BlLo + ATR + CCI ≤ −100 + MACD &lt; sig; выход над SMA + AbUp + CCI ≥ 100 + MACD &gt; sig, OnFlip.</p>
+
+<h4>L4 — short, боковик</h4>
+<p>Зеркало L2 для short: Regime боковик; вход short при цене ниже SMA и Stoch ≥ 90; выход при цене выше SMA и Stoch ≤ 10, OnFlip.</p>
+
+<h4>sma_below — «Ниже SMA», объём |Close−SMA|</h4>
+<p><strong>Назначение:</strong> эталонная SMA-стратегия без дискретных Op/Cl — <em>непрерывный</em> набор/сброс объёма.</p>
+<p><strong>Принцип:</strong> строка <code>SMA(100;Vol)(Bl)</code> — пока close <strong>ниже</strong> SMA(100), позиция long с объёмом, пропорциональным расстоянию |Close−SMA| (чем дальше ниже — тем больше лот в рамках настроек объёма). Выход при возврате цены к SMA или по SL/TP. Маркеры на графике — при переходе через ноль и по стопам.</p>
+
+<h4>sma_above — «Выше SMA», объём |Close−SMA|</h4>
+<p>То же, но условие <code>(Ab)</code> — удержание long, пока цена <strong>выше</strong> SMA; объём растёт с отдалением вверх от средней.</p>
+
+<h4>sma_corridor_trend — SMA-эталон, тренд, коридор ATR</h4>
+<p><strong>Принцип:</strong> <code>SMA(100;Spread=@SmaCorridor)(Trend)</code> — вокруг SMA строится коридор ±<strong>@SmaCorridor</strong>×ATR. В режиме <strong>Trend</strong> набор объёма при движении <em>по</em> направлению выхода за коридор (импульс в сторону тренда относительно SMA). Непрерывная позиция, SL/TP из полей.</p>
+
+<h4>sma_corridor_anti — SMA-эталон, анти-тренд, коридор ATR</h4>
+<p><code>(Anti)</code> — зеркальная логика: объём на откатах <em>против</em> импульса за границу коридора (контртренд относительно SMA+ATR-полосы).</p>
+
+<h4>FTS — Фьючерс: TotStoch + Stoch (лонг), контртренд 20↔80</h4>
+<p><strong>Идея:</strong> покупаем «внизу пилы» и продаём «вверху» на боковике фьючерсов, но с подтверждением от общей (тотальной) цены выбранных инструментов.</p>
+<p><strong>TotP:</strong> на каждом баре строится тотальная цена (TotOpen/TotHigh/TotLow/TotClose) как <em>среднее OHLC</em> по выбранным инструментам (как «Средняя цена выбранных инструментов (Close)» на equity-блоке, но для всех OHLC).</p>
+<p><strong>TotStoch:</strong> стохастик (14-3-3) считается по TotOHLC, т.е. %K от тотальной цены.</p>
+<p><strong>Вход long:</strong> <code>TotStoch.K ≤ 20</code> и одновременно <code>Stoch.K ≤ 20</code> инструмента.</p>
+<p><strong>Выход long:</strong> <code>TotStoch.K ≥ 80</code> и одновременно <code>Stoch.K ≥ 80</code> инструмента. SL/TP — по полям @SL/@TP.</p>
+
+<h4>FTT — Фьючерс: TotStoch + Stoch (лонг), тренд 80↔20</h4>
+<p><strong>Идея:</strong> трендовый вариант на той же тотальной базе: покупаем, когда рынок «разогнан вверх» одновременно по корзине и по инструменту, выходим при «развороте вниз».</p>
+<p><strong>Вход long:</strong> <code>TotStoch.K ≥ 80</code> и одновременно <code>Stoch.K ≥ 80</code> инструмента.</p>
+<p><strong>Выход long:</strong> <code>TotStoch.K ≤ 20</code> и одновременно <code>Stoch.K ≤ 20</code> инструмента. SL/TP — по полям @SL/@TP.</p>
+
+<h4>FTS_S — Фьючерс: TotStoch + Stoch (шорт), контртренд 80↔20</h4>
+<p>Зеркальная версия FTS для short: продаём «вверху пилы», выходим «внизу».</p>
+<p><strong>Вход short:</strong> <code>TotStoch.K ≥ 80</code> и одновременно <code>Stoch.K ≥ 80</code> инструмента.</p>
+<p><strong>Выход short:</strong> <code>TotStoch.K ≤ 20</code> и одновременно <code>Stoch.K ≤ 20</code> инструмента. SL/TP — по полям @SL/@TP.</p>
+
+<h4>FTT_S — Фьючерс: TotStoch + Stoch (шорт), тренд 20↔80</h4>
+<p>Зеркальная версия FTT для short: продаём «внизу» по стохастикам, закрываемся «вверху».</p>
+<p><strong>Вход short:</strong> <code>TotStoch.K ≤ 20</code> и одновременно <code>Stoch.K ≤ 20</code> инструмента.</p>
+<p><strong>Выход short:</strong> <code>TotStoch.K ≥ 80</code> и одновременно <code>Stoch.K ≥ 80</code> инструмента. SL/TP — по полям @SL/@TP.</p>
+
+<h4>CML — CM long (CMA + LinReg на входе)</h4>
+<p><strong>Назначение:</strong> кастомная средняя CMA с показателем степени <code>@CmaPow</code> и длиной <code>@CmaLen</code> — только <strong>лонг</strong>.</p>
+<p><strong>Вход long:</strong> цена выше CMA <em>и</em> LinReg AbUp (пробой верхней границы регрессии, Dev=2). Regime в строке <em>нет</em> — фильтр только по CMA+LinReg на Op.</p>
+<p><strong>Выход:</strong> цена ниже CMA, <code>OnFlip(Close)</code> — закрытие при пересечении CMA вниз.</p>
+
+<h4>CMS — CM short (CMA + LinReg на входе)</h4>
+<p>Зеркало CML для short: вход — цена ниже CMA + LinReg BlLo; выход — цена выше CMA, OnFlip(Close).</p>
+
+<p class="note">Для UT, UCT, L1…L5 канал LinReg на графике — фиолетовые линии, если LinReg включён в «Индикаторы» и входит в выбранную логику. Текстовые поля Op/Cl/Regime в каталоге редактируются как в роботе; <strong>Применить</strong> пересчитывает с подстановкой @-параметров.</p>
+
+<h3>9.7. MOEX — тикеры и префиксы</h3>
+<table>
+<tr><th>Поле / кнопка</th><th>Назначение</th></tr>
+<tr><td><strong>Тикеры акций</strong> + <strong>Подобрать</strong></td><td>Список через запятую; «Подобрать» отмечает совпадения в <code>calc-sec</code></td></tr>
+<tr><td><strong>Префиксы фьючерсов</strong> + <strong>Подобрать</strong></td><td>Префиксы корня (Si, BR…); подбор и расчёт учитывают экспирацию и период</td></tr>
+</table>
+
+<h3>Кнопки «Оптимизировать»</h3>
+<p>При нажатии перебираются допустимые значения параметра (или комбинации индикаторов); в поле подставляется лучшее по FINRESP в текущем окне. Повторное нажатие — остановка. Во время оптимизации поля блокируются.</p>
+
+<h2 id="charts">10. Графики</h2>
+<table>
+<tr><th>Блок</th><th>Назначение</th></tr>
+<tr><td><strong>Графики по инструментам</strong> (<code>calc-chart</code>)</td><td>Интерактивные mini-графики по каждой бумаге в окне расчёта: свечи OHLC, линии индикаторов, входы/выходы из позиций</td></tr>
+<tr><td><strong>Equity портфеля</strong> (<code>calc-chart-equity</code>)</td><td>Суммарная кривая equity и сравнение логик UT, UCT, L5, L1…L4 (без pan/zoom; линия close/equity)</td></tr>
+</table>
+
+<h3>10.1. Графики по инструментам (<code>calc-chart</code>)</h3>
+<p>После «Рассчитать» (или в live-сессии при обновлении графиков) для каждого инструмента строится отдельный блок с тикером и FINRESP по этой бумаге.</p>
+
+<h4>Цена — свечи</h4>
+<ul>
+<li>Отображаются <strong>японские свечи</strong> (Open / High / Low / Close) по барам выбранного окна.</li>
+<li>Зелёная свеча — close ≥ open; красная — close &lt; open.</li>
+<li>Данные OHLC берутся из загруженных свечей MOEX/T-Bank; при расчёте они также попадают в строки симуляции.</li>
+</ul>
+
+<h4>Масштаб и прокрутка</h4>
+<p>График <strong>интерактивный</strong> — на ПК и на планшете (мышь + touch):</p>
+<table>
+<tr><th>Действие</th><th>Эффект</th></tr>
+<tr><td><strong>Колёсико мыши</strong> над графиком</td><td>Масштаб по времени (zoom in/out) вокруг точки под курсором</td></tr>
+<tr><td><strong>Перетаскивание</strong> (зажатая ЛКМ)</td><td>Сдвиг видимого окна влево/вправо по барам</td></tr>
+<tr><td><strong>Свайп одним пальцем</strong> (планшет/сенсор)</td><td>То же, что drag — сдвиг по времени; страница при этом не прокручивается (<code>touch-action: none</code> на области графика)</td></tr>
+<tr><td><strong>Pinch</strong> (два пальца — разведение/сведение)</td><td>Масштаб вокруг середины между пальцами (zoom in при разведении, out при сведении)</td></tr>
+<tr><td><strong>Двойной клик</strong> или <strong>двойной tap</strong></td><td>Вернуть отображение всего периода окна</td></tr>
+</table>
+<p>В подсказке на графике показывается, сколько баров видно из общего числа (если включён zoom).</p>
+
+<h4>Линии индикаторов</h4>
+<p>На графике рисуются линии индикаторов, которые используются в <strong>выбранных логиках</strong> (галочки в блоке «Логика»), а не только у «активной» логики в стеке:</p>
+<ul>
+<li><strong>SMA</strong> — оранжевая пунктирная; для SMA-коридора — также верхняя/нижняя граница коридора</li>
+<li><strong>LinReg</strong> — фиолетовая (центр и полосы ±Dev или ±K×ATR для BlLinK / AbRegK и т.п.)</li>
+<li><strong>Bollinger</strong> — голубая (средняя и верх/низ)</li>
+<li><strong>VWAP</strong> — зелёная пунктирная</li>
+<li><strong>FINRESP инструмента</strong> — чёрная линия на <strong>правой шкале</strong> (₽), после первого △/▲. Значение: <code>eq − eq₀</code>, где <code>eq₀</code> — equity на баре первого входа/выхода (<code>eq = cash + qty×цена</code>). Пока по бумаге не было сделок — линия не рисуется. В правом верхнем углу графика — подпись <strong>FINRESP … ₽</strong> по <em>видимому</em> окну (с учётом zoom/pan), в рамке; обновляется при масштабировании</li>
+</ul>
+<p>Если индикатор отключён в «Индикаторы» или не входит ни в одну выбранную логику — линия не рисуется. Под каждым графиком — <strong>легенда</strong>: образец линии (цвет и пунктир) и название. На самой картинке графика (в т.ч. при «Копировать график») — <strong>тикер инструмента</strong> слева.</p>
+
+<h4>Копирование графика</h4>
+<p>Справа от тикера инструмента — кнопка <strong>«Копировать график»</strong>. Копирует <em>текущий видимый</em> фрагмент (с учётом масштаба и сдвига) в буфер обмена как PNG. Нужен HTTPS или localhost и разрешение браузера на доступ к буферу.</p>
+
+<h4>Маркеры входа и выхода</h4>
+<p>Маркеры ставятся при смене позиции в симуляции (в т.ч. flip long↔short и SL с повторным входом на одном баре). У △/▲ — <strong>подпись</strong>: первая строка — <strong>имя логики</strong> (L1, UT, SMA…), вторая — фрагмент из парсера (<code>Op(Long(...))</code>, <code>Cl(Short(...))</code>, <code>SL[…×ATR]</code> и т.п.). При наведении — полная подсказка.</p>
+<table>
+<tr><th>Маркер</th><th>Значение</th></tr>
+<tr><td>△ <strong>остриём вниз</strong> над high свечи</td><td><strong>Вход</strong> — зелёный <strong>long</strong>, красный <strong>short</strong>; подпись: логика + Op(…)</td></tr>
+<tr><td>▲ <strong>остриём вверх</strong> под low свечи</td><td><strong>Выход</strong> — Cl(…), Op flip, SL/TP или Sma → flat</td></tr>
+</table>
+<p>Размер △/▲ зависит от ширины свечи на экране. Подписи скрываются при очень плотном масштабе (узкие свечи); приблизьте участок колёсиком.</p>
+<p>У SMA-логик с непрерывным набором/сбросом объёма маркеры — при переходе позиции через ноль и при SL/TP.</p>
+
+<h4>FINRESP, стопы и портфель</h4>
+<ul>
+<li>Бумага <strong>без сделок</strong> (нет △/▲) — линия FINRESP и подпись в углу <strong>не показываются</strong>; портфельный stopper <strong>не пересчитывает</strong> её хвост.</li>
+<li><strong>SL / TP по позиции</strong> — тонкая вертикальная (SL красная, TP зелёная); только на барах с △/▲.</li>
+<li><strong>SL / TP портфельного стоппера</strong> — жирнее, другой пунктир; метка события по портфелю на всех графиках.</li>
+</ul>
+
+<h4>Live-сессия (режим «Реальная торговля»)</h4>
+<p>После выбора кошелька «Реальная торговля T-Bank» графики по инструментам показывают окно <strong>с момента начала live-сессии</strong> (не весь исторический расчёт). FINRESP на mini-графике и в блоке результатов — <strong>от нуля сессии</strong> (baseline на первом баре сессии). Цветной фон: зелёный — песочница, розовый — реальная торговля. Вертикальные пунктиры — фактические заявки (синяя покупка, оранжевая продажа).</p>
+
+<h4>Диагностика</h4>
+<p>Блок <strong>«Тех. информация»</strong> внизу формы: после открытия графиков — строки <code>chart.ТИКЕР: …</code> (число входов/выходов, posStop, линия FINRESP). Скопируйте и пришлите при сбое отображения.</p>
+
+<h4>Файлы и версия</h4>
+<p>Интерактивная отрисовка — <code>MultiLogic_FinrespCalculator.charts.js</code> (рядом с <code>engine.js</code> и <code>live.js</code>). Версия страницы — бейдж <code>pageVersion</code> на форме (например <code>2026-06-14-marker-labels-v1</code>). После обновления — <strong>Ctrl+Shift+R</strong> (скрипты с параметром <code>?v=</code> в URL).</p>
+
+<h3>10.2. Equity портфеля (<code>calc-chart-equity</code>)</h3>
+<p>Отдельный блок ниже ползунков: кривая equity выбранного стека, справочные кривые по логикам каталога, портфельный стоппер. Формат — линия по equity, без свечей и без pan/zoom.</p>
+<p>Над блоком — примечание: превращения FINRESP под каждым equity-графиком считаются за <strong>тот же таймфрейм</strong>, что поле «Таймфрейм» расчёта (1 мин … 1 день). Полоска баров Δ: зелёный — рост за свечу/период, розовый — просадка; на неактивных логиках — синие оттенки. Кнопка <strong>«Копировать график»</strong> — PNG кривой и полоски Δ.</p>
+
+<h2 id="tbank">11. Реальный счёт T-Bank</h2>
+<p>Сворачиваемый блок внизу формы (после графиков; не путать с выбором «Кошелёк» вверху). По умолчанию <strong>свёрнут</strong>; в заголовке — статус подключения и ссылка <strong>Развернуть</strong> / <strong>Свернуть</strong> (как у «Дополнительные параметры»). При первом выборе T-Bank/live без депозита блок может раскрыться автоматически.</p>
+<table>
+<tr><th>Элемент</th><th>Назначение</th></tr>
+<tr><td>Статус в заголовке</td><td>«не подключено» / «токен сохранён» / подключение к API</td></tr>
+<tr><td><strong>Токен T-Bank Invest</strong></td><td>Вставить токен API (чтение или торговля)</td></tr>
+<tr><td><strong>Пароль</strong></td><td>Для шифрования/расшифровки токена; <em>не сохраняется</em></td></tr>
+<tr><td><strong>Зашифровать и сохранить</strong></td><td>AES-GCM + PBKDF2, хранение только в localStorage браузера</td></tr>
+<tr><td>Строка статуса T-Bank</td><td>Подсказки по режиму paper / T-Bank / live</td></tr>
+</table>
+
+<h2 id="live">12. Блок «Реальная торговля»</h2>
+<div class="warn-box"><strong>Внимание:</strong> реальные деньги на бирже. Виден только при кошельке «Реальная торговля T-Bank». Галочка <strong>«Песочница (фейк)»</strong> отключает отправку заявок на биржу — см. отдельную строку в таблице.</div>
+<table>
+<tr><th>Элемент</th><th>Назначение</th></tr>
+<tr><td><strong>Песочница (фейк)</strong></td><td>Галочка под заголовком «Реальная торговля», по умолчанию выключена. Включена — спокойная <em>зелёная</em> тема блока; робот и ручные заявки <strong>не уходят на биржу</strong>, а симулируются: портфель меняется от суммы счёта на момент включения, комиссия — по полю <strong>Commission, %</strong> калькулятора. Продажа без лонга открывает <strong>шорт</strong>. Действует <strong>портфельный лимит gross</strong> (§9.1.1). В «Позициях» — открытые и закрытые фейк-позиции с пометкой <code>(фейк)</code>. Снятие галочки — все фейк-позиции и фейк-заявки удаляются, портфель снова показывает <strong>текущую реальную</strong> сумму T-Bank</td></tr>
+<tr><td><strong>Бейдж «Логики»</strong></td><td>Рядом со статусом — краткий список выбранных логик (<code>UT → L5 +2</code>). <strong>Клик</strong> раскрывает полный порядок приоритета (как в блоке «Логика» калькулятора). Обновляется при смене выбора</td></tr>
+<tr><td>Бейдж статуса</td><td>«остановлена» / «торговля активна» / «внимание» / «ошибка»; в песочнице — «· песочница (фейк)». При старте — <strong>подготовка: свечи T-Bank/MOEX/кэш и FINRESP N/M…</strong> (хвост FINRESP по всем выбранным тикерам, затем reconcile)</td></tr>
+<tr><td><strong>Бейдж версии</strong> (<code>pageVersion</code>)</td><td>Справа от статуса — версия страницы калькулятора (для проверки обновления после Ctrl+Shift+R). Актуальная: <code>2026-06-14-equity-delta-labels</code></td></tr>
+<tr><td><strong>Плечо</strong></td><td>То же значение, что в доп. параметрах</td></tr>
+<tr><td><strong>Свечи live</strong></td><td><strong>T-Bank (если токен)</strong> — по умолчанию: свежие бары с API брокера (задержка минуты, есть незакрытый бар). <strong>Только T-Bank</strong> — то же, без MOEX. <strong>Только MOEX ISS</strong> — бесплатно, но часто отстаёт на 10–20 мин. История для индикаторов: при первом старте без расчёта подгружается MOEX/кэш, хвост обновляется T-Bank</td></tr>
+<tr><td><strong>Начать / Остановить торговлю</strong></td><td>Достаточно выбранных инструментов, логики и объёмов; «Рассчитать» не обязателен. При активной торговле — опрос свечей (1м ≈ 30 с, 5м ≈ 45 с…), пересчёт индикаторов и синхронизация позиций с T-Bank</td></tr>
+<tr><td>Бейдж при торговле</td><td>«T-Bank/MOEX бары до … · опрос HH:MM» — начало последнего бара (МСК); «опрос» — время последнего запроса. При нескольких тикерах расчёт по общему концу (самый отстающий)</td></tr>
+<tr><td><strong>Подтверждать тренд по стакану</strong> (<code>@OBT</code>)</td><td>Галочка в toolbar live-блока — то же, что в §9.3; фильтр перед заявкой робота</td></tr>
+<tr><td><strong>Реверс сторон (Long ↔ Short)</strong> <code>@@ReverseSides</code></td><td>Дублирует реверс в «Параметры управления». Меняет местами сигналы Op/Cl long↔short (полный своп сторон). В live при смене — закрытие всех позиций, затем переключение</td></tr>
+<tr><td><strong>Фин. результат (₽)</strong></td><td>Текущий портфель минус старт сессии (как если закрыть всё по текущим ценам, с учётом комиссий). В песочнице — по фейк-портфелю</td></tr>
+<tr><td><strong>Заявка</strong> (свёрнутый блок)</td><td>Свой выпадающий список <strong>Инструмент</strong> (из бумаг калькулятора), покупка/продажа, рыночная/лимитная, лоты, «Выставить заявку». При лимите и смене инструмента цена подставляется автоматически: сначала <strong>close последней свечи</strong> выбранного тикера, иначе <strong>последняя цена T-Bank</strong> (не остаётся цена прошлого инструмента). Двойной клик в стакане — цена из стакана. Выбор сохраняется в config. <strong>Независим</strong> от инструмента в «Стакане»</td></tr>
+<tr><td><strong>Стакан</strong> (свёрнутый блок)</td><td>Отдельный список <strong>Инструмент</strong> в красной строке над таблицей (справа — глубина, время, спред; тикер в строке — не селектор). Данные T-Bank <code>GetOrderBook</code>, опрос ~4 с при развёрнутом блоке. <strong>Двойной клик по цене</strong> (подчёркнутая ячейка bid/ask) — развернуть «Заявку» и заполнить: инструмент стакана, лимит, цена клика, сторона, <strong>ровно 1 лот</strong>; заявка <em>не отправляется</em> автоматически</td></tr>
+<tr><td><strong>Позиции</strong> (свёрнутый блок)</td><td>Без песочницы — только <em>открытые</em> позиции счёта T-Bank (робот и ручные заявки): тикер, сторона (лонг/шорт), лоты, средняя и текущая цена, сумма, P/L, итого. После «Начать торговлю» — позиции, <strong>изменённые с начала сессии</strong> (неизменённые старые скрыты). Без сессии — все открытые на счёте. <strong>В песочнице</strong> — только фейк-позиции (открытые и недавно закрытые) с пометкой <code>(фейк)</code>. <strong>ПКМ или долгое нажатие</strong> по открытой строке — меню: <strong>Закрыть по рынку</strong> или <strong>Закрыть лимитом</strong> (в песочнице — фейк-закрытие). Опрос ~6 с (реальные позиции) / обновление при фейк-сделках</td></tr>
+<tr><td><strong>Продать всё</strong></td><td>Закрыть все позиции (даже при остановленной торговле)</td></tr>
+<tr><td><strong>Тип заявки</strong> (автоторговля)</td><td>Рыночная или лимитная для синхронизации позиций роботом</td></tr>
+<tr><td><strong>Портфель (все позиции)</strong></td><td>Стоимость счёта с позициями (GetPortfolio). В песочнице — подпись «Портфель (фейк, симуляция)»: стартовая сумма на момент включения галочки ± фейк-сделки и переоценка открытых фейк-позиций</td></tr>
+<tr><td><strong>Комиссии уплачено (реально)</strong></td><td>Комиссии брокера из операций T-Bank (не модель калькулятора). В песочнице — «Комиссии (фейк, модель %)» по полю Commission %</td></tr>
+<tr><td><strong>Заявки в реальном времени</strong></td><td>Таблица активных и недавних заявок. В песочнице — «Заявки (фейк, симуляция)» с пометкой <code>(фейк)</code></td></tr>
+</table>
+<p class="note">Не все тикеры MOEX доступны для торговли через API T-Bank (<code>api_trade_available_flag</code>). При «выбрать все акции» калькулятор предпочитает листинг MOEX (TQBR), проверяет статус до заявки и <strong>пропускает</strong> недоступные бумаги, продолжая торговлю по остальным. Токен должен иметь право на торговлю (не только чтение).</p>
+<p class="note">При live без предварительного «Рассчитать» или при расхождении окон свечей возможно предупреждение <strong>«FINRESP пустой»</strong> / <code>windowSkipped</code> — свечи и опрос продолжаются, торговля не останавливается; сузьте выбор или нажмите «Рассчитать».</p>
+
+<h2 id="tech">13. Тех. информация</h2>
+<p>Сворачиваемый блок внизу страницы. По умолчанию <strong>свёрнут</strong>; ссылка <strong>Развернуть</strong> / <strong>Свернуть</strong> в заголовке.</p>
+<table>
+<tr><th>Кнопка</th><th>Назначение</th></tr>
+<tr><td><strong>Копировать</strong></td><td>Весь диагностический блок в буфер обмена</td></tr>
+<tr><td><strong>Обновить</strong></td><td>Пересобрать текст вручную</td></tr>
+</table>
+<p>Содержит: версию страницы (<code>pageVersion</code>), режим кошелька, ТФ, период, выбор инструментов, состояние кэша, live-поля (<code>liveObTrendConfirm</code>, <code>logicUsesObTrend</code>, <code>liveOpenPositionsCount</code>, источник свечей), блок <code>liveApiForbidden</code> (тикер, sec, name, uid — запрещённые для API инструменты), <code>liveReconcile.*</code> (в т.ч. пропуски по <code>@OBT</code>), журнал <code>errors:</code> со строками <code>live-forbidden-instrument:</code>, <code>live-obt-skip</code>, <code>live-orderbook</code> (до 128 строк). Обновляется при старте, расчёте, live-торговле и ошибках T-Bank.</p>
+
+<p class="note">Версия справки: 2026-06-16 (TotStoch/FTS, nav-кнопки графиков) · синхронизирована с формой <code>2026-06-16-totstoch-v1</code> · при изменении контролов калькулятора обновляйте <code>MultiLogic_FinrespCalculator_Help.html</code></p>
+
+<div class="btn-row">
+<a class="calc-btn" href="../../finresp">Вернуться в калькулятор</a>
+</div>
+</main>
+</div>
+<footer class="help-ftr">MultiLogic FINRESP · <code>MultiLogicTradeA</code></footer>
+</body>
+</html>

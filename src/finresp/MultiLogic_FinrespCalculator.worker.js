@@ -56,7 +56,7 @@
   imp("MultiLogic_FinrespCalculator.engine.js");
 
   self.onmessage = async (e) => {
-    const { id, packs, spec, startIdx, endIdx, params, volConfig, stopperConfig, randomPriceShift, stopPacks, ctgSpotPacks, tradingPeriods, calcTf, recoveryStopConfig, isoLogicSpecs, isoEqByLogic } = e.data || {};
+    const { id, packs, spec, startIdx, endIdx, params, volConfig, stopperConfig, randomPriceShift, stopPacks, ctgSpotPacks, tradingPeriods, calcTf, slTpTf, recoveryStopConfig, isoLogicSpecs, isoEqByLogic } = e.data || {};
     try {
       const E = self.MultiLogicFinrespEngine;
       if (!E?.runMulti) throw new Error("engine not loaded in worker");
@@ -65,6 +65,8 @@
         ...(stopPacks ? { stopPacks } : {}),
         ...(ctgSpotPacks ? { ctgSpotPacks } : {}),
         ...(tradingPeriods ? { tradingPeriods, calcTf } : {}),
+        ...(calcTf ? { calcTf } : {}),
+        ...(slTpTf ? { slTpTf } : {}),
         ...(recoveryStopConfig ? { recoveryStopConfig } : {}),
         ...(isoLogicSpecs ? { isoLogicSpecs } : {}),
         ...(isoEqByLogic ? { isoEqByLogic } : {}),

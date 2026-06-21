@@ -2808,6 +2808,11 @@
     if (stopEl && stopEl.value !== tf) stopEl.value = tf;
   }
 
+  function stopRhythmDiffersFromCalc() {
+    const calcTf = $("calc-tf")?.value || "60";
+    return resolveStopTf(calcTf) !== String(calcTf);
+  }
+
   /** Подпрограмма `stopPacksForCalc`. */
   function stopPacksForCalc() {
     const calcTf = $("calc-tf")?.value || "60";
@@ -2847,7 +2852,7 @@
         opts.isoLogicSpecs = selectedLogicIds()
           .map((id) => E.resolveLogicSpec(id, state.customLines, p, ind))
           .filter((s) => s && !s.disabled);
-        if (state.precomputedIsoEqByLogic) {
+        if (state.precomputedIsoEqByLogic && !stopRhythmDiffersFromCalc()) {
           opts.isoEqByLogic = state.precomputedIsoEqByLogic;
         }
       }
@@ -4229,6 +4234,7 @@
         ctgSpotPacks: ro.ctgSpotPacks || finOpts.ctgSpotPacks || undefined,
         tradingPeriods: ro.tradingPeriods || finOpts.tradingPeriods || undefined,
         calcTf: ro.calcTf || finOpts.calcTf || undefined,
+        slTpTf: ro.slTpTf || finOpts.slTpTf || undefined,
         recoveryStopConfig: finOpts.recoveryStopConfig || undefined,
         isoLogicSpecs: finOpts.isoLogicSpecs || undefined,
         isoEqByLogic: finOpts.isoEqByLogic || undefined
@@ -4331,7 +4337,7 @@
     const [a, b] = normalizeSliders();
     state.precomputedIsoEqByLogic = null;
     const rdCfg = recoveryStopConfig();
-    if (!optimCtx && rdCfg.enabled && rdCfg.perLogic) {
+    if (!optimCtx && rdCfg.enabled && rdCfg.perLogic && !stopRhythmDiffersFromCalc()) {
       if (!ro.silent) {
         setCalcProgress("Изолированная equity по логикам…", 34);
         await yieldToUi();
@@ -5408,6 +5414,7 @@
       window: { a: result.a ?? null, b: result.b ?? null },
       calc: {
         tf: $("calc-tf")?.value || null,
+        stopTf: resolveStopTf($("calc-tf")?.value || "60"),
         periodFrom: $("calc-from")?.value || null,
         periodTill: $("calc-till")?.value || null
       },
@@ -5694,9 +5701,11 @@
     }
 
     const tf = String(proto.calc?.tf || $("calc-tf")?.value || "60");
+    const stopTf = String(proto.calc?.stopTf || proto.calc?.stopTimeframe || tf);
     const from = String(proto.calc?.periodFrom || $("calc-from")?.value || "");
     const till = String(proto.calc?.periodTill || $("calc-till")?.value || "");
     if ($("calc-tf")) $("calc-tf").value = tf;
+    if ($("calc-stop-tf")) $("calc-stop-tf").value = stopTf;
     if ($("calc-from") && from) $("calc-from").value = from;
     if ($("calc-till") && till) $("calc-till").value = till;
 
@@ -5714,6 +5723,21 @@
     const instruments = selectedInstruments();
     if (!instruments.length) {
       setCalcStatus("Протокол: не удалось сопоставить тикеры со списком MOEX в форме (calc-sec).");
+      return;
+    }
+
+    const byKey = packsByInstrumentKey(state.packs);
+    const packsReady = instruments.every(
+      (i) => E.packCoversPeriod(byKey.get(instrumentKey(i)), from, till)
+    );
+    if (packsReady) {
+      state.lastLoadMeta = {
+        periodKey: loadMetaKey(from, till, tf),
+        keys: instruments.map(instrumentKey)
+      };
+      setCalcStatus("Протокол: свечи уже в памяти (кэш), пересчёт FINRESP…");
+      await yieldToUi();
+      run();
       return;
     }
 
@@ -7432,6 +7456,7 @@
   /** Подпрограмма `initCandleCache`. */
   function initCandleCache() {
     state.candleCache = null;
+    state.candleCacheReady = null;
     if (typeof E.createCandleCache !== "function") {
       updateCacheHint("недоступен — загрузка с MOEX");
       return;
@@ -7443,7 +7468,7 @@
         }
       });
       updateCacheHint("открывается");
-      state.candleCache.load()
+      state.candleCacheReady = state.candleCache.load()
         .then(() => {
           updateCacheHint();
           updateTechInfo("candle-db-ready");
@@ -7455,9 +7480,14 @@
         });
     } catch (err) {
       state.candleCache = null;
+      state.candleCacheReady = null;
       updateCacheHint("ошибка — загрузка с MOEX");
       console.warn("Candle cache init failed:", err);
     }
+  }
+
+  async function ensureCandleCacheReady() {
+    if (state.candleCacheReady) await state.candleCacheReady.catch(() => {});
   }
 
   /** Подпрограмма `initDates`. */
@@ -11055,13 +11085,13 @@ ${instrumentBlocks}
 
   /** Ленивая инициализация/проверка: `ensureInstrumentPacks`. */
   async function ensureInstrumentPacks(instruments, from, till, interval, onProgress, shouldCancel) {
+    await ensureCandleCacheReady();
     const periodKey = loadMetaKey(from, till, interval);
-    const periodChanged = state.lastLoadMeta?.periodKey !== periodKey;
-    const byKey = periodChanged ? new Map() : packsByInstrumentKey(state.packs);
-    const failures = periodChanged ? [] : [...(state.failedInstruments || [])];
+    const byKey = packsByInstrumentKey(state.packs);
+    const failures = [...(state.failedInstruments || [])];
     const failKeys = new Set(failures.map((f) => instrumentKey({ sec: f.sec, market: f.market })));
-    const missing = instruments.filter((i) => !byKey.has(instrumentKey(i)));
-    const toLoad = periodChanged ? instruments : missing;
+    const packMissing = (inst) => !E.packCoversPeriod(byKey.get(instrumentKey(inst)), from, till);
+    const toLoad = instruments.filter(packMissing);
 
     if (toLoad.length) {
       const loaded = await loadInstrumentPacks(toLoad, from, till, interval, (done, total, sec, groupLabel, meta) => {
@@ -11100,13 +11130,21 @@ ${instrumentBlocks}
     let stopPacks = null;
     if (stopTf !== String(interval)) {
       const stopPeriodKey = loadMetaKey(from, till, stopTf);
-      const stopPeriodChanged = state.lastStopLoadMeta?.periodKey !== stopPeriodKey;
-      const stopByKey = stopPeriodChanged ? new Map() : packsByInstrumentKey(state.stopPacks || []);
-      const stopToLoad = stopPeriodChanged
-        ? instruments
-        : instruments.filter((i) => !stopByKey.has(instrumentKey(i)));
+      const stopByKey = state.lastStopLoadMeta?.periodKey === stopPeriodKey
+        ? packsByInstrumentKey(state.stopPacks || [])
+        : new Map();
+      const stopToLoad = instruments.filter(
+        (i) => !E.packCoversPeriod(stopByKey.get(instrumentKey(i)), from, till)
+      );
       if (stopToLoad.length) {
-        const stopLoaded = await loadInstrumentPacks(stopToLoad, from, till, stopTf, onProgress, shouldCancel);
+        const stopLabel = `стопы, ТФ ${stopTf}`;
+        const stopLoaded = await loadInstrumentPacks(
+          stopToLoad, from, till, stopTf,
+          (done, total, sec, _groupLabel, meta) => {
+            if (onProgress) onProgress(done, total, sec, stopLabel, meta);
+          },
+          shouldCancel
+        );
         for (const pack of stopLoaded.packs) {
           if (!pack?.[0]) continue;
           stopByKey.set(instrumentKey(pack[0]), pack);
@@ -11366,8 +11404,8 @@ ${instrumentBlocks}
       return true;
     };
     setCalcProgress(periodNarrowed
-      ? `Период сужен до ${maxD} дн. · идёт загрузка цен MOEX: ${label}`
-      : `Идёт загрузка цен MOEX: ${label}`, 0);
+      ? `Период сужен до ${maxD} дн. · загрузка цен: ${label}`
+      : `Загрузка цен: ${label}`, 0);
     await yieldToUi();
     let loadedData = null;
     try {
@@ -11379,7 +11417,7 @@ ${instrumentBlocks}
         const src = meta?.fromCache ? "кэш" : "MOEX";
         trackRunCheckpoint({ phase: "load", done, total, sec });
         void cycleBeat({ phase: "load", i: done, total, sec, src: groupLabel });
-        setCalcProgress(`Идёт загрузка цен MOEX (${groupLabel}, ${src}): ${sec}`, pct);
+        setCalcProgress(`Загрузка цен (${groupLabel}, ${src}): ${sec}`, pct);
       }, shouldCancel);
       if (await finishIfCancelled(loadedData)) return;
       updateCacheHint(cacheHits ? `MOEX: ${loadedData.packs.length - cacheHits}, кэш: ${cacheHits}` : "");
@@ -11921,6 +11959,7 @@ ${instrumentBlocks}
   });
   $("calc-stop-tf")?.addEventListener("change", () => {
     state.lastStopLoadMeta = null;
+    state.stopPacks = null;
     saveConfig();
     if (state.packs.length) invalidateFinrespResult();
   });
