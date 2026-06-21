@@ -34,6 +34,71 @@
  * - `LinReg(20;Dev=2)(Up)` — линрег вверх
  * - `Rand(P=12%)(IsOk)` — случайный вход с вероятностью
  *
+ * ## Поддержка индикаторов линейной регрессии
+ *
+ * Парсер поддерживает два варианта индикаторов линейной регрессии:
+ *
+ * ### 1. Классический LinReg (из linRegSeries)
+ * Использует стандартные полосы: center ± devMult × stdDev
+ *
+ * Примеры:
+ * - `LinReg(20)(Up)` — наклон линрег(20) вверх
+ * - `LinReg(50;Dev=2)(Ab)` — цена выше верхней полосы линрег-канала
+ * - `LinReg(20;Dev=2)(Bl)` — цена ниже нижней полосы линрег-канала
+ * - `LinReg(50)(Down)` — наклон линрег(50) вниз
+ *
+ * ### 2. LinRegPlusStoch (из linRegPlusStohSeries) — с наклонным стохастиком
+ * Добавляет поле slopePct (0-100) — "наклонный стохастик", аналог обычного
+ * стохастика, но адаптированный к направлению тренда.
+ *
+ * Алгоритм slopePct:
+ * 1. Строится линейная регрессия на окне L
+ * 2. Находятся параллельные линии (ограничители), касающиеся максимума и минимума
+ * 3. slopePct = (цена - нижний ограничитель) / (верхний - нижний) × 100
+ *
+ * Интерпретация:
+ * - 0   — цена у нижнего наклонного ограничителя (перепроданность по тренду)
+ * - 50  — цена на линии регрессии (среднее)
+ * - 100 — цена у верхнего наклонного ограничителя (перекупленность по тренду)
+ *
+ * Примеры  использования LinRegPlusStoch:
+ *
+ * Вход в лонг при перепроданности по тренду:
+ *   Op(Long(LinRegPlusStoch(20)(<20)) AND Long(LinReg(20)(Up)))
+ *   Cl(Long(LinRegPlusStoch(20)(>80)) OnFlip(Close))
+ *   SL[2ATR] TP[3ATR] Note(TrendMeanReversion)
+ *   // Покупаем, когда цена у нижнего ограничителя (slopePct<20) и линрег растёт
+ *
+ * Вход в шорт при перекупленности по тренду:
+ *   Op(Short(LinRegPlusStoch(20)(>80)) AND Short(LinReg(20)(Down)))
+ *   Cl(Short(LinRegPlusStoch(20)(<20)) OnFlip(Close))
+ *   SL[2ATR] TP[3ATR] Note(TrendMeanReversionShort)
+ *
+ * Двойное подтверждение с обычным стохастиком:
+ *   Op(Long(LinRegPlusStoch(50)(<15)) AND Long(STOCH(14-3-3)(<20)))
+ *   Cl(Long(LinRegPlusStoch(50)(>85)) OR Long(STOCH(14-3-3)(>80)))
+ *   SL[1.5ATR] TP[4ATR] Note(DoubleOversold)
+ *   // Оба индикатора показывают перепроданность — наклонный и горизонтальный
+ *
+ * Выход из перепроданности (CrossUp):
+ *   Op(Long(LinRegPlusStoch(20)(CrossUp(20))))
+ *   Cl(Long(LinRegPlusStoch(20)(CrossDn(80))))
+ *   SL[2ATR] TP[5ATR] Note(SlopePctReversal)
+ *   // Входим при пересечении 20 снизу вверх, выходим при пересечении 80 сверху вниз
+ *
+ * Фильтр тренда + вход по отклонению:
+ *   Regime(LinReg;L=50;SlopeLb=3;OnFlip=Close;Entry=MatchSide)
+ *   Op(Long(LinReg(50)(Up)) AND Long(LinRegPlusStoch(50)(<30)))
+ *   Cl(Long(LinRegPlusStoch(50)(>70)) OnFlip(Close))
+ *   SL[2ATR] TP[4ATR] Note(TrendPullback)
+ *   // В восходящем тренде покупаем откаты к нижней части наклонного канала
+ *
+ * Сравнение с обычным стохастиком:
+ * - Обычный STOCH: горизонтальные уровни, "залипает" в тренде
+ * - LinRegPlusStoch: уровни наклонены вместе с трендом, корректно работает в трендах
+ * - Обычный STOCH: показывает положение в фиксированном диапазоне
+ * - LinRegPlusStoch: показывает положение относительно наклонного канала
+ *
  * Парсер **не вычисляет** индикаторы и не исполняет стратегию.
  * Он только строит структурированное представление строки (AST-ish объект),
  * которое затем использует движок.
@@ -215,8 +280,17 @@
 
   /**
    * Разбор атома условия: `<kind>(<params>)(<signal>)`.
+   *
+   * Поддерживаемые индикаторы линейной регрессии:
+   * - LinReg(L)(signal) — классический канал линейной регрессии
+   * - LinRegPlusStoch(L)(signal) — канал с наклонным стохастиком slopePct
+   *
+   * Сигналы для LinRegPlusStoch:
+   * - >80, <20, >50, <50 и т.д. — пороговые сравнения
+   * - CrossUp(20), CrossDn(80) — пересечения уровней
+   *
    * Возвращает:
-   * - kind: нижний регистр (например, "sma", "linreg", "rand")
+   * - kind: нижний регистр (например, "sma", "linreg", "linregplusstoch", "rand")
    * - params: сырой текст параметров внутри первой пары скобок
    * - signal: сырой текст сигнала (внутри второй пары скобок)
    */
@@ -226,6 +300,8 @@
     if (idx < 0) return null;
     const namePart = s.slice(0, idx + 1);
     const sigPart = s.slice(idx + 2);
+
+    // Обработка OB-индикаторов (order book)
     const obM = namePart.match(/^OB\.(\w+)\((.*)\)$/i);
     if (obM) {
       return {
@@ -234,6 +310,17 @@
         signal: sigPart.replace(/^\(|\)$/g, "").trim()
       };
     }
+
+    // Обработка LinRegPlusStoch — наклонный стохастик из linRegPlusStohSeries
+    const lrpsM = namePart.match(/^LinRegPlusStoch\((.*)\)$/i);
+    if (lrpsM) {
+      return {
+        kind: "linregplusstoch",
+        params: lrpsM[1], // длина окна, например "20" или "50"
+        signal: sigPart.replace(/^\(|\)$/g, "").trim()
+      };
+    }
+
     const m = namePart.match(/^(\w+)\((.*)\)$/);
     if (!m) return null;
     return { kind: m[1].toLowerCase(), params: m[2], signal: sigPart.replace(/^\(|\)$/g, "").trim() };
@@ -443,4 +530,3 @@
   P._exprHasOnFlipClose = exprHasOnFlipClose;
   P._stripOnFlipFromExpr = stripOnFlipFromExpr;
 })(typeof window !== "undefined" ? window : globalThis);
-
